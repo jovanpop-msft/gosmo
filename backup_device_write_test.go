@@ -2,6 +2,7 @@ package gosmo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -132,7 +133,7 @@ func TestBackupTargetClause(t *testing.T) {
 // BackupTarget existed.
 func TestVerifyBackupFromAPath(t *testing.T) {
 	ctx, col := WithScript(context.Background())
-	if err := (&Server{}).VerifyBackup(ctx, DiskTarget(`C:\b\n.bak`)); err != nil {
+	if err := (&Server{}).VerifyBackup(ctx, VerifyOptions{}, DiskTarget(`C:\b\n.bak`)); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
 	want := `RESTORE VERIFYONLY FROM DISK = N'C:\b\n.bak'`
@@ -143,12 +144,38 @@ func TestVerifyBackupFromAPath(t *testing.T) {
 
 func TestVerifyBackupFromDevice(t *testing.T) {
 	ctx, col := WithScript(context.Background())
-	if err := (&Server{}).VerifyBackup(ctx, DeviceTarget("NightlyDev")); err != nil {
+	if err := (&Server{}).VerifyBackup(ctx, VerifyOptions{}, DeviceTarget("NightlyDev")); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
 	want := "RESTORE VERIFYONLY FROM [NightlyDev]"
 	if len(col.Statements()) != 1 || col.Statements()[0] != want {
 		t.Errorf("got %v, want [%s]", col.Statements(), want)
+	}
+}
+
+// M7 (review plan 2026-10-13): the set being verified is named — set 1 is
+// what a bare VERIFYONLY reads — and CHECKSUM joins it in one WITH list.
+func TestVerifyBackupChosenSet(t *testing.T) {
+	for _, tc := range []struct {
+		opts VerifyOptions
+		want string
+	}{
+		{VerifyOptions{FileNumber: 1}, `RESTORE VERIFYONLY FROM DISK = N'C:\b\o''n.bak'`},
+		{VerifyOptions{FileNumber: 2}, `RESTORE VERIFYONLY FROM DISK = N'C:\b\o''n.bak' WITH FILE = 2`},
+		{VerifyOptions{Checksum: true}, `RESTORE VERIFYONLY FROM DISK = N'C:\b\o''n.bak' WITH CHECKSUM`},
+		{VerifyOptions{FileNumber: 12, Checksum: true}, `RESTORE VERIFYONLY FROM DISK = N'C:\b\o''n.bak' WITH FILE = 12, CHECKSUM`},
+	} {
+		ctx, col := WithScript(context.Background())
+		if err := (&Server{}).VerifyBackup(ctx, tc.opts, DiskTarget(`C:\b\o'n.bak`)); err != nil {
+			t.Fatalf("VerifyBackup(%+v): %v", tc.opts, err)
+		}
+		if got := col.Statements(); len(got) != 1 || got[0] != tc.want {
+			t.Errorf("VerifyBackup(%+v) = %q, want [%s]", tc.opts, got, tc.want)
+		}
+	}
+	ctx, col := WithScript(context.Background())
+	if err := (&Server{}).VerifyBackup(ctx, VerifyOptions{FileNumber: -1}, DiskTarget("x")); !errors.Is(err, ErrInvalidRequest) || len(col.Statements()) != 0 {
+		t.Errorf("negative set: err = %v, sent %q", err, col.Statements())
 	}
 }
 

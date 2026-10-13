@@ -294,6 +294,46 @@ func buildAlterFileStatement(dbName, name string, m FileModify) (string, error) 
 	return fmt.Sprintf("ALTER DATABASE %s MODIFY FILE (%s)", quoteIdent(dbName), strings.Join(props, ", ")), nil
 }
 
+// Shrink shrinks the file towards targetKB (DBCC SHRINKFILE), rounded up to
+// whole MB as the command takes them; 0 shrinks it as far as its contents
+// allow. Lowering a file's size cannot go through Alter — MODIFY FILE with a
+// smaller SIZE is Msg 5039.
+//
+// It returns the size the file reached, in KB, which can be above targetKB:
+// a shrink stops at the space the file's data occupies. It is slow on a
+// large file, moves pages and so fragments the indexes it touches. Under
+// WithScript it captures the statement and returns 0.
+func (f *DatabaseFileInfo) Shrink(ctx context.Context, targetKB int64) (int64, error) {
+	if targetKB < 0 {
+		return 0, invalidf("gosmo: shrink file %q in %q: target size %d KB is negative", f.Name, f.db.Name, targetKB)
+	}
+	stmt := buildShrinkFileStatement(f.Name, targetKB)
+	if Scripting(ctx) {
+		_, err := f.db.exec(ctx, stmt)
+		return 0, err
+	}
+	// DBCC SHRINKFILE answers with one row: DbId, FileId, CurrentSize,
+	// MinimumSize, UsedPages, EstimatedPages — sizes in 8 KB pages.
+	var dbID, fileID int
+	var current, minimum, used, estimated int64
+	err := f.db.withConn(ctx, func(ctx context.Context, c sqlConn) error {
+		return c.QueryRowContext(ctx, stmt).Scan(&dbID, &fileID, &current, &minimum, &used, &estimated)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
+	}
+	observe(ctx, f.db.server, ScriptEntry{Server: scriptServerName(ctx, f.db.server), Database: f.db.Name, SQL: stmt})
+	setIfApplied(ctx, &f.SizeKB, current*8)
+	return current * 8, nil
+}
+
+// buildShrinkFileStatement renders Shrink's DBCC SHRINKFILE, naming the file
+// by its logical name as a literal — the handle may be a FileRef, with no
+// file_id.
+func buildShrinkFileStatement(name string, targetKB int64) string {
+	return fmt.Sprintf("DBCC SHRINKFILE (%s, %d)", QuoteLiteral(name), (targetKB+1023)/1024)
+}
+
 // Drop removes the file from its database (ALTER DATABASE ... REMOVE FILE).
 // The file must be empty (0 bytes of used space) — SQL Server itself
 // enforces this, not gosmo.

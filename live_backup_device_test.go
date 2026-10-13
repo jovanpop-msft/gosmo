@@ -114,7 +114,7 @@ func TestLiveBackupDeviceCreateReadDrop(t *testing.T) {
 	if filepath.Base(files[0].PhysicalName) == "" {
 		t.Errorf("file list has no physical name: %+v", files[0])
 	}
-	if err := s.VerifyBackup(ctx, d.Target()); err != nil {
+	if err := s.VerifyBackup(ctx, VerifyOptions{}, d.Target()); err != nil {
 		t.Fatalf("VerifyBackup on the device: %v", err)
 	}
 

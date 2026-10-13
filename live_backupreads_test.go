@@ -127,6 +127,23 @@ func TestLiveBackupReads(t *testing.T) {
 		}
 	})
 
+	// M7 (review plan 2026-10-13): VERIFYONLY without FILE verifies set 1
+	// whatever set was meant. A set past the last is refused only when FILE
+	// is sent, and CHECKSUM is refused for these sets, taken without one.
+	t.Run("verify a chosen set", func(t *testing.T) {
+		for _, n := range []int{0, 1, 2, 3} {
+			if err := srv.VerifyBackup(ctx, VerifyOptions{FileNumber: n}, DiskTarget(device)); err != nil {
+				t.Errorf("VerifyBackup set %d: %v", n, err)
+			}
+		}
+		if err := srv.VerifyBackup(ctx, VerifyOptions{FileNumber: 4}, DiskTarget(device)); err == nil {
+			t.Error("VerifyBackup set 4 of 3: want the server's refusal — FILE was not sent")
+		}
+		if err := srv.VerifyBackup(ctx, VerifyOptions{FileNumber: 2, Checksum: true}, DiskTarget(device)); err == nil {
+			t.Error("VerifyBackup WITH CHECKSUM of a set without checksums: want the server's refusal")
+		}
+	})
+
 	t.Run("file list", func(t *testing.T) {
 		files, err := srv.BackupFileList(ctx, 0, DiskTarget(device))
 		if err != nil {
@@ -212,10 +229,10 @@ func TestLiveBackupReads(t *testing.T) {
 			t.Errorf("striped set Devices %q Position %d; want [%s %s] at 1", striped.Devices, striped.Position, s1, s2)
 		}
 		both := []BackupTarget{DiskTarget(s1), DiskTarget(s2)}
-		if err := srv.VerifyBackup(ctx, both...); err != nil {
+		if err := srv.VerifyBackup(ctx, VerifyOptions{}, both...); err != nil {
 			t.Errorf("VerifyBackup of both stripes: %v", err)
 		}
-		if err := srv.VerifyBackup(ctx, DiskTarget(s1)); err == nil {
+		if err := srv.VerifyBackup(ctx, VerifyOptions{}, DiskTarget(s1)); err == nil {
 			t.Error("VerifyBackup of one stripe: want the server's refusal")
 		}
 		if h, err := srv.BackupHeaders(ctx, both...); err != nil || len(h) != 1 {

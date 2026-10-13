@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 )
 
@@ -159,6 +161,14 @@ type QueryStoreOptions struct {
 	CapturePolicyStaleHours   int
 }
 
+// queryStoreIntervals are the values INTERVAL_LENGTH_MINUTES accepts; any
+// other is refused by the server (Msg 153).
+var queryStoreIntervals = []int{1, 5, 10, 15, 30, 60, 1440}
+
+// QueryStoreIntervalMinutes returns the values QueryStoreOptions.IntervalMinutes
+// may take, ascending — the only ones INTERVAL_LENGTH_MINUTES accepts.
+func QueryStoreIntervalMinutes() []int { return slices.Clone(queryStoreIntervals) }
+
 // The validity checks for the Query Store keywords, which can't be
 // identifier-quoted or parameterised (ALTER DATABASE is DDL): a value outside
 // the constants — a conversion from an arbitrary string — is refused rather
@@ -220,6 +230,24 @@ func queryStoreOnOptions(opts QueryStoreOptions, waitStats bool) (string, error)
 	}
 	if waitStats && !queryStoreWaitStatsModes[opts.WaitStatsCaptureMode] {
 		return "", invalidf("unrecognized wait stats capture mode %q", opts.WaitStatsCaptureMode)
+	}
+	// The numeric bounds the server enforces, verified live on 17.0: a value
+	// outside them fails the whole statement (Msg 153, 12452, 12453).
+	if !slices.Contains(queryStoreIntervals, opts.IntervalMinutes) {
+		return "", invalidf("interval length %d minutes is not one of %v", opts.IntervalMinutes, queryStoreIntervals)
+	}
+	if opts.FlushIntervalSec < 60 {
+		return "", invalidf("data flush interval %d seconds is below the minimum of 60", opts.FlushIntervalSec)
+	}
+	if opts.CaptureMode == QueryStoreCaptureCustom {
+		switch {
+		case opts.CapturePolicyExecCount < 1, opts.CapturePolicyCompileCPUMs < 1, opts.CapturePolicyExecCPUMs < 1:
+			return "", invalidf("custom capture policy: execution count and CPU times must each be at least 1")
+		case opts.CapturePolicyCompileCPUMs > math.MaxInt32, opts.CapturePolicyExecCPUMs > math.MaxInt32:
+			return "", invalidf("custom capture policy: CPU times must not exceed %d ms", math.MaxInt32)
+		case opts.CapturePolicyStaleHours < 1 || opts.CapturePolicyStaleHours > 168:
+			return "", invalidf("custom capture policy: stale threshold %d hours is outside 1 hour to 7 days", opts.CapturePolicyStaleHours)
+		}
 	}
 
 	withs := []string{

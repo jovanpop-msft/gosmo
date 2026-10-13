@@ -22,6 +22,16 @@ func TestScriptFileAndFileGroupWrites(t *testing.T) {
 				SizeKB: 8192, GrowthKB: 4096, MaxSizeKB: -1,
 			})
 		}, `ALTER DATABASE [App'DB] ADD FILE (NAME = [App]]Dat2], FILENAME = N'C:\d\a''2.ndf', SIZE = 8192KB, MAXSIZE = UNLIMITED, FILEGROWTH = 4096KB) TO FILEGROUP [FG'1]`},
+		// M5 (review plan 2026-10-13): a smaller size is a shrink, not MODIFY
+		// FILE (Msg 5039). The KB target rounds up to whole MB.
+		{"File Shrink", func(c context.Context) error {
+			_, err := scriptTestDB().FileRef("App'Dat]2").Shrink(c, 16*1024+1)
+			return err
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'App''Dat]2', 17)"},
+		{"File Shrink to the minimum", func(c context.Context) error {
+			_, err := scriptTestDB().FileRef("AppLog").Shrink(c, 0)
+			return err
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 0)"},
 		{"AddFile log with percentage growth", func(c context.Context) error {
 			return scriptTestDB().AddFile(c, DatabaseFileSpec{
 				Name: "AppLog2", Type: "LOG", Path: `C:\d\l2.ldf`,
@@ -85,7 +95,21 @@ func TestScriptDatabaseOptionWrites(t *testing.T) {
 		}, scriptUsePrefix + "ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION = ON"},
 		{"Table.SetChangeTracking on with columns", func(c context.Context) error {
 			return scriptTestDB().TableRef("dbo", "Sales.Archive").SetChangeTracking(c, true, true)
-		}, scriptUsePrefix + "ALTER TABLE [dbo].[Sales.Archive] ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = ON)"},
+		}, scriptUsePrefix + atomicBatchText(
+			"IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(N'[dbo].[Sales.Archive]') AND is_track_columns_updated_on = 0)\n"+
+				"    ALTER TABLE [dbo].[Sales.Archive] DISABLE CHANGE_TRACKING",
+			"IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(N'[dbo].[Sales.Archive]'))\n"+
+				"    ALTER TABLE [dbo].[Sales.Archive] ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = ON)")},
+		// M4 (review plan 2026-10-13): ENABLE on a tracked table is Msg 4996,
+		// so a TRACK_COLUMNS_UPDATED change disables and re-enables, all or
+		// nothing; the name is a literal inside OBJECT_ID.
+		{"Table.SetChangeTracking on without columns", func(c context.Context) error {
+			return scriptTestDB().TableRef("dbo", "o'b").SetChangeTracking(c, true, false)
+		}, scriptUsePrefix + atomicBatchText(
+			"IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(N'[dbo].[o''b]') AND is_track_columns_updated_on = 1)\n"+
+				"    ALTER TABLE [dbo].[o'b] DISABLE CHANGE_TRACKING",
+			"IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(N'[dbo].[o''b]'))\n"+
+				"    ALTER TABLE [dbo].[o'b] ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = OFF)")},
 		{"Table.SetChangeTracking off", func(c context.Context) error {
 			return scriptTestDB().TableRef("dbo", "Sales.Archive").SetChangeTracking(c, false, false)
 		}, scriptUsePrefix + "ALTER TABLE [dbo].[Sales.Archive] DISABLE CHANGE_TRACKING"},
@@ -130,4 +154,11 @@ func TestCreateSynonymRefusesAnUnquotedBaseObject(t *testing.T) {
 			t.Errorf("CreateSynonym(%q) scripted %q, want nothing", bad, script.Statements())
 		}
 	}
+}
+
+// atomicBatchText is atomicBatch's frame written out, so a case pins the
+// frame too rather than reusing the function under test.
+func atomicBatchText(stmts ...string) string {
+	return "SET XACT_ABORT ON;\nBEGIN TRY\nBEGIN TRANSACTION;\n" + strings.Join(stmts, ";\n") + ";\n" +
+		"COMMIT TRANSACTION;\nEND TRY\nBEGIN CATCH\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;\nTHROW;\nEND CATCH;"
 }

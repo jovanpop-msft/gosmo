@@ -55,3 +55,51 @@ func TestLiveLoginSettersMirror(t *testing.T) {
 	}
 	check("ChangePassword with MustChange")
 }
+
+// M1 (review plan 2026-10-13): on a login with CHECK_POLICY = OFF, MUST_CHANGE
+// carried with the policy in the password statement applies — the old
+// CHECK_EXPIRATION = ON alone was Msg 15122 — and policy rows ride along with
+// a plain password change. The handle mirrors what the catalog then reads.
+func TestLiveChangePasswordCarriesThePolicy(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	s, err := NewServer(ctx, db)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	const name = "gosmo_live_login_policy"
+	dropLoginIfPresent(t, s, name)
+	defer dropLoginIfPresent(t, s, name)
+	l, err := s.CreateLogin(ctx, CreateLoginRequest{Name: name, Password: "a", CheckPolicy: new(false), CheckExpiration: new(false)})
+	if err != nil {
+		t.Fatalf("CreateLogin: %v", err)
+	}
+	for i, opts := range []ChangePasswordOptions{
+		{MustChange: true},
+		{CheckPolicy: new(false), CheckExpiration: new(false)},
+		{CheckPolicy: new(true), CheckExpiration: new(true), MustChange: true, Unlock: true},
+	} {
+		pw := "Mu5t!Change-" + string(rune('a'+i))
+		if opts.CheckPolicy != nil && !*opts.CheckPolicy {
+			pw = "b" // policy off in the same statement: a weak password is accepted
+		}
+		if err := l.ChangePassword(ctx, pw, opts); err != nil {
+			t.Fatalf("step %d ChangePassword(%+v): %v", i, opts, err)
+		}
+		fresh, err := s.LoginByName(ctx, name)
+		if err != nil {
+			t.Fatalf("LoginByName: %v", err)
+		}
+		det, err := fresh.Details(ctx)
+		if err != nil {
+			t.Fatalf("Details: %v", err)
+		}
+		if det.MustChangePassword != opts.MustChange {
+			t.Errorf("step %d: must change = %v, want %v", i, det.MustChangePassword, opts.MustChange)
+		}
+		if l.IsPolicyChecked != fresh.IsPolicyChecked || l.IsExpirationChecked != fresh.IsExpirationChecked {
+			t.Errorf("step %d: handle policy %v expiration %v, catalog %v %v", i,
+				l.IsPolicyChecked, l.IsExpirationChecked, fresh.IsPolicyChecked, fresh.IsExpirationChecked)
+		}
+	}
+}

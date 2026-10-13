@@ -131,7 +131,7 @@ func main() {
 	}
 
 	demo.Section("Verify (RESTORE VERIFYONLY)")
-	demo.Must(srv.VerifyBackup(ctx, gosmo.DiskTarget(device)))
+	demo.Must(srv.VerifyBackup(ctx, gosmo.VerifyOptions{}, gosmo.DiskTarget(device)))
 	fmt.Println("  backup set is readable and complete")
 
 	// -- msdb's backup history --------------------------------------------

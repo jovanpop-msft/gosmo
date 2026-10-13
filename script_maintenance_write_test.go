@@ -2,6 +2,7 @@ package gosmo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -179,4 +180,62 @@ func TestScriptedPlanGuideControlDoesNotMirrorOntoTheReceiver(t *testing.T) {
 	if len(script.Statements()) != 1 {
 		t.Fatalf("captured %q, want one statement", script.Statements())
 	}
+}
+
+// M8 (review plan 2026-10-13): what a read index's kind refuses at the server
+// — every SET option and FILLFACTOR/PAD_INDEX on a columnstore index (Msg
+// 35327/35328), mismatched compression (10798/10799), any ALTER INDEX on a
+// memory-optimized table — is refused before anything is sent. What the kind
+// accepts still goes through, and an IndexRef (Type unread) is left to the
+// server.
+func TestIndexWritesRefuseWhatTheIndexKindRefuses(t *testing.T) {
+	table := &Table{db: scriptTestDB(), Schema: "dbo", Name: "t"}
+	memTable := &Table{db: scriptTestDB(), Schema: "dbo", Name: "m", IsMemoryOptimized: true}
+	ix := func(tbl *Table, typ IndexType) *Index { return &Index{table: tbl, Name: "IX", Type: typ} }
+	cci, ncci := ix(table, IndexTypeClusteredColumnStore), ix(table, IndexTypeColumnStore)
+	rowstore := ix(table, IndexTypeNonClustered)
+
+	refused := map[string]func(context.Context) error{
+		"CCI SetOptions row locks":   func(c context.Context) error { return cci.SetOptions(c, IndexSetOptions{AllowRowLocks: new(true)}) },
+		"NCCI SetOptions ignore dup": func(c context.Context) error { return ncci.SetOptions(c, IndexSetOptions{IgnoreDupKey: new(false)}) },
+		"CCI Rebuild fill factor":    func(c context.Context) error { return cci.Rebuild(c, IndexRebuildOptions{FillFactor: 80}) },
+		"NCCI Rebuild pad index":     func(c context.Context) error { return ncci.Rebuild(c, IndexRebuildOptions{PadIndex: new(false)}) },
+		"CCI Rebuild ROW": func(c context.Context) error {
+			return cci.Rebuild(c, IndexRebuildOptions{DataCompression: DataCompressionRow})
+		},
+		"CCI Rebuild NONE": func(c context.Context) error {
+			return cci.Rebuild(c, IndexRebuildOptions{DataCompression: DataCompressionNone})
+		},
+		"rowstore Rebuild COLUMNSTORE": func(c context.Context) error {
+			return rowstore.Rebuild(c, IndexRebuildOptions{DataCompression: DataCompressionColumnstore})
+		},
+		"hash index Rebuild": func(c context.Context) error {
+			return ix(memTable, IndexTypeNonClusteredHash).Rebuild(c, IndexRebuildOptions{})
+		},
+		"memory-optimized SetOptions": func(c context.Context) error {
+			return ix(memTable, IndexTypeNonClustered).SetOptions(c, IndexSetOptions{AllowPageLocks: new(true)})
+		},
+		"memory-optimized Enable": func(c context.Context) error { return memTable.IndexRef("IX").Enable(c) },
+	}
+	for name, call := range refused {
+		ctx, script := WithScript(context.Background())
+		if err := call(ctx); !errors.Is(err, ErrInvalidRequest) || len(script.Statements()) != 0 {
+			t.Errorf("%s: err = %v, sent %q; want ErrInvalidRequest and nothing sent", name, err, script.Statements())
+		}
+	}
+
+	runScriptCases(t, []scriptCase{
+		{"CCI Rebuild COLUMNSTORE_ARCHIVE", func(c context.Context) error {
+			return cci.Rebuild(c, IndexRebuildOptions{DataCompression: DataCompressionColumnstoreArchive})
+		}, scriptUsePrefix + "ALTER INDEX [IX] ON [dbo].[t] REBUILD WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE)"},
+		{"NCCI plain Rebuild", func(c context.Context) error {
+			return ncci.Rebuild(c, IndexRebuildOptions{})
+		}, scriptUsePrefix + "ALTER INDEX [IX] ON [dbo].[t] REBUILD"},
+		{"rowstore Rebuild with its options", func(c context.Context) error {
+			return rowstore.Rebuild(c, IndexRebuildOptions{FillFactor: 80, PadIndex: new(true), DataCompression: DataCompressionRow})
+		}, scriptUsePrefix + "ALTER INDEX [IX] ON [dbo].[t] REBUILD WITH (PAD_INDEX = ON, FILLFACTOR = 80, DATA_COMPRESSION = ROW)"},
+		{"IndexRef left to the server", func(c context.Context) error {
+			return table.IndexRef("IX").Rebuild(c, IndexRebuildOptions{FillFactor: 80, DataCompression: DataCompressionColumnstore})
+		}, scriptUsePrefix + "ALTER INDEX [IX] ON [dbo].[t] REBUILD WITH (FILLFACTOR = 80, DATA_COMPRESSION = COLUMNSTORE)"},
+	})
 }

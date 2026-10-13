@@ -192,6 +192,18 @@ var databaseOptionNames = map[DatabaseOption]bool{
 // validDatabaseOption reports whether opt is a recognized SET option.
 func validDatabaseOption(opt DatabaseOption) bool { return databaseOptionNames[opt] }
 
+// NeedsExclusiveAccess reports whether setting opt takes an exclusive lock on
+// the database: READ_COMMITTED_SNAPSHOT and CONTAINMENT. Under
+// TerminationNone such a SET fails or waits while any other session is in
+// the database — READ_COMMITTED_SNAPSHOT indefinitely, CONTAINMENT for a few
+// seconds before Msg 5061 (17.0) — so a caller offering it should offer
+// TerminationRollbackImmediate too. ALLOW_SNAPSHOT_ISOLATION is not one: it
+// waits for open transactions, not sessions, and refuses a termination
+// clause.
+func (o DatabaseOption) NeedsExclusiveAccess() bool {
+	return o == DBOptReadCommittedSnapshot || o == DBOptContainment
+}
+
 // isSimpleIdentifier reports whether s is a bare identifier token (letters,
 // digits, underscore) — the shape a database scoped configuration option
 // name always takes (MAXDOP, LEGACY_CARDINALITY_ESTIMATION, ...), unlike
@@ -241,10 +253,13 @@ func isSimpleSetValue(s string) bool {
 // ALTER DATABASE SET reference for each option's accepted values.
 //
 // term is the statement's WITH clause. It matters for an option needing
-// exclusive access — READ_COMMITTED_SNAPSHOT is the one here — which under
+// exclusive access (DatabaseOption.NeedsExclusiveAccess), which under
 // TerminationNone waits for every other session in the database to leave;
-// this Server's own idle sessions are released first for that option (see
+// this Server's own idle sessions are released first for those options (see
 // Server.ReleaseIdleConnections). The other options take it too.
+// CONTAINMENT ignores the clause, so for it TerminationRollbackImmediate
+// kills the database's sessions in the same batch instead — which needs
+// ALTER ANY CONNECTION, as FileGroup.SetReadOnly's does.
 func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, value string, term Termination) error {
 	if !validDatabaseOption(opt) {
 		return invalidf("gosmo: set database option: unrecognized option %q", opt)
@@ -264,7 +279,15 @@ func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, va
 		sep = " = "
 	}
 	q := fmt.Sprintf("ALTER DATABASE %s SET %s%s%s%s", quoteIdent(d.Name), opt, sep, value, with)
-	if opt == DBOptReadCommittedSnapshot {
+	if opt == DBOptContainment && term == TerminationRollbackImmediate {
+		// SET CONTAINMENT parses WITH ROLLBACK IMMEDIATE and ignores it, as
+		// MODIFY FILEGROUP does (see FileGroup.SetReadOnly): probed on 17.0,
+		// it failed Msg 5061 behind another session either way. The kill
+		// batch ahead of it is what gets past.
+		q = killDatabaseSessionsBatch(d.Name) + ";\n" +
+			fmt.Sprintf("ALTER DATABASE %s SET %s%s%s", quoteIdent(d.Name), opt, sep, value) + ";"
+	}
+	if opt.NeedsExclusiveAccess() {
 		d.server.releaseIdle(ctx)
 	}
 	if err := d.server.exec(ctx, q); err != nil {

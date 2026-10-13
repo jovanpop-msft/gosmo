@@ -134,11 +134,25 @@ func TestScriptSecurityWrites(t *testing.T) {
 		{
 			// MUST_CHANGE and UNLOCK follow the password space-separated —
 			// they are password-clause modifiers, not comma-separated set
-			// options — and MUST_CHANGE drags CHECK_EXPIRATION = ON in after
-			// the comma.
+			// options — and MUST_CHANGE drags CHECK_POLICY and
+			// CHECK_EXPIRATION = ON in after the comma.
 			"Login ChangePassword with options", func(c context.Context) error {
 				return login().ChangePassword(c, "p'wd", ChangePasswordOptions{MustChange: true, Unlock: true})
-			}, "ALTER LOGIN [o'brien] WITH PASSWORD = N'<insert password here>' MUST_CHANGE UNLOCK, CHECK_EXPIRATION = ON"},
+			}, "ALTER LOGIN [o'brien] WITH PASSWORD = N'<insert password here>' MUST_CHANGE UNLOCK, CHECK_POLICY = ON, CHECK_EXPIRATION = ON"},
+		{"Login ChangePassword with the policy", func(c context.Context) error {
+			return login().ChangePassword(c, "p'wd", ChangePasswordOptions{CheckPolicy: new(true), CheckExpiration: new(true)})
+		}, "ALTER LOGIN [o'brien] WITH PASSWORD = N'<insert password here>', CHECK_POLICY = ON, CHECK_EXPIRATION = ON"},
+		{
+			// Turning an option off branches on MUST_CHANGE (15128), the two
+			// ALTERs of its first branch all or nothing.
+			"Login ChangePassword turning the policy off", func(c context.Context) error {
+				return login().ChangePassword(c, "p'wd", ChangePasswordOptions{CheckPolicy: new(true), CheckExpiration: new(false)})
+			}, "SET XACT_ABORT ON;\nBEGIN TRY\nBEGIN TRANSACTION;\n" +
+				"IF CAST(LOGINPROPERTY(N'o''brien', 'IsMustChange') AS int) = 1\nBEGIN\n" +
+				"    ALTER LOGIN [o'brien] WITH PASSWORD = N'<insert password here>';\n" +
+				"    ALTER LOGIN [o'brien] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = OFF;\nEND\nELSE\n" +
+				"    ALTER LOGIN [o'brien] WITH PASSWORD = N'<insert password here>', CHECK_POLICY = ON, CHECK_EXPIRATION = OFF;\n" +
+				"COMMIT TRANSACTION;\nEND TRY\nBEGIN CATCH\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;\nTHROW;\nEND CATCH;"},
 		{"Login MapCredential", func(c context.Context) error {
 			return login().MapCredential(c, "cred]1")
 		}, "ALTER LOGIN [o'brien] ADD CREDENTIAL [cred]]1]"},

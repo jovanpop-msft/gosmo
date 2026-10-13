@@ -159,9 +159,14 @@ func TestWithScriptTerminationClause(t *testing.T) {
 		{"RCSI none", func(c context.Context) error {
 			return d.SetDatabaseOption(c, DBOptReadCommittedSnapshot, "OFF", TerminationNone)
 		}, "ALTER DATABASE [AppDB] SET READ_COMMITTED_SNAPSHOT OFF"},
-		{"containment keeps its = before the clause", func(c context.Context) error {
-			return d.SetDatabaseOption(c, DBOptContainment, "NONE", TerminationRollbackImmediate)
-		}, "ALTER DATABASE [AppDB] SET CONTAINMENT = NONE WITH ROLLBACK IMMEDIATE"},
+		{"containment keeps its =", func(c context.Context) error {
+			return d.SetDatabaseOption(c, DBOptContainment, "NONE", TerminationNone)
+		}, "ALTER DATABASE [AppDB] SET CONTAINMENT = NONE"},
+		// M2 (review plan 2026-10-13): CONTAINMENT ignores WITH ROLLBACK
+		// IMMEDIATE, so the sessions are killed in the batch instead.
+		{"containment rollback immediate is a kill batch", func(c context.Context) error {
+			return d.SetDatabaseOption(c, DBOptContainment, "PARTIAL", TerminationRollbackImmediate)
+		}, killDatabaseSessionsBatch("AppDB") + ";\nALTER DATABASE [AppDB] SET CONTAINMENT = PARTIAL;"},
 		{"read-only rollback immediate", func(c context.Context) error {
 			return d.SetReadOnly(c, true, TerminationRollbackImmediate)
 		}, "ALTER DATABASE [AppDB] SET READ_ONLY WITH ROLLBACK IMMEDIATE"},
@@ -214,5 +219,38 @@ func TestWithScriptFileGroupReadOnlyRollbackImmediateKillsFirst(t *testing.T) {
 	}
 	if strings.Contains(got[0], "ROLLBACK IMMEDIATE") {
 		t.Error("the filegroup statement carries a WITH ROLLBACK IMMEDIATE the server ignores")
+	}
+}
+
+// M2 (review plan 2026-10-13): CONTAINMENT takes an exclusive database lock
+// like READ_COMMITTED_SNAPSHOT — with any other session in the database it
+// waited forever under TerminationNone — so it too releases this Server's own
+// idle sessions first. Other options leave the pool alone.
+func TestSetDatabaseOptionReleasesIdleSessionsForAnExclusiveOption(t *testing.T) {
+	for opt, want := range map[DatabaseOption]bool{
+		DBOptReadCommittedSnapshot: true,
+		DBOptContainment:           true,
+		DBOptSnapshotIsolation:     false,
+		DBOptAutoClose:             false,
+	} {
+		if got := opt.NeedsExclusiveAccess(); got != want {
+			t.Errorf("%s.NeedsExclusiveAccess() = %v, want %v", opt, got, want)
+		}
+		fc := &countingConnector{}
+		db := sql.OpenDB(fc)
+		db.SetMaxIdleConns(5)
+		ctx := t.Context()
+		c, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn: %v", err)
+		}
+		c.Close()
+		// The fake driver cannot run the ALTER; only the release before it
+		// is under test.
+		_ = (&Database{server: &Server{db: db}, Name: "AppDB"}).SetDatabaseOption(ctx, opt, "OFF", TerminationNone)
+		if released := fc.closed.Load() > 0; released != want {
+			t.Errorf("%s: idle session released = %v, want %v", opt, released, want)
+		}
+		db.Close()
 	}
 }

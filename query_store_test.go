@@ -2,6 +2,8 @@ package gosmo
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -173,10 +175,12 @@ func TestSetQueryStoreOptionsOffIgnoresTheRest(t *testing.T) {
 // what would be sent is whatever the caller's zero value maps to.
 func TestSetQueryStoreOptionsOmitsWaitStatsBefore2017(t *testing.T) {
 	opts := QueryStoreOptions{
-		DesiredState:    "READ_WRITE",
-		MaxStorageMB:    256,
-		CaptureMode:     "AUTO",
-		SizeCleanupMode: "AUTO",
+		DesiredState:     "READ_WRITE",
+		MaxStorageMB:     256,
+		CaptureMode:      "AUTO",
+		SizeCleanupMode:  "AUTO",
+		FlushIntervalSec: 900,
+		IntervalMinutes:  60,
 	}
 
 	t.Run("2016 omits the clause and does not validate it", func(t *testing.T) {
@@ -224,4 +228,61 @@ func TestSetQueryStoreOptionsOmitsWaitStatsBefore2017(t *testing.T) {
 			t.Error("2017 accepted an unrecognized wait stats capture mode, want an error")
 		}
 	})
+}
+
+// M6 (review plan 2026-10-13): the numeric options the server refuses outside
+// their bounds — probed live on 17.0 — are refused before anything is sent.
+// The boundary values themselves are accepted.
+func TestSetQueryStoreOptionsRefusesOutOfRangeValues(t *testing.T) {
+	base := QueryStoreOptions{
+		DesiredState: "READ_WRITE", CaptureMode: "CUSTOM", SizeCleanupMode: "AUTO", WaitStatsCaptureMode: "ON",
+		FlushIntervalSec: 60, IntervalMinutes: 1,
+		CapturePolicyExecCount: 1, CapturePolicyCompileCPUMs: 1, CapturePolicyExecCPUMs: 1, CapturePolicyStaleHours: 1,
+	}
+	d := &Database{server: &Server{}, Name: "AppDB"}
+	set := func(o QueryStoreOptions) ([]string, error) {
+		ctx, script := WithScript(context.Background())
+		err := d.SetQueryStoreOptions(ctx, o)
+		return script.Statements(), err
+	}
+	for _, edit := range []func(*QueryStoreOptions){
+		func(o *QueryStoreOptions) {},
+		func(o *QueryStoreOptions) { o.IntervalMinutes = 1440; o.CapturePolicyStaleHours = 168 },
+		func(o *QueryStoreOptions) {
+			o.CapturePolicyCompileCPUMs, o.CapturePolicyExecCPUMs = 2147483647, 2147483647
+		},
+		// The capture policy is checked only when it is sent.
+		func(o *QueryStoreOptions) {
+			o.CaptureMode = "AUTO"
+			o.CapturePolicyExecCount, o.CapturePolicyStaleHours = 0, 0
+		},
+	} {
+		o := base
+		edit(&o)
+		if stmts, err := set(o); err != nil || len(stmts) != 1 {
+			t.Errorf("%+v: err = %v, statements %q; want it accepted", o, err, stmts)
+		}
+	}
+	for name, edit := range map[string]func(*QueryStoreOptions){
+		"interval 7 (153)":           func(o *QueryStoreOptions) { o.IntervalMinutes = 7 },
+		"interval 0":                 func(o *QueryStoreOptions) { o.IntervalMinutes = 0 },
+		"flush 59 (153)":             func(o *QueryStoreOptions) { o.FlushIntervalSec = 59 },
+		"execution count 0 (12452)":  func(o *QueryStoreOptions) { o.CapturePolicyExecCount = 0 },
+		"compile CPU 0 (12452)":      func(o *QueryStoreOptions) { o.CapturePolicyCompileCPUMs = 0 },
+		"execution CPU 0 (12452)":    func(o *QueryStoreOptions) { o.CapturePolicyExecCPUMs = 0 },
+		"compile CPU above int32":    func(o *QueryStoreOptions) { o.CapturePolicyCompileCPUMs = 2147483648 },
+		"stale 0 hours (12453)":      func(o *QueryStoreOptions) { o.CapturePolicyStaleHours = 0 },
+		"stale 169 hours (12453)":    func(o *QueryStoreOptions) { o.CapturePolicyStaleHours = 169 },
+		"stale 500 hours (as shown)": func(o *QueryStoreOptions) { o.CapturePolicyStaleHours = 500 },
+	} {
+		o := base
+		edit(&o)
+		stmts, err := set(o)
+		if !errors.Is(err, ErrInvalidRequest) || len(stmts) != 0 {
+			t.Errorf("%s: err = %v, statements %q; want ErrInvalidRequest and nothing sent", name, err, stmts)
+		}
+	}
+	if got := QueryStoreIntervalMinutes(); !slices.Equal(got, []int{1, 5, 10, 15, 30, 60, 1440}) {
+		t.Errorf("QueryStoreIntervalMinutes() = %v", got)
+	}
 }

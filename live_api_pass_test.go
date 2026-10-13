@@ -159,7 +159,7 @@ func TestLiveAPIPass(t *testing.T) {
 		if err != nil || len(files) == 0 {
 			t.Errorf("BackupFileList of the device's own path = %v, %v", files, err)
 		}
-		if err := srv.VerifyBackup(ctx, dev.Target()); err != nil {
+		if err := srv.VerifyBackup(ctx, VerifyOptions{}, dev.Target()); err != nil {
 			t.Errorf("VerifyBackup: %v", err)
 		}
 	})

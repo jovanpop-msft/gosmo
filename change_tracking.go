@@ -106,25 +106,46 @@ ELSE
 
 // SetChangeTracking enables or disables change tracking on the table.
 // trackColumns is ignored when enable is false. A TableRef is enough.
+//
+// Enabling a table already tracked with the same trackColumns is a no-op.
+// Changing trackColumns on a tracked table has no ALTER of its own — ENABLE
+// there is Msg 4996 ("already enabled") — so it disables and re-enables
+// tracking, all or nothing. That resets the table's tracking: its change
+// history is discarded and CHANGE_TRACKING_MIN_VALID_VERSION moves past
+// every version a client holds, so each client must reinitialise.
 func (t *Table) SetChangeTracking(ctx context.Context, enable, trackColumns bool) error {
 	if err := requireSchema("set table change tracking", t.Schema, t.Name); err != nil {
 		return err
 	}
 	ref := qualifiedName(t.Schema, t.Name)
-	var q string
+	var err error
 	if !enable {
-		q = fmt.Sprintf("ALTER TABLE %s DISABLE CHANGE_TRACKING", ref)
+		_, err = t.db.exec(ctx, fmt.Sprintf("ALTER TABLE %s DISABLE CHANGE_TRACKING", ref))
 	} else {
-		track := "OFF"
-		if trackColumns {
-			track = "ON"
-		}
-		q = fmt.Sprintf("ALTER TABLE %s ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = %s)", ref, track)
+		err = t.db.execAtomic(ctx, enableTableChangeTrackingStatements(ref, trackColumns))
 	}
-	if _, err := t.db.exec(ctx, q); err != nil {
+	if err != nil {
 		return fmt.Errorf("gosmo: set change tracking on %s: %w", ref, err)
 	}
 	return nil
+}
+
+// enableTableChangeTrackingStatements renders Table.SetChangeTracking's
+// enable. Like buildSetChangeTrackingStatement it branches on the server, so
+// it needs no read and a WithScript capture is what execution runs: drop
+// tracking that has the other TRACK_COLUMNS_UPDATED, then enable it where it
+// is (now) off. The second IF sees the first's DISABLE — both run in one
+// transaction (execAtomic).
+func enableTableChangeTrackingStatements(ref string, trackColumns bool) []string {
+	track, other := "OFF", 1
+	if trackColumns {
+		track, other = "ON", 0
+	}
+	tracked := fmt.Sprintf("SELECT 1 FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID(%s)", QuoteLiteral(ref))
+	return []string{
+		fmt.Sprintf("IF EXISTS (%s AND is_track_columns_updated_on = %d)\n    ALTER TABLE %s DISABLE CHANGE_TRACKING", tracked, other, ref),
+		fmt.Sprintf("IF NOT EXISTS (%s)\n    ALTER TABLE %s ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = %s)", tracked, ref, track),
+	}
 }
 
 // TableChangeTracking describes one user table's change tracking state.

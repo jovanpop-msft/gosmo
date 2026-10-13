@@ -158,6 +158,19 @@ func targetList(targets []BackupTarget) string {
 	return strings.Join(parts, ", ")
 }
 
+// VerifyOptions selects what VerifyBackup checks.
+type VerifyOptions struct {
+	// FileNumber is the backup set to verify — its position on the media,
+	// as BackupHeader.SetNumber and BackupInfo.SetNumber give it. 0 (or 1)
+	// is the first set: without WITH FILE, VERIFYONLY reads set 1 whatever
+	// set a caller meant, so on a file written with NOINIT it reports on the
+	// oldest backup.
+	FileNumber int
+	// Checksum verifies the backup's page and backup checksums too (WITH
+	// CHECKSUM). The server refuses it for a backup taken without checksums.
+	Checksum bool
+}
+
 // VerifyBackup checks that the backup set on targets is complete and
 // readable (RESTORE VERIFYONLY), without restoring it.
 //
@@ -165,15 +178,33 @@ func targetList(targets []BackupTarget) string {
 // RestoreOptions.Devices does: a backup striped over several files is one
 // media set, and VERIFYONLY on one stripe of it is refused ("The media set
 // has 2 media families but only 1 are provided").
-func (s *Server) VerifyBackup(ctx context.Context, targets ...BackupTarget) error {
+func (s *Server) VerifyBackup(ctx context.Context, opts VerifyOptions, targets ...BackupTarget) error {
 	if err := checkTargets("verify backup", targets); err != nil {
 		return err
 	}
-	stmt := "RESTORE VERIFYONLY FROM " + targetList(targets)
-	if err := s.exec(ctx, stmt); err != nil {
+	if opts.FileNumber < 0 {
+		return invalidf("gosmo: verify backup: backup set number %d is negative", opts.FileNumber)
+	}
+	if err := s.exec(ctx, buildVerifyBackupStatement(opts, targets)); err != nil {
 		return fmt.Errorf("gosmo: verify backup %q: %w", targetNames(targets), err)
 	}
 	return nil
+}
+
+// buildVerifyBackupStatement renders VerifyBackup's RESTORE VERIFYONLY.
+func buildVerifyBackupStatement(opts VerifyOptions, targets []BackupTarget) string {
+	var with []string
+	if n := setNumber(opts.FileNumber); n > 0 {
+		with = append(with, fmt.Sprintf("FILE = %d", n))
+	}
+	if opts.Checksum {
+		with = append(with, "CHECKSUM")
+	}
+	stmt := "RESTORE VERIFYONLY FROM " + targetList(targets)
+	if len(with) > 0 {
+		stmt += " WITH " + strings.Join(with, ", ")
+	}
+	return stmt
 }
 
 // targetNames joins targets' names for an error message.

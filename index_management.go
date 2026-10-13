@@ -106,6 +106,10 @@ type IndexSetOptions struct {
 // compression only take effect on a rebuild — see Rebuild for those. An opts naming nothing is an error, not a no-op: ALTER INDEX ...
 // SET () is a syntax error, and a caller that meant to change something
 // should hear that it didn't.
+//
+// All three are rowstore options: on an index read as columnstore, or a
+// memory-optimized table's (see refuseAlterIndex), SetOptions is refused
+// before anything is sent.
 func (idx *Index) SetOptions(ctx context.Context, opts IndexSetOptions) error {
 	var set []string
 	for _, o := range []struct {
@@ -122,6 +126,13 @@ func (idx *Index) SetOptions(ctx context.Context, opts IndexSetOptions) error {
 	}
 	if len(set) == 0 {
 		return invalidf("gosmo: set options on index %q: no option given", idx.Name)
+	}
+	if err := idx.refuseAlterIndex("set options on"); err != nil {
+		return err
+	}
+	if idx.Type.IsColumnStore() {
+		// Msg 35327 (IGNORE_DUP_KEY), 35328 (the lock options).
+		return invalidf("gosmo: set options on index %q: a %s index takes none of IGNORE_DUP_KEY, ALLOW_ROW_LOCKS, ALLOW_PAGE_LOCKS", idx.Name, idx.Type)
 	}
 	q := fmt.Sprintf("ALTER INDEX %s SET (%s)", idx.target(), strings.Join(set, ", "))
 	if _, err := idx.table.exec(ctx, q); err != nil {
@@ -217,11 +228,47 @@ type IndexRebuildOptions struct {
 	DataCompression DataCompression
 }
 
+// refuseAlterIndex refuses any ALTER INDEX on a memory-optimized table's
+// index, which the server refuses outright ("The operation 'ALTER INDEX' is
+// not supported with memory optimized tables"). It knows the table only as
+// far as idx was read: a hash index always is one, and an index of a table
+// read by TableByName says so; an IndexRef on a TableRef is left to the
+// server.
+func (idx *Index) refuseAlterIndex(verb string) error {
+	if idx.Type == IndexTypeNonClusteredHash || (idx.table != nil && idx.table.IsMemoryOptimized) {
+		return invalidf("gosmo: %s index %q: ALTER INDEX is not supported on a memory-optimized table", verb, idx.Name)
+	}
+	return nil
+}
+
 // Rebuild rebuilds the index (ALTER INDEX ... REBUILD), with a WITH clause
 // only for the options opts sets.
+//
+// On an index whose Type was read, the options its kind refuses are refused
+// before anything is sent: FILLFACTOR, PAD_INDEX and NONE/ROW/PAGE
+// compression on a columnstore index, COLUMNSTORE compression on a rowstore
+// one. On a memory-optimized table's index every rebuild is refused (see
+// refuseAlterIndex).
 func (idx *Index) Rebuild(ctx context.Context, opts IndexRebuildOptions) error {
 	if opts.DataCompression != "" && !opts.DataCompression.valid() {
 		return invalidf("gosmo: rebuild index %q: invalid data compression %q (must be NONE, ROW, PAGE, COLUMNSTORE, or COLUMNSTORE_ARCHIVE)", idx.Name, opts.DataCompression)
+	}
+	if err := idx.refuseAlterIndex("rebuild"); err != nil {
+		return err
+	}
+	if idx.Type != "" {
+		columnstoreCompression := opts.DataCompression == DataCompressionColumnstore || opts.DataCompression == DataCompressionColumnstoreArchive
+		switch {
+		case idx.Type.IsColumnStore() && (opts.FillFactor > 0 || opts.PadIndex != nil):
+			// Msg 35327.
+			return invalidf("gosmo: rebuild index %q: a %s index takes neither FILLFACTOR nor PAD_INDEX", idx.Name, idx.Type)
+		case idx.Type.IsColumnStore() && opts.DataCompression != "" && !columnstoreCompression:
+			// Msg 10799.
+			return invalidf("gosmo: rebuild index %q: a %s index takes COLUMNSTORE or COLUMNSTORE_ARCHIVE compression, not %s", idx.Name, idx.Type, opts.DataCompression)
+		case !idx.Type.IsColumnStore() && columnstoreCompression:
+			// Msg 10798.
+			return invalidf("gosmo: rebuild index %q: %s compression applies to a columnstore index only, not a %s one", idx.Name, opts.DataCompression, idx.Type)
+		}
 	}
 
 	var withParts []string

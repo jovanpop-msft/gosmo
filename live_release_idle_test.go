@@ -16,9 +16,13 @@ package gosmo
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // exclusiveDeadline bounds each statement under test. The failure it guards
@@ -233,5 +237,50 @@ func TestLiveExclusiveAccessFileGroupRollsBackAParkedSession(t *testing.T) {
 	}
 	if parkedTableExists(t, d, ctx) {
 		t.Error("the parked session's transaction survived the kill")
+	}
+}
+
+// containmentApplied reports whether a SET CONTAINMENT = PARTIAL got past
+// the lock: success, or Msg 12824 where "contained database authentication"
+// is off (win10cli) — raised only once the exclusive lock was taken.
+func containmentApplied(err error) bool {
+	if err == nil {
+		return true
+	}
+	msErr, ok := errors.AsType[mssql.Error](err)
+	return ok && slices.ContainsFunc(msErr.All, func(e mssql.Error) bool { return e.Number == 12824 })
+}
+
+// M2 (review plan 2026-10-13): CONTAINMENT needs the database to itself, like
+// READ_COMMITTED_SNAPSHOT. The Server's own idle sessions in it are released
+// first, and TerminationRollbackImmediate gets past somebody else's; before,
+// either waited without end.
+func TestLiveExclusiveAccessContainment(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	d, drop := liveScratchDB(t, db, ctx, "gosmo_m2_containment_live")
+	defer drop()
+	observer := liveObserver(t, ctx)
+
+	leaveTwoIdleIn(t, observer, d, ctx)
+	ictx, cancel := context.WithTimeout(ctx, exclusiveDeadline)
+	err := d.SetDatabaseOption(ictx, DBOptContainment, "PARTIAL", TerminationNone)
+	cancel()
+	if !containmentApplied(err) {
+		t.Fatalf("CONTAINMENT after a read, TerminationNone: %v — an own idle session blocked it", err)
+	}
+
+	conn := park(t, observer, ctx, d.Name)
+	defer conn.Close()
+	wctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	err = d.SetDatabaseOption(wctx, DBOptContainment, "PARTIAL", TerminationNone)
+	cancel()
+	if containmentApplied(err) {
+		t.Fatal("CONTAINMENT with TerminationNone got past a session parked in the database — the precondition did not hold")
+	}
+	rctx, cancel := context.WithTimeout(ctx, exclusiveDeadline)
+	defer cancel()
+	if err := d.SetDatabaseOption(rctx, DBOptContainment, "PARTIAL", TerminationRollbackImmediate); !containmentApplied(err) {
+		t.Fatalf("CONTAINMENT with TerminationRollbackImmediate: %v", err)
 	}
 }

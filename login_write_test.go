@@ -2,13 +2,25 @@ package gosmo
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 )
 
+// changePasswordStatement is buildChangePasswordStatement for a case that
+// must build.
+func changePasswordStatement(t *testing.T, password string, opts ChangePasswordOptions) string {
+	t.Helper()
+	got, err := buildChangePasswordStatement("app_login", password, opts)
+	if err != nil {
+		t.Fatalf("buildChangePasswordStatement: %v", err)
+	}
+	return got
+}
+
 func TestBuildChangePasswordStatementQuotesLiteralByDefault(t *testing.T) {
-	got := buildChangePasswordStatement("app_login", "hunter2", false, false)
+	got := changePasswordStatement(t, "hunter2", ChangePasswordOptions{})
 	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2")
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
@@ -18,12 +30,19 @@ func TestBuildChangePasswordStatementQuotesLiteralByDefault(t *testing.T) {
 	}
 }
 
-func TestBuildChangePasswordStatementMustChangeAddsCheckExpiration(t *testing.T) {
-	// MUST_CHANGE requires CHECK_EXPIRATION = ON or SQL Server rejects it.
-	got := buildChangePasswordStatement("app_login", "hunter2", true, false)
-	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2") + " MUST_CHANGE, CHECK_EXPIRATION = ON"
-	if got != want {
-		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+// M1 (review plan 2026-10-13): MUST_CHANGE needs CHECK_POLICY and
+// CHECK_EXPIRATION on, in the same statement — on a login whose policy is off,
+// CHECK_EXPIRATION = ON alone is Msg 15122.
+func TestBuildChangePasswordStatementMustChangeTurnsThePolicyOn(t *testing.T) {
+	for _, opts := range []ChangePasswordOptions{
+		{MustChange: true},
+		{MustChange: true, CheckPolicy: new(true), CheckExpiration: new(true)},
+	} {
+		got := changePasswordStatement(t, "hunter2", opts)
+		want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2") + " MUST_CHANGE, CHECK_POLICY = ON, CHECK_EXPIRATION = ON"
+		if got != want {
+			t.Errorf("%+v: got:\n%s\nwant:\n%s", opts, got, want)
+		}
 	}
 }
 
@@ -32,7 +51,7 @@ func TestBuildChangePasswordStatementUnlock(t *testing.T) {
 	// PASSWORD = '...', not a comma-separated <set_option>:
 	// "ALTER LOGIN ... WITH PASSWORD = '...', UNLOCK" is rejected with
 	// "Incorrect syntax near 'UNLOCK'".
-	got := buildChangePasswordStatement("app_login", "hunter2", false, true)
+	got := changePasswordStatement(t, "hunter2", ChangePasswordOptions{Unlock: true})
 	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2") + " UNLOCK"
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
@@ -40,18 +59,92 @@ func TestBuildChangePasswordStatementUnlock(t *testing.T) {
 }
 
 func TestBuildChangePasswordStatementMustChangeAndUnlock(t *testing.T) {
-	got := buildChangePasswordStatement("app_login", "hunter2", true, true)
-	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2") + " MUST_CHANGE UNLOCK, CHECK_EXPIRATION = ON"
+	got := changePasswordStatement(t, "hunter2", ChangePasswordOptions{MustChange: true, Unlock: true})
+	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("hunter2") + " MUST_CHANGE UNLOCK, CHECK_POLICY = ON, CHECK_EXPIRATION = ON"
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestBuildChangePasswordStatementEscapesQuotes(t *testing.T) {
-	got := buildChangePasswordStatement("app_login", "it's a secret", true, false)
-	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("it's a secret") + " MUST_CHANGE, CHECK_EXPIRATION = ON"
+	got := changePasswordStatement(t, "it's a secret", ChangePasswordOptions{MustChange: true})
+	want := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("it's a secret") + " MUST_CHANGE, CHECK_POLICY = ON, CHECK_EXPIRATION = ON"
 	if got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The policy rides in the password statement when the caller sets it, and
+// each nil pointer leaves its option out.
+func TestBuildChangePasswordStatementCarriesThePolicy(t *testing.T) {
+	pw := "ALTER LOGIN [app_login] WITH PASSWORD = " + QuoteLiteral("a")
+	for _, tc := range []struct {
+		opts ChangePasswordOptions
+		want string
+	}{
+		{ChangePasswordOptions{CheckPolicy: new(true), CheckExpiration: new(true)}, pw + ", CHECK_POLICY = ON, CHECK_EXPIRATION = ON"},
+		{ChangePasswordOptions{CheckPolicy: new(true)}, pw + ", CHECK_POLICY = ON"},
+		{ChangePasswordOptions{Unlock: true, CheckExpiration: new(true)}, pw + " UNLOCK, CHECK_EXPIRATION = ON"},
+	} {
+		if got := changePasswordStatement(t, "a", tc.opts); got != tc.want {
+			t.Errorf("%+v: got:\n%s\nwant:\n%s", tc.opts, got, tc.want)
+		}
+	}
+}
+
+// A login whose password must change refuses either policy option OFF, even
+// in the password's own statement (15128); a password change alone clears
+// that flag. So turning one off branches on the server: password first, then
+// the policy, for such a login — the one statement for any other, where a
+// weak password needs the policy off in the statement that sets it.
+func TestBuildChangePasswordStatementTurnsThePolicyOffAfterMustChange(t *testing.T) {
+	for _, tc := range []struct {
+		opts             ChangePasswordOptions
+		pw, policies, el string
+	}{
+		{ChangePasswordOptions{CheckPolicy: new(false), CheckExpiration: new(false)},
+			"ALTER LOGIN [o'b] WITH PASSWORD = N'a'", "CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF",
+			"ALTER LOGIN [o'b] WITH PASSWORD = N'a', CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF"},
+		{ChangePasswordOptions{Unlock: true, CheckExpiration: new(false)},
+			"ALTER LOGIN [o'b] WITH PASSWORD = N'a' UNLOCK", "CHECK_EXPIRATION = OFF",
+			"ALTER LOGIN [o'b] WITH PASSWORD = N'a' UNLOCK, CHECK_EXPIRATION = OFF"},
+	} {
+		got, err := buildChangePasswordStatement("o'b", "a", tc.opts)
+		if err != nil {
+			t.Fatalf("%+v: %v", tc.opts, err)
+		}
+		want := "IF CAST(LOGINPROPERTY(N'o''b', 'IsMustChange') AS int) = 1\nBEGIN\n    " + tc.pw +
+			";\n    ALTER LOGIN [o'b] WITH " + tc.policies + ";\nEND\nELSE\n    " + tc.el
+		if got != want {
+			t.Errorf("%+v: got:\n%s\nwant:\n%s", tc.opts, got, want)
+		}
+	}
+}
+
+// The combinations SQL Server refuses (15122, 15128) are refused before
+// anything is sent, by ChangePassword and SetPasswordPolicy alike.
+func TestChangePasswordRefusesWhatTheServerRefuses(t *testing.T) {
+	for name, opts := range map[string]ChangePasswordOptions{
+		"MustChange, policy off":     {MustChange: true, CheckPolicy: new(false)},
+		"MustChange, expiration off": {MustChange: true, CheckExpiration: new(false)},
+		"expiration on, policy off":  {CheckPolicy: new(false), CheckExpiration: new(true)},
+	} {
+		ctx, script := WithScript(context.Background())
+		err := (&Login{server: &Server{}, Name: "app"}).ChangePassword(ctx, "a", opts)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("%s: err = %v, want ErrInvalidRequest", name, err)
+		}
+		if len(script.Statements()) != 0 {
+			t.Errorf("%s: sent %q", name, script.Statements())
+		}
+	}
+	ctx, script := WithScript(context.Background())
+	err := (&Login{server: &Server{}, Name: "app"}).SetPasswordPolicy(ctx, false, true)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("SetPasswordPolicy(false, true): err = %v, want ErrInvalidRequest", err)
+	}
+	if len(script.Statements()) != 0 {
+		t.Errorf("SetPasswordPolicy(false, true): sent %q", script.Statements())
 	}
 }
 

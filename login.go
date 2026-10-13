@@ -267,9 +267,14 @@ func (l *Login) SetDefaultLanguage(ctx context.Context, lang string) error {
 }
 
 // SetPasswordPolicy sets the login's CHECK_POLICY and CHECK_EXPIRATION
-// flags. SQL Server rejects checkExpiration=true with checkPolicy=false —
-// surfaced as the returned error, not pre-validated here.
+// flags. checkExpiration with checkPolicy off is refused before anything is
+// sent, as SQL Server refuses it (Msg 15122). Turning either off on a login
+// whose password must change at next login fails Msg 15128 on the server —
+// that state needs a read, so it is not pre-validated here.
 func (l *Login) SetPasswordPolicy(ctx context.Context, checkPolicy, checkExpiration bool) error {
+	if checkExpiration && !checkPolicy {
+		return invalidf("gosmo: set password policy for login %q: CheckExpiration cannot be on when CheckPolicy is off", l.Name)
+	}
 	policy, expiration := "OFF", "OFF"
 	if checkPolicy {
 		policy = "ON"
@@ -296,27 +301,67 @@ func (l *Login) SetPasswordPolicy(ctx context.Context, checkPolicy, checkExpirat
 // of the cleartext under HASHED either fails outright or creates a login
 // nothing can ever authenticate as.
 //
-// opts adds MUST_CHANGE (force a password change at next login) and UNLOCK
-// (clear a lockout); the zero value changes the password alone.
+// opts adds MUST_CHANGE (force a password change at next login), UNLOCK
+// (clear a lockout) and the login's CHECK_POLICY/CHECK_EXPIRATION, all in the
+// one write; the zero value changes the password alone. Carrying the
+// policy in the same write is what lets MUST_CHANGE apply to a login whose
+// policy is off, and the policy be turned off on a login whose password must
+// change — a separate SetPasswordPolicy before or after fails one of the two
+// (Msg 15122/15128). The combinations SQL Server refuses are refused before
+// anything is sent.
 func (l *Login) ChangePassword(ctx context.Context, newPassword string, opts ChangePasswordOptions) error {
-	stmt := buildChangePasswordStatement(l.Name, newPassword, opts.MustChange, opts.Unlock)
-	if err := l.server.execPasswords(ctx, stmt, newPassword); err != nil {
+	stmt, err := buildChangePasswordStatement(l.Name, newPassword, opts)
+	if err != nil {
 		return fmt.Errorf("gosmo: change password for login %q: %w", l.Name, err)
 	}
-	if opts.MustChange {
-		setIfApplied(ctx, &l.IsExpirationChecked, true)
+	if opts.turnsPolicyOff() {
+		// Two ALTERs on one branch of the batch: all or nothing.
+		err = l.server.execPasswordsAtomic(ctx, []string{stmt}, newPassword)
+	} else {
+		err = l.server.execPasswords(ctx, stmt, newPassword)
+	}
+	if err != nil {
+		return fmt.Errorf("gosmo: change password for login %q: %w", l.Name, err)
+	}
+	policy, expiration := opts.effectivePolicy()
+	if policy != nil {
+		setIfApplied(ctx, &l.IsPolicyChecked, *policy)
+	}
+	if expiration != nil {
+		setIfApplied(ctx, &l.IsExpirationChecked, *expiration)
 	}
 	return nil
 }
 
-// ChangePasswordOptions are the password-clause modifiers ChangePassword
-// can add.
+// ChangePasswordOptions are the modifiers ChangePassword can add.
 type ChangePasswordOptions struct {
 	// MustChange forces a password change at the next login (MUST_CHANGE),
-	// which also turns CHECK_EXPIRATION on — SQL Server refuses it otherwise.
+	// which also turns CHECK_POLICY and CHECK_EXPIRATION on — SQL Server
+	// refuses it otherwise. With either set to false it is refused.
 	MustChange bool
 	// Unlock clears a lockout (UNLOCK).
 	Unlock bool
+	// CheckPolicy and CheckExpiration set CHECK_POLICY/CHECK_EXPIRATION in
+	// the same statement; nil leaves each as it is. CheckExpiration on with
+	// CheckPolicy off is refused, as SQL Server refuses it.
+	CheckPolicy     *bool
+	CheckExpiration *bool
+}
+
+// turnsPolicyOff reports whether o turns CHECK_POLICY or CHECK_EXPIRATION
+// off — what a login whose password must change refuses (Msg 15128) until a
+// password change clears that flag.
+func (o ChangePasswordOptions) turnsPolicyOff() bool {
+	return !o.MustChange && ((o.CheckPolicy != nil && !*o.CheckPolicy) || (o.CheckExpiration != nil && !*o.CheckExpiration))
+}
+
+// effectivePolicy is the CHECK_POLICY/CHECK_EXPIRATION the statement sets:
+// the caller's, with MustChange forcing both on.
+func (o ChangePasswordOptions) effectivePolicy() (policy, expiration *bool) {
+	if o.MustChange {
+		return new(true), new(true)
+	}
+	return o.CheckPolicy, o.CheckExpiration
 }
 
 // buildChangePasswordStatement builds the ALTER LOGIN ... WITH PASSWORD
@@ -327,24 +372,54 @@ type ChangePasswordOptions struct {
 // <set_option> items — SQL Server rejects "PASSWORD = '...', UNLOCK" and
 // "..., MUST_CHANGE" outright ("Incorrect syntax near 'UNLOCK'"). Both must
 // instead follow PASSWORD = '...' space-separated, in either order;
-// CHECK_EXPIRATION = ON is the one that belongs after a comma, as its own
-// <set_option>.
-func buildChangePasswordStatement(loginName, newPassword string, mustChange, unlock bool) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("ALTER LOGIN %s WITH PASSWORD = %s", quoteIdent(loginName), QuoteLiteral(newPassword)))
-	if mustChange {
-		sb.WriteString(" MUST_CHANGE")
+// CHECK_POLICY and CHECK_EXPIRATION belong after a comma, as their own
+// <set_option>s.
+func buildChangePasswordStatement(loginName, newPassword string, opts ChangePasswordOptions) (string, error) {
+	policyOff := opts.CheckPolicy != nil && !*opts.CheckPolicy
+	switch {
+	case opts.MustChange && (policyOff || (opts.CheckExpiration != nil && !*opts.CheckExpiration)):
+		return "", invalidf("MustChange requires CheckPolicy and CheckExpiration on")
+	case policyOff && opts.CheckExpiration != nil && *opts.CheckExpiration:
+		return "", invalidf("CheckExpiration cannot be on when CheckPolicy is off")
 	}
-	if unlock {
-		sb.WriteString(" UNLOCK")
+	login := quoteIdent(loginName)
+	var pw strings.Builder
+	fmt.Fprintf(&pw, "ALTER LOGIN %s WITH PASSWORD = %s", login, QuoteLiteral(newPassword))
+	if opts.MustChange {
+		pw.WriteString(" MUST_CHANGE")
 	}
-	if mustChange {
-		// MUST_CHANGE requires CHECK_EXPIRATION = ON (and CHECK_POLICY =
-		// ON, already the server default) — SQL Server rejects MUST_CHANGE
-		// otherwise.
-		sb.WriteString(", CHECK_EXPIRATION = ON")
+	if opts.Unlock {
+		pw.WriteString(" UNLOCK")
 	}
-	return sb.String()
+	var policies []string
+	policy, expiration := opts.effectivePolicy()
+	if policy != nil {
+		policies = append(policies, "CHECK_POLICY = "+onOff(*policy))
+	}
+	if expiration != nil {
+		policies = append(policies, "CHECK_EXPIRATION = "+onOff(*expiration))
+	}
+	if len(policies) == 0 {
+		return pw.String(), nil
+	}
+	combined := pw.String() + ", " + strings.Join(policies, ", ")
+	if !opts.turnsPolicyOff() {
+		return combined, nil
+	}
+	// A login whose password must change refuses either option OFF, in the
+	// password's own statement too (15128); a password change alone clears
+	// the flag, so there the password goes first and the policy after
+	// (verified live on 17.0). Decided on the server, so no read is needed
+	// and a WithScript capture is what runs. Only that branch splits: a weak
+	// password is accepted only with the policy turned off in its own
+	// statement.
+	return fmt.Sprintf(`IF CAST(LOGINPROPERTY(%s, 'IsMustChange') AS int) = 1
+BEGIN
+    %s;
+    ALTER LOGIN %s WITH %s;
+END
+ELSE
+    %s`, QuoteLiteral(loginName), pw.String(), login, strings.Join(policies, ", "), combined), nil
 }
 
 // MapCredential maps a server credential to the login.

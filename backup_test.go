@@ -569,7 +569,7 @@ func TestBackupTargetClauseURL(t *testing.T) {
 func TestRestoreSideReadsUseURLForABlob(t *testing.T) {
 	const blob = "https://acct.blob.core.windows.net/c/db.bak"
 	ctx, col := WithScript(context.Background())
-	if err := (&Server{}).VerifyBackup(ctx, DiskTarget(blob)); err != nil {
+	if err := (&Server{}).VerifyBackup(ctx, VerifyOptions{}, DiskTarget(blob)); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
 	want := "RESTORE VERIFYONLY FROM URL = N'" + blob + "'"
@@ -584,7 +584,7 @@ func TestRestoreSideReadsUseURLForABlob(t *testing.T) {
 func TestRestoreSideReadsNameEveryFamily(t *testing.T) {
 	ctx, col := WithScript(context.Background())
 	s := &Server{}
-	if err := s.VerifyBackup(ctx, DiskTarget(`/b/s1.bak`), DiskTarget(`/b/s2.bak`)); err != nil {
+	if err := s.VerifyBackup(ctx, VerifyOptions{}, DiskTarget(`/b/s1.bak`), DiskTarget(`/b/s2.bak`)); err != nil {
 		t.Fatalf("VerifyBackup: %v", err)
 	}
 	want := `RESTORE VERIFYONLY FROM DISK = N'/b/s1.bak', DISK = N'/b/s2.bak'`
@@ -596,7 +596,7 @@ func TestRestoreSideReadsNameEveryFamily(t *testing.T) {
 		`RESTORE FILELISTONLY FROM DISK = N'/b/s1.bak', DISK = N'/b/s2.bak' WITH FILE = 3`; got != want {
 		t.Errorf("backupFileListQuery = %s, want %s", got, want)
 	}
-	if err := s.VerifyBackup(ctx); err == nil {
+	if err := s.VerifyBackup(ctx, VerifyOptions{}); err == nil {
 		t.Error("VerifyBackup with no device: want an error")
 	}
 	if _, err := s.BackupHeaders(ctx); err == nil {
