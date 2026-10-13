@@ -77,7 +77,8 @@ Every object family SSMS shows, read and — where it makes sense — written:
   filesystem, memory, processor, activity and tempdb DMVs.
 - **Database** — files and filegroups, `ALTER DATABASE` options, scoped
   configurations, space and disk usage, change tracking, users, roles,
-  schemas, permissions down to column scope, detach/attach, snapshots.
+  schemas, permissions down to column scope (`ApplyPermission`),
+  detach/attach, snapshots.
 - **Objects** — tables (with system, FileTable, external and graph tables as
   their own listings), columns, indexes, keys, constraints, statistics,
   partitions, views, procedures, functions, sequences, synonyms, triggers at
@@ -99,6 +100,12 @@ Every object family SSMS shows, read and — where it makes sense — written:
   at both scopes, endpoints, certificates, asymmetric and symmetric keys,
   column encryption.
 - **Query Store** — its options and all seven report views.
+- **Full-Text Search** — catalogs, stoplists, search property lists and
+  full-text indexes with their populations, read, written and scripted.
+- **Replication** — distributor and publisher configuration, publications,
+  articles and subscriptions, and the Replication Monitor reads; read-only.
+- **Live Query Statistics** — operator counters and the in-flight plan of
+  another session's running statement.
 - **Azure SQL Managed Instance** — supported, not merely reachable: its own
   version gating, resource history and governance limits at instance and
   database scope, and backup to URL.

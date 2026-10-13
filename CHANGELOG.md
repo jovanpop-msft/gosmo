@@ -4,6 +4,55 @@ All notable changes to gosmo are documented here, newest first, from
 `v0.0.4` onward — this is the history. `RELEASE.md` carries the current
 release only, as a short summary of the entry below it.
 
+## v0.0.17
+
+Two new families — Full-Text Search and Replication — plus Live Query
+Statistics reads and one permission entry point for every securable. The
+breaking changes move the last few `Database`-level writes onto their handles
+and replace the per-class Grant/Deny/Revoke methods. Each **Migrating** note
+says what a caller rewrites.
+
+### Added
+
+- **Full-Text Search** (`fulltext.go`, `fulltext_write.go`, `scripter_fulltext.go`) — `Server.FullTextInfo` (installed state, languages, document types); `Database.FullTextCatalogs`/`FullTextCatalogByName`/`FullTextCatalogRef`/`CreateFullTextCatalog`, with `Rebuild`, `Reorganize`, `SetDefault`, `SetOwner`, `Drop` and `Indexes`; `FullTextStoplists` with `AddStopword`, `DropStopword`, `DropLanguageStopwords`, `DropAllStopwords` and `Stopwords`; `SearchPropertyLists` with `AddProperty`, `DropProperty` and `Properties`; `Database.FullTextIndexes` and `Table.FullTextIndex`/`FullTextIndexRef`/`CreateFullTextIndex`, with `Enable`/`Disable`/`SetEnabled`, `AddColumn`, `DropColumn`, `SetChangeTracking`, `SetStoplist`, `SetSearchPropertyList`, `StartPopulation`/`StopPopulation`/`PausePopulation`/`ResumePopulation` and `Populations`. `Scripter.ScriptFullTextCatalog`/`ScriptFullTextStoplist`/`ScriptSearchPropertyList`/`ScriptFullTextIndex` script each family. The index read is versioned per major (`testdata/version_gates/fulltext_indexes.sql`); the capability keys for full-text DROP and CREATE were probed on majors 14 and 17.
+- **Replication, read-only** (`replication.go`, `replication_subscription.go`) — `Server.ReplicationInfo` (distributor, publishers, replicated databases), `DistributionDatabaseRef`, `Database.Publications`/`PublicationByName`, `Server.LocalPublications`, `Publication.Articles` and `Subscriptions`, `Database.LocalSubscriptions`/`Server.LocalSubscriptions` for the subscriber end. `PublicationType`, `SubscriptionType` and `SchemaOption` (with `Options()`) decode the catalog's bit fields. gosmo creates and alters none of it.
+- **Replication Monitor reads** (`replication_monitor.go`) — `DistributionDatabase.CanMonitor`, `MonitorPublications`, `MonitorSubscriptions`, `Agents`, `Errors`; `Server.MonitorPublishers`; and per agent `Sessions` (by hours, errors only) and `SessionActions`. `ReplAgentStatus`, `ReplAgentKind` and `MonitorWarning` decode status, kind and the warning bit mask. A database without monitor access answers through `CanMonitor` instead of failing the read.
+- **Live Query Statistics** (`query_profile.go`) — `Server.QueryProfiles` (`sys.dm_exec_query_profiles`, one row per operator per thread), `Server.InFlightPlan` (`sys.dm_exec_query_statistics_xml`, the showplan with the counters so far; `ErrNotFound` when idle) and `Server.SessionLoginTime`. Both describe another session, so a caller polls on a connection of its own.
+- **`ApplyPermission`** (`permission_options.go`) — `Server.ApplyPermission` and `Database.ApplyPermission(ctx, verb, Securable, perm, principal, opts)` issue one GRANT, DENY or REVOKE on any securable class. `PermissionVerb`, `SecurableClass` (`PermissionNames()` lists the permissions a class accepts), `Securable` and `PermissionName` replace the per-class methods; the allowlist per class is unchanged and a name outside it is `ErrInvalidRequest`. Classes now include full-text catalogs, stoplists and search property lists.
+- **`Server.BlockedRequests(ctx, clientPID)`** (`server_activity.go`) — the requests of one client process that another session blocks, longest wait first, with the blocker's login, host and program. Negative blocking ids and the reading connection are left out.
+- **`SetEnabled(ctx, on)`** on every handle that has `Enable`/`Disable` — `Login`, `Job`, `Alert`, `Operator`, `Schedule`, `ServerAudit`, `ServerAuditSpecification`, `DatabaseAuditSpecification`, `DatabaseTrigger`, `ServerTrigger`, `PlanGuide`, `SecurityPolicy` and `FullTextIndex`; `set_enabled_test.go` pins that each maps to its pair.
+- **`ErrInvalidRequest`** (`errors.go`) — a call refused for its own arguments before any statement is sent (a permission name outside the allowlist, an empty column list, an unsafe value). Distinct from `ErrUnsupported`, where the request is well formed but gosmo has no form for it, and from `ErrSchemaRequired`. `invalid_request_test.go` enforces that every such refusal wraps it.
+- **`ScriptDatabase` writes the layout and options** — every filegroup's files with `SIZE`, `MAXSIZE`, `FILEGROWTH` and `FILENAME`, empty and read-only filegroups, `FILESTREAM` options, and the options that differ from a new database's (auto-close, auto-shrink, auto statistics, page verify, trustworthy, read-committed snapshot, snapshot isolation, change tracking), plus Query Store. Round-trip tests replay the script under a new name and compare the catalog.
+- **Query Store `WAIT_STATS_CAPTURE_MODE`** — `SetQueryStoreOptions` sets it on SQL Server 2017 and later and leaves it out below; the scripter and the setter share one option list (`queryStoreOnOptions`).
+- **Backup set types** — `BackupSetType` with `IsDifferential`, `RestoreVerb` and `PlacesFiles`, so a client picks the restore action from the set's own kind; `BackupHeader.SetType` (replacing `BackupType`).
+- **Smaller additions** — `Login.UserMappingsIn(ctx, dbs)` (one round trip for a given list of databases), `SplitName` (a dotted name split by the quoting rules), `Database.RuleDefinitions`/`DefaultDefinitions`, `DatabaseFileInfo.IsPrimaryFile`, `ExtendedProperty.IsNull`, `Job` and `Schedule` child reads on a `Ref` handle (the id is looked up by name), `ErrHandleNotLoaded` for every other `Ref` child read, `perDatabaseBatch` for per-database listings.
+
+### Changed
+
+- **Breaking: permission writes are `ApplyPermission`.** `GrantPermission`/`DenyPermission`/`RevokePermission`, the `…SchemaPermission`, `…DatabasePermission` and `…ColumnPermission` forms on `Database`, `…ServerPermission` on `Server` and `User.Grant`/`Deny`/`Revoke` are removed. **Migrating:** `db.ApplyPermission(ctx, VerbGrant, Securable{Class: SecurableTable, Schema: s, Name: n}, perm, principal, opts)`; column scope is a `Securable` field.
+- **Breaking: change tracking is on the table.** `Database.SetTableChangeTracking` and `TableChangeTrackingFor` are `Table.SetChangeTracking` and `Table.ChangeTracking`. **Migrating:** `db.TableRef(s, n).SetChangeTracking(ctx, true, false)`.
+- **Breaking: signatures are on the module.** `Database.AddSignature`/`DropSignature` are the same pair on `StoredProcedure`, `UserDefinedFunction` and `Trigger`. **Migrating:** `db.StoredProcedureRef(s, n).AddSignature(ctx, by, false)`; an inline function cannot be signed.
+- **Breaking: file listings return `*DatabaseFileInfo`.** `FileGroup.Files` is `[]*DatabaseFileInfo` and the separate `DatabaseFile` type is gone; sizes are `SizeKB`, `MaxSizeKB`, `GrowthKB` and `GrowthPercent`. **Migrating:** read the same fields from `DatabaseFileInfo`; `IsPrimaryFile` is a method.
+- **Breaking: `BackupHeader.BackupType` is `SetType`** (`BackupSetType`), mapped from the header's numeric column without folding partial backups into a database backup.
+- **`ErrUnsupported` reads "not supported"**, not "not supported by the scripter" — it is returned outside the scripter too. Match it with `errors.Is`.
+- **Reordering Agent steps** re-adds a moved step with its "go to step N" actions as "go to next step" and writes the real targets in one repair pass, following `sp_delete_jobstep`'s actual remapping.
+- **A schedule without `ActiveStartDate`** leaves `@active_start_date` out so msdb fills in the server's today.
+- **`ScriptDatabase` and setters write file sizes** in MB from 2 TB up (`fileSizeLiteral`).
+- Dependencies: Go toolchain 1.27.2, `azcore` v1.23.3, `golang.org/x/{crypto,net,sync,sys,text}` updated.
+
+### Fixed
+
+- **Reordering Agent steps rolled back** for a legitimate order — moving "step 3, on failure go to step 1" to the top made `sp_verify_jobstep` reject a step that goes to itself (Msg 14235).
+- **A schedule's start date shifted by a day** for a client in another time zone than the server.
+- **Extended properties with a NULL value** failed the whole read; `Value` is "" and `IsNull` is set.
+- **Statistics histograms** rendered a NULL key as `<nil>` and a binary key as a decimal byte list; keys now render as the server prints them, by the leading column's type.
+- **Files of 2 TB and larger** scripted as `Msg 102` (`2147483648KB`), and a file size over 2 GB overflowed; sizes read as `bigint`.
+- **`LOGINPROPERTY` "never" dates** came back as the server's 1900-01-01 sentinel shifted by its UTC offset; they are the zero `Time`.
+- **Query Store wait reports** counted an execution once per wait category; the across-category report folds categories first.
+- **`…Ref` handle child reads** asked for id 0 and answered "no children" (assembly files, alert notifications, availability replicas, job steps and schedules); they now look the id up by name or return `ErrHandleNotLoaded`.
+- **A database that cannot be entered** (Msg 924) failed a whole per-database batch before its TRY ran; the procedure is named through a variable (`perDatabaseExec`).
+- **Float16 vector in dynamic SQL** is noted in the script, since the replay would fail with Msg 195.
+
 ## v0.0.16
 
 Three new families — Extended Events, Resource Governor and Database Mail —

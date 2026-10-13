@@ -3,38 +3,34 @@
 The current release, in brief. Detail and history are in
 [CHANGELOG.md](CHANGELOG.md).
 
-## v0.0.16
+## v0.0.17
 
 ### New
 
-- Extended Events: sessions, targets, live reads, templates, scripting.
-- Resource Governor: pools, workload groups, external pools, classifier.
-- Database Mail: accounts, profiles, security, queues, log, `SendMail`.
-- `Server.InTransaction` — several writes as one transaction.
-- Restore planning: set numbers, file relocation, `RestoreOptions.FromHeader`.
-- Server activity counters and tempdb usage reads.
-- CLR procedures, functions and triggers script from the catalog.
-- Table-valued functions and aggregates in `Catalog`.
-- `ScheduleByID`, `AgentMailSettings`, linked-server catalog reads.
-- `ClassifyRefusal`, `IsPermissionDenied`, `IsAlreadyExists`, `ErrAmbiguous`.
-- Collation-aware `SameName` / `NameKey`; more quoting helpers.
+- Full-Text Search: catalogs, stoplists, search property lists, indexes, populations, scripting.
+- Replication (read-only): distributor, publications, articles, subscriptions.
+- Replication Monitor reads: publishers, agents, sessions, errors.
+- Live Query Statistics: `QueryProfiles`, `InFlightPlan`, `SessionLoginTime`.
+- `ApplyPermission` — one GRANT/DENY/REVOKE for any securable class.
+- `BlockedRequests`, `SetEnabled` on every enable/disable handle, `ErrInvalidRequest`.
+- `ScriptDatabase` writes file layout and database options.
+- `BackupSetType`, `Login.UserMappingsIn`, `SplitName`, rule and default definitions.
 
 ### Fixes
 
-- Case-sensitive databases raised collation conflicts and returned the wrong object.
-- `DROP TABLE` did not name the schema-bound modules in its way.
-- Restore moved files to names the server could not create.
-- Captured scripts could keep a password containing a quote.
-- Writes that read a value back could be retried.
-- Several statements of one write could half-apply.
+- Reordering Agent steps with a "go to step N" action rolled back.
+- Schedule start date drifted by a day across time zones.
+- Extended properties with a NULL value failed the whole listing.
+- Histogram keys of NULL, binary and date types rendered as Go artifacts.
+- Files of 2 TB and larger scripted as `Msg 102`.
+- `LOGINPROPERTY` "never" dates came back as a 1900 value.
+- Query Store wait reports counted executions once per category.
+- Reads on `…Ref` handles queried id 0 and answered "no children".
 
 ### Changes
 
-- **Breaking:** file, filegroup and role-member writes are methods on their handles.
-- **Breaking:** Agent step, category, alert and schedule writes follow the handle shape; attach by `*Schedule`.
-- **Breaking:** `Credential.Alter` takes `CredentialOptions`.
-- **Breaking:** `BuildBackupStatement` is a `Server` method.
-- **Breaking:** `ObjectKey` joins with a NUL byte.
-- By-name lookups return the catalog's spelling.
-- `Close` cancels every statement in flight.
-- Dependencies: `shopspring/decimal` v1.5.0.
+- **Breaking:** permission writes are `ApplyPermission`; per-class Grant/Deny/Revoke removed.
+- **Breaking:** change tracking and signatures are methods on `Table` and the module handles.
+- **Breaking:** `DatabaseFile` is `*DatabaseFileInfo`; `BackupType` is `SetType`.
+- Argument refusals wrap `ErrInvalidRequest`; `ErrUnsupported` text is "not supported".
+- Dependencies: Go 1.27.2, `azcore` v1.23.3.
