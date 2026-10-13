@@ -47,7 +47,11 @@ func (sc *Scripter) ScriptTable(ctx context.Context, schema, name string) (strin
 		// An external table has no indexes, constraints or data space of
 		// its own; what it has instead is the data source and file format
 		// it reads through.
-		return sc.scriptExternalTable(ctx, schema, name, p)
+		script, err := sc.scriptExternalTable(ctx, schema, name, p)
+		if err != nil {
+			return "", err
+		}
+		return sc.withTableExtendedProperties(ctx, t, p, script)
 	}
 	if p.indexes, err = t.Indexes(ctx); err != nil {
 		return "", err
@@ -69,9 +73,24 @@ func (sc *Scripter) ScriptTable(ctx context.Context, schema, name string) (strin
 		}
 	}
 	if p.table.IsFileTable {
-		return buildFileTableScript(schema, name, sc.db.Name, p, sc.opts), nil
+		return sc.withTableExtendedProperties(ctx, t, p, buildFileTableScript(schema, name, sc.db.Name, p, sc.opts))
 	}
-	return buildTableScript(schema, name, sc.db.Name, p, sc.opts), nil
+	return sc.withTableExtendedProperties(ctx, t, p, buildTableScript(schema, name, sc.db.Name, p, sc.opts))
+}
+
+// withTableExtendedProperties appends the table's extended properties to its
+// script (see ScriptOptions.ExtendedProperties). A FileTable's
+// system-defined constraints and indexes are AS FILETABLE's to create, under
+// names of the replay's own, so their properties have nothing to land on and
+// are left out with them.
+func (sc *Scripter) withTableExtendedProperties(ctx context.Context, t *Table, p tableScriptParts, script string) (string, error) {
+	props, err := sc.scriptExtendedProperties(ctx, t.ObjectID, true, func(ep scriptedExtProp) bool {
+		return ep.level.Level2Type != "COLUMN" && slices.Contains(p.table.FileTableSystemObjects, ep.level.Level2Name)
+	})
+	if err != nil {
+		return "", fmt.Errorf("gosmo: script table %s: %w", t.FullName(), err)
+	}
+	return script + props, nil
 }
 
 // tableScriptParts is everything buildTableScript renders from, read by

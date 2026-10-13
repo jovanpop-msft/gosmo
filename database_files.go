@@ -296,8 +296,10 @@ func buildAlterFileStatement(dbName, name string, m FileModify) (string, error) 
 
 // Shrink shrinks the file towards targetKB (DBCC SHRINKFILE), rounded up to
 // whole MB as the command takes them; 0 shrinks it as far as its contents
-// allow. Lowering a file's size cannot go through Alter — MODIFY FILE with a
-// smaller SIZE is Msg 5039.
+// allow, and is sent as 1 MB — SHRINKFILE's own target 0 stops at the file's
+// minimum size, its creation size, however little it holds. Lowering a
+// file's size cannot go through Alter — MODIFY FILE with a smaller SIZE is
+// Msg 5039.
 //
 // It returns the size the file reached, in KB, which can be above targetKB:
 // a shrink stops at the space the file's data occupies. It is slow on a
@@ -329,9 +331,9 @@ func (f *DatabaseFileInfo) Shrink(ctx context.Context, targetKB int64) (int64, e
 
 // buildShrinkFileStatement renders Shrink's DBCC SHRINKFILE, naming the file
 // by its logical name as a literal — the handle may be a FileRef, with no
-// file_id.
+// file_id. The target is never below 1 MB: see Shrink.
 func buildShrinkFileStatement(name string, targetKB int64) string {
-	return fmt.Sprintf("DBCC SHRINKFILE (%s, %d)", QuoteLiteral(name), (targetKB+1023)/1024)
+	return fmt.Sprintf("DBCC SHRINKFILE (%s, %d)", QuoteLiteral(name), max((targetKB+1023)/1024, 1))
 }
 
 // Drop removes the file from its database (ALTER DATABASE ... REMOVE FILE).

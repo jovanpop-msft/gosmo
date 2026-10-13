@@ -3,6 +3,7 @@ package gosmo
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -99,10 +100,16 @@ func (sc *Scripter) ScriptFunctionCall(ctx context.Context, schema, name string,
 // pseudo-column is written bare, because bracketed as [$from_id] it is an
 // ordinary name that resolves to nothing (Msg 207). An edge's endpoints
 // cannot be updated, so UPDATE leaves them out with the rest.
+//
+// A table with a column set leaves its sparse columns out: the column set is
+// how they are written, and a column list naming both fails with Msg 360.
 func scriptableColumns(cols []*Column, forInsert bool) []dmlColumn {
+	hasColumnSet := slices.ContainsFunc(cols, func(c *Column) bool { return c.IsColumnSet })
 	out := make([]dmlColumn, 0, len(cols))
 	for _, c := range cols {
 		switch {
+		case hasColumnSet && c.IsSparse:
+			continue
 		case forInsert && c.GraphType == GraphColumnFromIDComputed:
 			out = append(out, graphEndpoint("$from_id"))
 		case forInsert && c.GraphType == GraphColumnToIDComputed:

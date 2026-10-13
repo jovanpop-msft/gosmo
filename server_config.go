@@ -142,13 +142,18 @@ const showAdvancedOptions = "show advanced options"
 //     sp_configure needs before it will accept an advanced name);
 //  2. sp_configure every change;
 //  3. one RECONFIGURE [WITH OVERRIDE];
-//  4. put "show advanced options" back if step 1 turned it on.
+//  4. put "show advanced options" back to its configured value if step 1
+//     turned it on.
 //
 // A bare sp_configure of an advanced option fails Msg 15123 while "show
 // advanced options" is 0, which is how every stock installation ships — see
 // ConfigurationOption.SetValue. Whether an option is advanced is decided by
 // the server (sys.configurations.is_advanced), not by gosmo, so the batch is
 // the same scripted as executed.
+//
+// Step 4 restores the configured value read before step 1, not 0: an
+// sp_configure of 1 still waiting for its RECONFIGURE has value_in_use 0, so
+// step 1 runs, and writing 0 back would silently drop that pending 1.
 //
 // A change to "show advanced options" itself wins over step 4: it is applied
 // after every other change and nothing is restored afterwards.
@@ -192,6 +197,7 @@ func buildApplyConfiguration(changes []ConfigChange, opts ConfigApplyOptions) st
 	enable := len(names) > 0
 	if enable {
 		fmt.Fprintf(&b, `DECLARE @show_advanced_enabled bit = 0;
+DECLARE @show_advanced_value int = (SELECT CONVERT(int, value) FROM sys.configurations WHERE name = N'%[1]s');
 IF EXISTS (SELECT 1 FROM sys.configurations WHERE name = N'%[1]s' AND value_in_use = 0)
    AND EXISTS (SELECT 1 FROM sys.configurations WHERE is_advanced = 1 AND name IN (%[2]s))
 BEGIN
@@ -210,7 +216,7 @@ END;
 		fmt.Fprintf(&b, `
 IF @show_advanced_enabled = 1
 BEGIN
-    EXEC sys.sp_configure N'%s', 0;
+    EXEC sys.sp_configure N'%s', @show_advanced_value;
     %s;
 END;`, showAdvancedOptions, reconfigure)
 	}

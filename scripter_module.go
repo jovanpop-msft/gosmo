@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -71,7 +72,12 @@ WHERE  SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND tr.name = @p2
 // reported an object the caller can see in the listing as not found) and its
 // CREATE is rebuilt from the catalog by clrSchemaModule. It carries no SET
 // options: they govern T-SQL compilation, and a CLR module has none.
-func (sc *Scripter) scriptModule(ctx context.Context, k moduleKind, schema, name string) (string, error) {
+//
+// then, when not nil, writes what follows the definition (a view's indexes)
+// from the module's object_id; the module's extended properties come last,
+// after anything then created that they sit on.
+func (sc *Scripter) scriptModule(ctx context.Context, k moduleKind, schema, name string,
+	then func(sb *strings.Builder, objectID int) error) (string, error) {
 	drop := fmt.Sprintf("DROP %s IF EXISTS %s;\nGO\n", k.keyword, qualifiedName(schema, name))
 	return sc.opts.envelopeErr(drop, "", func(sb *strings.Builder) error {
 		var def sql.NullString
@@ -84,46 +90,67 @@ func (sc *Scripter) scriptModule(ctx context.Context, k moduleKind, schema, name
 			return rowErr(err, notFoundf("gosmo: %s %s not found", k.noun, qualifiedName(schema, name)),
 				fmt.Sprintf("script %s %s", k.noun, qualifiedName(schema, name)))
 		}
-		if clr {
-			m, err := sc.db.clrSchemaModule(ctx, k.keyword, objectID, schema, name)
-			if err != nil {
+		if err := sc.writeModuleDefinition(ctx, sb, k, schema, name, def, ansiNulls, quotedIdent, clr, objectID); err != nil {
+			return err
+		}
+		if then != nil {
+			if err := then(sb, objectID); err != nil {
 				return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
 			}
-			text := renderCLRModule(m)
-			if sc.opts.verb() == ScriptAlter {
-				text = alterModuleDefinition(text)
-			}
-			sb.WriteString(text)
-			sb.WriteString("\nGO\n")
-			return nil
 		}
-		if !def.Valid {
-			return fmt.Errorf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
+		props, err := sc.scriptExtendedProperties(ctx, objectID, false, nil)
+		if err != nil {
+			return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
 		}
-		text := def.String
+		sb.WriteString(props)
+		return nil
+	})
+}
+
+// writeModuleDefinition writes scriptModule's CREATE or ALTER: the stored
+// definition with its SET options, or a CLR module's rebuilt one.
+func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Builder, k moduleKind, schema, name string,
+	def sql.NullString, ansiNulls, quotedIdent, clr bool, objectID int) error {
+	if clr {
+		m, err := sc.db.clrSchemaModule(ctx, k.keyword, objectID, schema, name)
+		if err != nil {
+			return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
+		}
+		text := renderCLRModule(m)
 		if sc.opts.verb() == ScriptAlter {
 			text = alterModuleDefinition(text)
 		}
-		var names []string
-		if k.params {
-			names, err = sc.db.float16Parameters(ctx, schema, name)
-			if err != nil {
-				return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
-			}
-		}
-		switch {
-		case len(names) > 0:
-			sb.WriteString(float16Note(names))
-		case usesFloat16Vector(def.String):
-			sb.WriteString(float16DefinitionNote)
-		case buildsFloat16Vector(def.String):
-			sb.WriteString(float16DynamicNote)
-		}
-		sb.WriteString(moduleSetOptions(ansiNulls, quotedIdent))
 		sb.WriteString(text)
 		sb.WriteString("\nGO\n")
 		return nil
-	})
+	}
+	if !def.Valid {
+		return fmt.Errorf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
+	}
+	text := def.String
+	if sc.opts.verb() == ScriptAlter {
+		text = alterModuleDefinition(text)
+	}
+	var names []string
+	if k.params {
+		var err error
+		names, err = sc.db.float16Parameters(ctx, schema, name)
+		if err != nil {
+			return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
+		}
+	}
+	switch {
+	case len(names) > 0:
+		sb.WriteString(float16Note(names))
+	case usesFloat16Vector(def.String):
+		sb.WriteString(float16DefinitionNote)
+	case buildsFloat16Vector(def.String):
+		sb.WriteString(float16DynamicNote)
+	}
+	sb.WriteString(moduleSetOptions(ansiNulls, quotedIdent))
+	sb.WriteString(text)
+	sb.WriteString("\nGO\n")
+	return nil
 }
 
 // float16Parameters lists [schema].[name]'s vector(n, float16) parameters,
@@ -307,12 +334,54 @@ func leadingTriviaEnd(def string) int {
 // View
 // ============================================================
 
-// ScriptView returns the CREATE VIEW definition as stored in sys.sql_modules.
+// ScriptView returns the CREATE VIEW definition as stored in sys.sql_modules,
+// followed by the view's indexes (viewIndexes).
 func (sc *Scripter) ScriptView(ctx context.Context, schema, name string) (string, error) {
 	if err := requireSchema("script view", schema, name); err != nil {
 		return "", err
 	}
-	return sc.scriptModule(ctx, moduleView, schema, name)
+	return sc.scriptModule(ctx, moduleView, schema, name, func(sb *strings.Builder, objectID int) error {
+		// The index reads are keyed by object_id alone, so a Table carrying
+		// the view's serves them; it goes no further than this call.
+		indexes, err := (&Table{db: sc.db, Schema: schema, Name: name, ObjectID: objectID}).Indexes(ctx)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(viewIndexes(indexes, qualifiedName(schema, name), sc.opts))
+		return nil
+	})
+}
+
+// viewIndexes renders an indexed view's indexes, as ScriptTable renders a
+// table's and each guarded the same way: the unique clustered index first,
+// which every other index on a view needs, then the nonclustered ones, then
+// the disabling of any disabled one. Without them a DROP AND CREATE turns an
+// indexed view into a plain one, and every query relying on its
+// materialisation silently regresses. A view's statistics are not scripted,
+// as a table's are not.
+//
+// Under ScriptAlter they follow too, after a comment saying why: ALTER VIEW
+// drops every index on the view.
+func viewIndexes(indexes []*Index, fullName string, opts ScriptOptions) string {
+	if len(indexes) == 0 {
+		return ""
+	}
+	ordered := slices.Clone(indexes)
+	slices.SortStableFunc(ordered, func(a, b *Index) int {
+		switch {
+		case a.IsClustered == b.IsClustered:
+			return 0
+		case a.IsClustered:
+			return -1
+		}
+		return 1
+	})
+	var sb strings.Builder
+	if opts.verb() == ScriptAlter {
+		sb.WriteString("-- ALTER VIEW drops every index on the view; these recreate them.\n")
+	}
+	writeTableDependents(&sb, ordered, nil, tableScriptParts{}, fullName, opts)
+	return sb.String()
 }
 
 // ============================================================
@@ -324,7 +393,7 @@ func (sc *Scripter) ScriptStoredProcedure(ctx context.Context, schema, name stri
 	if err := requireSchema("script stored procedure", schema, name); err != nil {
 		return "", err
 	}
-	return sc.scriptModule(ctx, moduleProcedure, schema, name)
+	return sc.scriptModule(ctx, moduleProcedure, schema, name, nil)
 }
 
 // ============================================================
@@ -336,7 +405,7 @@ func (sc *Scripter) ScriptFunction(ctx context.Context, schema, name string) (st
 	if err := requireSchema("script function", schema, name); err != nil {
 		return "", err
 	}
-	return sc.scriptModule(ctx, moduleFunction, schema, name)
+	return sc.scriptModule(ctx, moduleFunction, schema, name, nil)
 }
 
 // ============================================================
@@ -355,7 +424,7 @@ func (sc *Scripter) ScriptTrigger(ctx context.Context, schema, name string) (str
 	if err := requireSchema("script trigger", schema, name); err != nil {
 		return "", err
 	}
-	script, err := sc.scriptModule(ctx, moduleTrigger, schema, name)
+	script, err := sc.scriptModule(ctx, moduleTrigger, schema, name, nil)
 	if err != nil || sc.opts.verb() == ScriptDrop {
 		return script, err
 	}

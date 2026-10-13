@@ -90,6 +90,51 @@ func TestBuildDSNAcceptsTheTCPPrefix(t *testing.T) {
 	}
 }
 
+// TestBuildDSNResolvesTheLocalMachineAliases (N6, review plan 2026-10-13):
+// "." and "(local)" are SSMS's names for this machine. The driver dials both
+// as localhost; gosmo resolves them itself so that its own readers of the
+// host agree with the driver — the Browser-reply eviction
+// (TestFailedConnectEvictsTheBrowserReplyForALocalAlias) and callers keying
+// an instance on ParseServerAddress.
+func TestBuildDSNResolvesTheLocalMachineAliases(t *testing.T) {
+	cases := []struct {
+		server       string
+		wantInstance string
+		wantPort     uint64
+	}{
+		{".", "", 0},
+		{"(local)", "", 0},
+		{"(LOCAL)", "", 0},
+		{`.\SQLEXPRESS`, "SQLEXPRESS", 0},
+		{`(local)\INST,1500`, "INST", 1500},
+		{".,1500", "", 1500},
+		{"(Local):1500", "", 1500},
+		{"tcp:.,1433", "", 1433},
+	}
+	for _, c := range cases {
+		t.Run(c.server, func(t *testing.T) {
+			dsn, _, err := buildDSN(ConnectionOptions{Server: c.server, User: "sa", Password: "p"})
+			if err != nil {
+				t.Fatalf("buildDSN: %v", err)
+			}
+			cfg, err := msdsn.Parse(dsn)
+			if err != nil {
+				t.Fatalf("msdsn.Parse(%q): %v", dsn, err)
+			}
+			if cfg.Host != "localhost" || cfg.Instance != c.wantInstance || cfg.Port != c.wantPort {
+				t.Errorf("%q → host/instance/port = %q/%q/%d, want %q/%q/%d", dsn,
+					cfg.Host, cfg.Instance, cfg.Port, "localhost", c.wantInstance, c.wantPort)
+			}
+		})
+	}
+	// A host merely containing a dot, or named like the alias, is not one.
+	for server, want := range map[string]string{"..": "..", "(local)x": "(local)x", "a.b": "a.b"} {
+		if host, _, _ := ParseServerAddress(server); host != want {
+			t.Errorf("ParseServerAddress(%q) host = %q, want %q", server, host, want)
+		}
+	}
+}
+
 // TestBuildDSNRefusesOtherProtocolsByName (S10): the driver dials TCP only,
 // so np:, lpc: and admin: are refused with an error naming the protocol
 // rather than bracketed into an IPv6 host that fails somewhere less obvious.
@@ -98,6 +143,8 @@ func TestBuildDSNRefusesOtherProtocolsByName(t *testing.T) {
 		`np:\\myserver\pipe\sql\query`: "named pipes",
 		"lpc:myserver":                 "shared memory",
 		"Admin:myserver":               "admin:",
+		`(localdb)\MSSQLLocalDB`:       "LocalDB",
+		`(LocalDB)\v11.0`:              "LocalDB",
 	} {
 		_, _, err := buildDSN(ConnectionOptions{Server: server})
 		if err == nil || !strings.Contains(err.Error(), want) {

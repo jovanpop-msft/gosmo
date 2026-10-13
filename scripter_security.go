@@ -62,10 +62,26 @@ func (sc *Scripter) ScriptUser(ctx context.Context, name string) (string, error)
 // FOR LOGIN would then recreate it through a login it does not need. It takes
 // no DEFAULT_SCHEMA — SQL Server refuses the clause for such a user (probed
 // on 17, 2026-09-24).
+//
+// An orphaned user — made FOR LOGIN, its login since dropped — is scripted
+// FOR LOGIN of its own name, the only candidate left, under a comment
+// saying so (orphanedUserNote): replayed where a login of that name exists,
+// the user silently maps to it, whoever it belongs to.
 func buildUserScript(u *User, opts ScriptOptions) string {
 	drop := fmt.Sprintf("DROP USER IF EXISTS %s;\nGO\n", quoteIdent(u.Name))
 	guard := fmt.Sprintf("IF DATABASE_PRINCIPAL_ID(N'%s') IS NULL\n", escapeSingle(u.Name))
+	orphaned := isOrphanedUser(u)
+	if orphaned {
+		// The note goes ahead of the guard, which envelope would write first.
+		guard = ""
+	}
 	return opts.envelope(drop, guard, func(sb *strings.Builder) {
+		if orphaned {
+			sb.WriteString(orphanedUserNote(u))
+			if opts.IncludeIfNotExists {
+				fmt.Fprintf(sb, "IF DATABASE_PRINCIPAL_ID(N'%s') IS NULL\n", escapeSingle(u.Name))
+			}
+		}
 		stmt := "CREATE USER " + quoteIdent(u.Name)
 		// withOpen is buildLoginScript's flag, for its reason: sniffing " WITH "
 		// back out of stmt matched a user named [x WITH y], and DEFAULT_SCHEMA
@@ -86,9 +102,9 @@ func buildUserScript(u *User, opts ScriptOptions) string {
 			stmt += " FROM EXTERNAL PROVIDER"
 		case u.LoginName != "":
 			stmt += " FOR LOGIN " + quoteIdent(u.LoginName)
-		case strings.EqualFold(u.AuthType, "INSTANCE"):
-			// Orphaned: the login it was made for is gone, so its own name is
-			// the only candidate left, and the script says so rather than
+		case orphaned:
+			// The login it was made for is gone, so its own name is the only
+			// candidate left, and the note above says so rather than this
 			// quietly turning it into a login-less user.
 			stmt += " FOR LOGIN " + quoteIdent(u.Name)
 		case strings.EqualFold(u.AuthType, "WINDOWS"):
@@ -107,6 +123,29 @@ func buildUserScript(u *User, opts ScriptOptions) string {
 		}
 		fmt.Fprintf(sb, "%s;\nGO\n", stmt)
 	})
+}
+
+// isOrphanedUser reports a user created FOR LOGIN whose login is gone: it
+// keeps AuthType INSTANCE with no login matching its SID. The case order is
+// buildUserScript's, so a mapped user is never one.
+func isOrphanedUser(u *User) bool {
+	return u.UserType != "CERTIFICATE_MAPPED_USER" && u.UserType != "ASYMMETRIC_KEY_MAPPED_USER" &&
+		u.LoginName == "" && strings.EqualFold(u.AuthType, "INSTANCE")
+}
+
+// orphanedUserNote is the comment ahead of an orphaned user's CREATE USER:
+// what it is, its SID, and that FOR LOGIN names a login of the user's own
+// name, which it never had.
+func orphanedUserNote(u *User) string {
+	sid := "unknown"
+	if len(u.SID) > 0 {
+		sid = binaryLiteral(u.SID)
+	}
+	return fmt.Sprintf("-- %s is orphaned: no login matches its SID %s.\n"+
+		"-- FOR LOGIN below names a login of the user's own name, which it was not\n"+
+		"-- created for; where one exists, the user maps to it, whoever it belongs to.\n"+
+		"-- Name the intended login, or create the user WITHOUT LOGIN, before running this.\n",
+		commentSafe(quoteIdent(u.Name)), sid)
 }
 
 // mappedUserObject is mappedObjectName for a user: the certificate or key it

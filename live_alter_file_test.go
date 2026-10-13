@@ -73,3 +73,31 @@ func TestLiveShrinkFile(t *testing.T) {
 		t.Errorf("Shrink of the log = %d, %v", got, err)
 	}
 }
+
+// N2 (review plan 2026-10-13): a target of 0 shrinks below the file's
+// creation size. DBCC SHRINKFILE's own target 0 stops at that size (its
+// MinimumSize), which on a fresh database is most of an empty file.
+func TestLiveShrinkFileToZeroGoesBelowTheCreationSize(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	const name = "gosmo_shrinkfile_zero"
+	d, drop := liveScratchDB(t, db, ctx, name)
+	defer drop()
+
+	var created int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT size FROM sys.master_files WHERE database_id = DB_ID(@p1) AND name = @p1`, name).Scan(&created); err != nil {
+		t.Fatalf("read creation size: %v", err)
+	}
+	f := d.FileRef(name)
+	if err := f.Alter(ctx, FileModify{SizeKB: 20 * 1024}); err != nil {
+		t.Fatalf("grow to 20 MB: %v", err)
+	}
+	got, err := f.Shrink(ctx, 0)
+	if err != nil {
+		t.Fatalf("Shrink(0): %v", err)
+	}
+	if got >= created*8 {
+		t.Errorf("Shrink(0) reached %d KB, want below the creation size %d KB", got, created*8)
+	}
+}

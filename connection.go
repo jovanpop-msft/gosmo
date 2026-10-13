@@ -404,7 +404,24 @@ func (o ConnectionOptions) address() (host, instance string, port int) {
 // accepts — is dropped, since TCP is the only protocol there is here. The
 // other prefixes (np:, lpc:, admin:) are left in place, as part of host;
 // Connect and ConnectionString refuse them by name.
+//
+// A host of "." or "(local)" (any case) — SSMS's names for this machine, as
+// in ".\SQLEXPRESS" — is returned as "localhost", the host the driver dials
+// for them, so the three spell one instance to every caller keying on the
+// host (the Browser-reply cache among them). "(localdb)" is left as it is;
+// LocalDB answers on shared memory or named pipes only, and Connect refuses
+// it by name.
 func ParseServerAddress(server string) (host, instance string, port int) {
+	host, instance, port = splitServerAddress(server)
+	if host == "." || strings.EqualFold(host, "(local)") {
+		host = "localhost"
+	}
+	return host, instance, port
+}
+
+// splitServerAddress is ParseServerAddress before the local-machine aliases
+// are resolved.
+func splitServerAddress(server string) (host, instance string, port int) {
 	if proto, rest := splitProtocolPrefix(server); proto == "tcp" {
 		server = rest
 	}

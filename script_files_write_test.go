@@ -28,10 +28,12 @@ func TestScriptFileAndFileGroupWrites(t *testing.T) {
 			_, err := scriptTestDB().FileRef("App'Dat]2").Shrink(c, 16*1024+1)
 			return err
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'App''Dat]2', 17)"},
+		// N2 (review plan 2026-10-13): SHRINKFILE's target 0 stops at the
+		// file's creation size, so "as small as the data allows" is 1 MB.
 		{"File Shrink to the minimum", func(c context.Context) error {
 			_, err := scriptTestDB().FileRef("AppLog").Shrink(c, 0)
 			return err
-		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 0)"},
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 1)"},
 		{"AddFile log with percentage growth", func(c context.Context) error {
 			return scriptTestDB().AddFile(c, DatabaseFileSpec{
 				Name: "AppLog2", Type: "LOG", Path: `C:\d\l2.ldf`,

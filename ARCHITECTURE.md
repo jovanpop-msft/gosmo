@@ -1115,7 +1115,7 @@ of its own; `ALTER` and `DROP` are accepted there normally.
 ```go
 sc := gosmo.NewScripter(db, gosmo.DefaultScriptOptions())
 ddl, _ := sc.ScriptTable(ctx, "dbo", "MyTable")
-ddl, _ := sc.ScriptView(ctx, "dbo", "MyView")
+ddl, _ := sc.ScriptView(ctx, "dbo", "MyView")             // + an indexed view's indexes, clustered first
 ddl, _ := sc.ScriptStoredProcedure(ctx, "dbo", "MyProc")
 ddl, _ := sc.ScriptFunction(ctx, "dbo", "MyFunc")
 ddl, _ := sc.ScriptTrigger(ctx, "dbo", "MyTrigger")   // a CLR procedure, function or trigger: rebuilt AS EXTERNAL NAME from the catalog
@@ -1126,7 +1126,7 @@ ddl, _ := sc.ScriptStatistic(ctx, "dbo", "MyTable", "st_MyTable_a") // filter, N
 ddl, _ := sc.ScriptSequence(ctx, "dbo", "MySeq")
 ddl, _ := sc.ScriptSynonym(ctx, "dbo", "MySyn")
 ddl, _ := sc.ScriptSchema(ctx, "sales")
-ddl, _ := sc.ScriptUser(ctx, "app_user")
+ddl, _ := sc.ScriptUser(ctx, "app_user")                 // an orphaned user: FOR LOGIN of its own name, under a comment saying so
 ddl, _ := sc.ScriptDatabaseRole(ctx, "app_rw")
 ddl, _ := sc.ScriptPartitionFunction(ctx, "pfMonthly")
 ddl, _ := sc.ScriptPartitionScheme(ctx, "psMonthly")
@@ -1156,7 +1156,7 @@ ddl, _ := sc.ScriptDatabase(ctx)                         // files, filegroups, l
 // Logins and server roles belong to no database, so they have their own
 // scripter.
 ssc := gosmo.NewServerScripter(srv, gosmo.DefaultScriptOptions())
-ddl, _ := ssc.ScriptLogin(ctx, "app_login")
+ddl, _ := ssc.ScriptLogin(ctx, "app_login")              // + ALTER SERVER ROLE … ADD MEMBER per role, after any DISABLE
 ddl, _ := ssc.ScriptServerRole(ctx, "ops")
 ddl, _ := ssc.ScriptEndpoint(ctx, "Hadr_endpoint")
 ddl, _ := ssc.ScriptCredential(ctx, "AzureBlob")
@@ -1194,14 +1194,16 @@ produce — `ScriptSelect`, `ScriptInsert`, `ScriptUpdate`, `ScriptDelete`,
 `ScriptExecute` and `ScriptFunctionCall`. They carry `<name, type,>`
 placeholders wherever the operator has to supply a value and are
 deliberately not runnable as they stand; `ScriptInsert`/`ScriptUpdate` leave
-out identity and computed columns, which reject an explicit value. The
+out identity and computed columns, which reject an explicit value, and on a
+table with a column set its sparse columns (Msg 360 refuses a list naming
+both; the set is how they are written). The
 parameter metadata behind `ScriptExecute` is `Database.Parameters(schema,
 name)`, which reads `sys.parameters` for a procedure or function.
 
 `ScriptOptions.IncludeHeaders` and `IncludeIfNotExists` apply to
-`ScriptTable` and `ScriptDatabase` only — the view/procedure/function/trigger
-methods return the module's definition verbatim from `sys.sql_modules` and
-synthesize no DDL to guard. The existence check is per statement, never a
+`ScriptTable` and `ScriptDatabase` — the view/procedure/function/trigger
+methods return the module's definition verbatim from `sys.sql_modules`, and
+guard only what follows it: a view's indexes and the extended properties. The existence check is per statement, never a
 block spanning several: `GO` is a client-side batch break, so a `BEGIN`
 block containing one is split across batches and the script can't parse.
 `ScriptTable` emits a unique constraint as the `ALTER TABLE ... ADD
@@ -1232,7 +1234,21 @@ table, a `SCHEMABINDING` view — since they make the `DROP` fail with Msg 3729
 and leave the table as it was (`live_script_schemabound_test.go`); they are
 named, not dropped.
 `live_script_fidelity_test.go` and `live_script_facets_test.go` replay a
-script into a second database and compare the catalogs. What is still not scripted is in
+script into a second database and compare the catalogs.
+
+`ScriptOptions.ExtendedProperties` (on in `DefaultScriptOptions`, as SSMS's
+"Script extended properties" is) appends one `EXEC
+sys.sp_addextendedproperty` per property, each its own batch, to
+`ScriptTable`, `ScriptView`, `ScriptStoredProcedure`, `ScriptFunction` and
+`ScriptTrigger`: the object's own, its columns', parameters', indexes' and —
+a table's — constraints'. One query reads them all
+(`objectExtendedProperties`). A value keeps its `sql_variant` base type: an
+`nvarchar` goes out as `N'…'`, any other is converted back from lossless text
+into a `DECLARE @value sql_variant` first. Guarded by `fn_listextendedproperty`
+under `IncludeIfNotExists`, and always under `ScriptAlter`, since `ALTER VIEW`
+drops the view's indexes with their properties while `ALTER` keeps the rest.
+`live_script_extended_properties_test.go` round-trips every base type and
+level, CREATE, ALTER and DROP AND CREATE. What is still not scripted is in
 `OPEN-THREADS.md` § Scripter fidelity.
 
 Beyond a plain disk-based table it scripts graph node and edge tables (`AS
@@ -2495,7 +2511,9 @@ unmasked, it is a live credential.
 `gosmo.ParseServerAddress(server)` parses any address form SSMS's own
 "Server name" field accepts — `host`, `host:port`, `host,port`,
 `host\instance`, `host\instance,port` — into `(host, instance, port)`.
-Exported so a caller building its own connection-address UI can reuse the
+A host of `.` or `(local)` comes back as `localhost`, the host the driver
+dials for them; `(localdb)\…` is refused by name, since LocalDB answers on
+shared memory or named pipes only. Exported so a caller building its own connection-address UI can reuse the
 same parsing `Connect` relies on internally.
 
 A caller with a separate port field sets `ConnectionOptions.Port` rather than

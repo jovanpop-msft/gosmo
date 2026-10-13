@@ -1,6 +1,7 @@
 package gosmo
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,13 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 		},
 		"float16 parameter note": func(n string) string {
 			return float16Note([]string{commentSafe(n)}) // as float16Parameters scans it
+		},
+		"extended property with no literal form": func(n string) string {
+			return extendedPropertyStatement(scriptedExtProp{name: n, baseType: n, value: sql.NullString{String: "v", Valid: true},
+				level: ExtendedPropertyLevel{Level0Name: n, Level1Type: "TABLE", Level1Name: n, Level2Type: "COLUMN", Level2Name: n}}, false)
+		},
+		"orphaned user note": func(n string) string {
+			return buildUserScript(&User{Name: n, AuthType: "INSTANCE"}, DefaultScriptOptions())
 		},
 	}
 	for site, script := range sites {

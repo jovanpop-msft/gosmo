@@ -26,7 +26,11 @@ func NewServerScripter(s *Server, opts ScriptOptions) *ServerScripter {
 	return &ServerScripter{server: s, opts: opts}
 }
 
-// ScriptLogin generates the CREATE (or DROP) script for one login.
+// ScriptLogin generates the CREATE (or DROP) script for one login, followed
+// by the ALTER SERVER ROLE … ADD MEMBER that restores each of its server role
+// memberships, each in its own batch after any DISABLE, as SSMS's Script
+// Login as CREATE writes them. Without them a replayed login has fewer rights
+// than the one scripted.
 //
 // A certificate- or asymmetric-key-mapped login needs one more read than the
 // others: the object it maps to is named in master, not in the login's own
@@ -39,7 +43,47 @@ func (sc *ServerScripter) ScriptLogin(ctx context.Context, name string) (string,
 	if err := l.ResolveMapping(ctx); err != nil {
 		return "", err
 	}
-	return buildLoginScript(l, sc.opts), nil
+	script := buildLoginScript(l, sc.opts)
+	if sc.opts.verb() == ScriptDrop {
+		return script, nil
+	}
+	roles, err := l.serverRoles(ctx)
+	if err != nil {
+		return "", err
+	}
+	return script + loginRoleMemberships(l.Name, roles), nil
+}
+
+// serverRoles lists the server roles l is a direct member of, by name.
+// public is not one: every login is in it implicitly, and it has no row.
+func (l *Login) serverRoles(ctx context.Context) ([]string, error) {
+	const q = `
+SELECT r.name
+FROM   sys.server_role_members rm
+JOIN   sys.server_principals r ON r.principal_id = rm.role_principal_id
+JOIN   sys.server_principals m ON m.principal_id = rm.member_principal_id
+WHERE  m.name = @p1
+ORDER  BY r.name`
+	rows, err := l.server.query(ctx, q, l.Name)
+	return scanRows(rows, err, fmt.Sprintf("server roles of login %q", l.Name), func(scan func(...any) error) (string, error) {
+		var n string
+		err := scan(&n)
+		return n, err
+	})
+}
+
+// loginRoleMemberships renders one ALTER SERVER ROLE … ADD MEMBER per role,
+// each its own batch. public is skipped should it ever be listed: ADD MEMBER
+// to it is refused.
+func loginRoleMemberships(login string, roles []string) string {
+	var sb strings.Builder
+	for _, r := range roles {
+		if r == "public" {
+			continue
+		}
+		fmt.Fprintf(&sb, "ALTER SERVER ROLE %s ADD MEMBER %s;\nGO\n", quoteIdent(r), quoteIdent(login))
+	}
+	return sb.String()
 }
 
 // buildLoginScript assembles one login's script.

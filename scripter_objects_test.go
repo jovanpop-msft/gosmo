@@ -240,3 +240,30 @@ func TestScriptTableChildPicksTheExactName(t *testing.T) {
 		t.Errorf("no match: err %v, want the not-found message", err)
 	}
 }
+
+// TestViewIndexesFollowTheView pins N1's script of an indexed view's
+// indexes: the clustered one first whatever order they were read in, each
+// guarded as a table's are, a disabled one disabled last, and under ALTER a
+// comment first — ALTER VIEW drops them all.
+func TestViewIndexesFollowTheView(t *testing.T) {
+	cix := &Index{Name: "CIX_vB", Type: IndexTypeClustered, IsClustered: true, IsUnique: true,
+		AllowRowLocks: true, AllowPageLocks: true, KeyColumns: []IndexColumn{{Name: "Cat"}}}
+	ix := &Index{Name: "IX_vB_n", Type: IndexTypeNonClustered, IsDisabled: true,
+		AllowRowLocks: true, AllowPageLocks: true, KeyColumns: []IndexColumn{{Name: "n"}}}
+	opts := DefaultScriptOptions()
+	want := "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'CIX_vB' AND object_id = OBJECT_ID(N'[dbo].[vB]'))\n" +
+		"CREATE UNIQUE CLUSTERED INDEX [CIX_vB]\n    ON [dbo].[vB] ([Cat] ASC);\nGO\n\n" +
+		"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_vB_n' AND object_id = OBJECT_ID(N'[dbo].[vB]'))\n" +
+		"CREATE NONCLUSTERED INDEX [IX_vB_n]\n    ON [dbo].[vB] ([n] ASC);\nGO\n\n" +
+		"ALTER INDEX [IX_vB_n] ON [dbo].[vB] DISABLE;\nGO\n\n"
+	if got := viewIndexes([]*Index{ix, cix}, "[dbo].[vB]", opts); got != want {
+		t.Errorf("view indexes:\n%s\nwant:\n%s", got, want)
+	}
+	opts.Verb = ScriptAlter
+	if got := viewIndexes([]*Index{cix}, "[dbo].[vB]", opts); !strings.HasPrefix(got, "-- ALTER VIEW drops every index on the view") {
+		t.Errorf("under ALTER:\n%s", got)
+	}
+	if got := viewIndexes(nil, "[dbo].[v]", opts); got != "" {
+		t.Errorf("a plain view: %q", got)
+	}
+}

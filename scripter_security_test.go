@@ -35,6 +35,38 @@ func TestBuildUserScriptPicksTheFormFromAuthType(t *testing.T) {
 	}
 }
 
+// TestBuildUserScriptNamesAnOrphan pins the note ahead of an orphaned user's
+// CREATE: FOR LOGIN [u] names a login the user never had, which a replay
+// maps it to without a word unless the script says so. The guard follows
+// the note, directly above the statement it guards.
+func TestBuildUserScriptNamesAnOrphan(t *testing.T) {
+	u := &User{Name: "u_orph", AuthType: "INSTANCE", UserType: "SQL_USER", SID: []byte{0x01, 0xAB}, DefaultSchema: "dbo"}
+	want := "-- [u_orph] is orphaned: no login matches its SID 0x01AB.\n" +
+		"-- FOR LOGIN below names a login of the user's own name, which it was not\n" +
+		"-- created for; where one exists, the user maps to it, whoever it belongs to.\n" +
+		"-- Name the intended login, or create the user WITHOUT LOGIN, before running this.\n" +
+		"IF DATABASE_PRINCIPAL_ID(N'u_orph') IS NULL\n" +
+		"CREATE USER [u_orph] FOR LOGIN [u_orph] WITH DEFAULT_SCHEMA = [dbo];\nGO\n"
+	if got := buildUserScript(u, DefaultScriptOptions()); got != want {
+		t.Errorf("orphaned user script:\n%s\nwant:\n%s", got, want)
+	}
+	opts := DefaultScriptOptions()
+	opts.IncludeIfNotExists = false
+	if got := buildUserScript(u, opts); strings.Contains(got, "IF ") || !strings.HasPrefix(got, "-- [u_orph] is orphaned") {
+		t.Errorf("unguarded orphaned user script:\n%s", got)
+	}
+	// A user with its login, or mapped to a certificate, gets no note.
+	for _, u := range []*User{
+		{Name: "u", AuthType: "INSTANCE", LoginName: "l"},
+		{Name: "u", AuthType: "INSTANCE", UserType: "CERTIFICATE_MAPPED_USER"},
+		{Name: "u", AuthType: "NONE"},
+	} {
+		if got := buildUserScript(u, DefaultScriptOptions()); strings.Contains(got, "orphaned") {
+			t.Errorf("%+v is not orphaned, but:\n%s", u, got)
+		}
+	}
+}
+
 func TestBuildDatabaseRoleScriptRestoresMembership(t *testing.T) {
 	r := &DatabaseRole{Name: "app_rw", Owner: "dbo", Members: []string{"alice", "bob"}}
 	got := buildDatabaseRoleScript(r, DefaultScriptOptions())
@@ -317,5 +349,25 @@ func TestBuildUserScriptMappedAndWindowsUsers(t *testing.T) {
 				t.Errorf("user script:\n%s\nwant it to contain:\n%s", got, c.want)
 			}
 		})
+	}
+}
+
+// TestLoginRoleMembershipsFollowTheDisable pins the server role memberships
+// ScriptLogin appends: one ALTER SERVER ROLE per role, each its own batch,
+// after the DISABLE, as SSMS writes them, and none for public.
+func TestLoginRoleMembershipsFollowTheDisable(t *testing.T) {
+	l := &Login{Name: "o'brien", LoginType: "WINDOWS_LOGIN", IsDisabled: true}
+	opts := DefaultScriptOptions()
+	opts.IncludeIfNotExists = false
+	got := buildLoginScript(l, opts) + loginRoleMemberships(l.Name, []string{"a]b", "dbcreator", "public"})
+	want := "CREATE LOGIN [o'brien] FROM WINDOWS;\nGO\n" +
+		"ALTER LOGIN [o'brien] DISABLE;\nGO\n" +
+		"ALTER SERVER ROLE [a]]b] ADD MEMBER [o'brien];\nGO\n" +
+		"ALTER SERVER ROLE [dbcreator] ADD MEMBER [o'brien];\nGO\n"
+	if got != want {
+		t.Errorf("login script:\n%s\nwant:\n%s", got, want)
+	}
+	if got := loginRoleMemberships("x", nil); got != "" {
+		t.Errorf("no roles: %q", got)
 	}
 }

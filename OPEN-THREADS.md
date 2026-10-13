@@ -191,6 +191,38 @@ refuses:
   on the same instance under the same name after a DROP that is right; as a
   copy, the caller edits them.
 
+## Two live tests fail on 17 at `a50241f` — found 2026-10-13, not investigated
+
+Seen during gossms review plan S1, identically on a clean worktree of
+`a50241f`, so not caused by it; three runs each on win10cli (17):
+
+- `TestLiveScriptDatabaseInDatabaseSettingsRoundTrip` — the replayed
+  database's scoped configurations differ from the source's: the replay
+  reads `ELEVATE_ONLINE=WHEN_SUPPORTED`, `IDENTITY_CACHE=0`,
+  `LEGACY_CARDINALITY_ESTIMATION=1`, `MAXDOP=3` (secondary 1) and
+  `PARAMETER_SNIFFING=0` where the source reads the defaults — the reverse of
+  what a missing statement would give, so look at which side the test sets.
+- `TestLiveReplicationMonitor` — `SessionActions` returns no rows for both
+  agents' sessions (`live_replication_monitor_test.go:150`); likely the
+  fixture's agent history has aged out or the agents have not run.
+
+`TestLiveFullTextWrites` failed once in the same run ("population did not
+finish") and passed on both reruns.
+
+## Scripter: extended properties beyond tables and modules
+
+`ScriptOptions.ExtendedProperties` (2026-10-13) restates the properties of a
+table, view, procedure, function and DML trigger, and of their columns,
+parameters, indexes and (a table's) constraints. Every other script leaves
+its object's properties out: database, schema, user, role, type, table
+type, sequence, synonym, XML schema collection, partition function/scheme
+and DDL trigger. A table script also leaves out its triggers' properties
+(it does not create the triggers — `ScriptTrigger` carries them), and a
+FileTable's system-defined constraints' and indexes' (AS FILETABLE names
+those afresh). `CREATE INDEX`, `ScriptCheckConstraint` and `ScriptForeignKey`
+alone carry none either. A `sql_variant` base type without a case in
+`extPropType` is a comment, not a statement — none known to exist.
+
 ## `ScriptTable` is 8–11 round trips — considered, not batched
 
 gossms review plan G15 (2026-10-08) batched `LocalPublications`,
@@ -199,7 +231,8 @@ database list (`perDatabaseBatch`). `ScriptTable` was looked at in the same
 pass and left alone: it reads through the public `TableByName`,
 `scriptOptions`, `Columns`, `Indexes` (two queries), `ForeignKeys`,
 `CheckConstraints`, `DataSpace` and, by kind, `EdgeConstraints` and the
-schema-bound/referencing reads a DROP needs. Batching means splitting each into
+schema-bound/referencing reads a DROP needs — plus, since 2026-10-13, one
+for the extended properties. Batching means splitting each into
 a select list and a scanner and reading them as one multi-result-set batch, as
 `Database.catalog` does — every family's scan code moves, for one
 user-triggered script per table. Worth doing only if a whole-database script

@@ -29,6 +29,7 @@ func TestWithScriptApplyConfigurationBatchShape(t *testing.T) {
 	got := stmts[0]
 	inOrder(t, got,
 		"DECLARE @show_advanced_enabled bit = 0;",
+		"DECLARE @show_advanced_value int = (SELECT CONVERT(int, value) FROM sys.configurations WHERE name = N'show advanced options');",
 		"name = N'show advanced options' AND value_in_use = 0",
 		"is_advanced = 1 AND name IN (N'max degree of parallelism', N'cost threshold for parallelism')",
 		"EXEC sys.sp_configure N'show advanced options', 1;",
@@ -38,7 +39,9 @@ func TestWithScriptApplyConfigurationBatchShape(t *testing.T) {
 		"EXEC sys.sp_configure N'cost threshold for parallelism', 50;",
 		"RECONFIGURE;",
 		"IF @show_advanced_enabled = 1",
-		"EXEC sys.sp_configure N'show advanced options', 0;",
+		// N7 (review plan 2026-10-13): the configured value read first, not
+		// 0 — a pending sp_configure of 1 has value_in_use 0 too.
+		"EXEC sys.sp_configure N'show advanced options', @show_advanced_value;",
 		"RECONFIGURE;",
 	)
 	if strings.Contains(got, "OVERRIDE") {

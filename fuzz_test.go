@@ -22,6 +22,7 @@ func FuzzNames(f *testing.F) {
 		"CREATE OR ALTER VIEW v AS SELECT 1", "'CREATE' VIEW", "CREATEVIEW",
 		`host\inst,1433`, "tcp:x.database.windows.net,1433", "[::1]:1433", "::1",
 		"admin:1433", "np:pipe", "h,-1", `\`, ",", ":",
+		".", `.\SQLEXPRESS`, "(LOCAL),1500", `(localdb)\MSSQLLocalDB`,
 	} {
 		f.Add(s)
 	}
@@ -72,6 +73,9 @@ func FuzzNames(f *testing.F) {
 		}
 
 		host, instance, _ := ParseServerAddress(s)
+		if host == "localhost" { // "." and "(local)" are spelt out
+			host, _, _ = splitServerAddress(s)
+		}
 		if !strings.Contains(s, host) || !strings.Contains(s, instance) {
 			t.Fatalf("ParseServerAddress(%q) = %q, %q: not parts of the address", s, host, instance)
 		}

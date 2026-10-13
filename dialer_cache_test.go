@@ -173,6 +173,44 @@ func TestFailedConnectEvictsTheBrowserReply(t *testing.T) {
 	}
 }
 
+// N6 (review plan 2026-10-13): the driver dials "." and "(local)" as
+// localhost and caches the Browser reply under that host, so the eviction has
+// to name localhost too. Before ParseServerAddress resolved the aliases it
+// evicted "." and the stale port outlived the failure for the whole TTL.
+func TestFailedConnectEvictsTheBrowserReplyForALocalAlias(t *testing.T) {
+	for _, server := range []string{`.\INST`, `(LOCAL)\INST`} {
+		t.Run(server, func(t *testing.T) {
+			isolateBrowserReplies(t)
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			stalePort := ln.Addr().(*net.TCPAddr).Port
+			ln.Close()
+
+			key := browserReplyKey("localhost", []byte{3})
+			browserReplies.put(key, []byte("\x05\x00\x00ServerName;H;InstanceName;INST;IsClustered;No;Version;16.0;tcp;"+
+				strconv.Itoa(stalePort)+";;"), time.Now())
+
+			opts := ConnectionOptions{Server: server, User: "u", Password: "p", ConnectTimeout: 5 * time.Second}
+			applyDefaults(&opts)
+			connector, err := buildConnector(opts)
+			if err != nil {
+				t.Fatalf("buildConnector: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if conn, err := poolConnector(connector, opts).Connect(ctx); err == nil {
+				conn.Close()
+				t.Fatal("Connect succeeded against a closed port")
+			}
+			if _, ok := browserReplies.get(key, time.Now()); ok {
+				t.Error("the stale reply is still cached after the attempt it misdirected failed")
+			}
+		})
+	}
+}
+
 // Only a pool that probes Browser through gosmo's dialer is wrapped; every
 // other connector goes to sql.OpenDB as it was built.
 func TestPoolConnectorWrapsOnlyTheBrowserCase(t *testing.T) {

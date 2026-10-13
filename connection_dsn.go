@@ -365,6 +365,10 @@ func dsnHost(opts ConnectionOptions) (host, instance string, err error) {
 		return "", "", invalidf("gosmo: ConnectionOptions.Port %d out of range 0-65535", opts.Port)
 	}
 	host, instance, port := opts.address()
+	if strings.EqualFold(host, "(localdb)") {
+		return "", "", invalidf("gosmo: server %q: LocalDB ((localdb)\\...) answers on shared memory or named pipes only, "+
+			"which are not supported; connect over TCP — host, host\\instance or host,port", server)
+	}
 	if strings.ContainsRune(host, ':') {
 		if !strings.HasPrefix(host, "[") {
 			host = "[" + host + "]"

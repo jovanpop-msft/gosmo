@@ -37,9 +37,10 @@ type ScriptOptions struct {
 	// ScriptTable and ScriptDatabase only.
 	IncludeHeaders bool
 	// IncludeIfNotExists guards each generated statement with its own
-	// existence check. Applies to ScriptTable and ScriptDatabase only:
-	// ScriptView/StoredProcedure/Function return the module's definition
-	// verbatim from sys.sql_modules and don't synthesize DDL to guard.
+	// existence check. ScriptView/StoredProcedure/Function return the
+	// module's definition verbatim from sys.sql_modules, unguarded, and
+	// guard only what follows it: a view's indexes and the extended
+	// properties.
 	//
 	// The guard is per statement, never a block spanning several. A BEGIN
 	// block containing GO separators is split across batches — GO is a
@@ -54,6 +55,13 @@ type ScriptOptions struct {
 	SchemaQualify bool
 	// AnsiPadding emits SET ANSI_PADDING ON before CREATE TABLE.
 	AnsiPadding bool
+	// ExtendedProperties restates the extended properties of what the script
+	// creates — EXEC sys.sp_addextendedproperty after the object, for it and
+	// its columns, parameters, indexes and (a table's) constraints, as SSMS's
+	// "Script extended properties" option does, on by default there too.
+	// Applies to ScriptTable, ScriptView, ScriptStoredProcedure,
+	// ScriptFunction and ScriptTrigger; never to a DROP.
+	ExtendedProperties bool
 }
 
 // DefaultScriptOptions returns sensible defaults.
@@ -63,6 +71,7 @@ func DefaultScriptOptions() ScriptOptions {
 		SchemaQualify:      true,
 		IncludeIfNotExists: true,
 		AnsiPadding:        true,
+		ExtendedProperties: true,
 	}
 }
 

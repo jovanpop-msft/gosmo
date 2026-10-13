@@ -161,3 +161,33 @@ func TestDMLTemplatesSkipServerFilledColumns(t *testing.T) {
 		t.Errorf("UPDATE template:\n%s", upd)
 	}
 }
+
+// TestDMLTemplatesWriteSparseColumnsThroughTheColumnSet pins Msg 360: a
+// column list naming a sparse column and the column set that holds it is
+// refused, so a table with a column set lists only the set. Without one, a
+// sparse column is an ordinary writable column.
+func TestDMLTemplatesWriteSparseColumnsThroughTheColumnSet(t *testing.T) {
+	cols := []*Column{
+		{Name: "Id", DataType: DataTypeInt, IsIdentity: true},
+		{Name: "A", DataType: DataTypeInt, IsNullable: true},
+		{Name: "S1", DataType: DataTypeInt, IsSparse: true, IsNullable: true},
+		{Name: "CS", DataType: DataTypeXML, IsColumnSet: true, IsNullable: true},
+	}
+	for name, got := range map[string]string{
+		"INSERT": buildInsertScript("dbo", "t", cols),
+		"UPDATE": buildUpdateScript("dbo", "t", cols),
+	} {
+		if strings.Contains(got, "[S1]") || !strings.Contains(got, "[A]") || !strings.Contains(got, "[CS]") {
+			t.Errorf("%s template with a column set:\n%s", name, got)
+		}
+	}
+	noSet := cols[:3]
+	for name, got := range map[string]string{
+		"INSERT": buildInsertScript("dbo", "t", noSet),
+		"UPDATE": buildUpdateScript("dbo", "t", noSet),
+	} {
+		if !strings.Contains(got, "[S1]") {
+			t.Errorf("%s template without a column set drops the sparse column:\n%s", name, got)
+		}
+	}
+}
