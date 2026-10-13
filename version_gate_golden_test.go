@@ -53,8 +53,11 @@ func (q goldenQuery) covers(g gatedColumn) bool {
 }
 
 var goldenQueries = []goldenQuery{
-	{"catalog_collation", []string{"databases"}, nil, func(m int) string {
+	{"catalog_collation", []string{"databases"}, []string{"catalog_collation_type_desc"}, func(m int) string {
 		return catalogCollationExpr(m)
+	}},
+	{"database_options", []string{"databases"}, []string{"is_accelerated_database_recovery_on", "is_ledger_on"}, func(m int) string {
+		return dbAtMajor(m).optionsSelect()
 	}},
 	{"agcolumns", []string{"availability_groups"}, nil, func(m int) string {
 		return (&Server{info: &ServerInfo{VersionMajor: m}}).agColumns()

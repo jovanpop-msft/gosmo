@@ -430,6 +430,7 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Take offline / bring online     | `db.SetOffline(ctx)` / `db.SetOnline(ctx)`        |
 | Change ownership                | `db.SetOwner(ctx, principal)`                    |
 | Database Scoped Configuration   | `db.DatabaseScopedConfigs(ctx)` / `db.SetDatabaseScopedConfig(ctx, name, value, forSecondary)` |
+| Transparent data encryption     | `db.EncryptionKey(ctx)` — the TDE key from `sys.dm_database_encryption_keys` (VIEW SERVER STATE), its algorithm and the server certificate or asymmetric key protecting it; `ErrNotFound` when there is none |
 | Query Store                     | `db.QueryStore(ctx)` / `db.SetQueryStoreOptions(ctx, opts)` / `db.FlushQueryStore(ctx)` / `db.ClearQueryStore(ctx)` |
 | Query Store reports (SSMS's seven views) | `db.QueryStoreTopResourceQueries(ctx, opts)` / `.QueryStoreRegressedQueries(opts)` / `.QueryStoreHighVariationQueries(opts)` / `.QueryStoreForcedPlanQueries(opts)` / `.QueryStoreOverallConsumption(opts)` / `.QueryStoreTrackedQuery(queryID, opts)` / `.QueryStoreWaitCategories(opts)` + `.QueryStoreWaitingQueries(category, opts)` |
 | Query Store plans and plan XML  | `db.QueryStorePlans(ctx, queryID, opts)` / `db.QueryStoreQueryText(ctx, queryID)` |

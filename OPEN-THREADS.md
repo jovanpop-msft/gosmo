@@ -110,8 +110,9 @@ comments, strings and quoted identifiers (`usesFloat16Vector`, 2026-10-02).
 A module that spells it only in **dynamic SQL** gets a note of its own
 (`buildsFloat16Vector`, 2026-10-08): its CREATE replays with the setting off,
 and running it fails with Msg 195 (`TestLiveFloat16DynamicSQLScript`). Any
-EXEC admits every literal, so a false positive is possible; a type name split
-across concatenated literals is not found.
+EXEC admits every literal, so a false positive is possible. Literals joined by
+`+` are folded first (2026-10-13), so a type name split across them is found;
+one split around a variable or function call is not.
 
 The 2026-09-24 fix-plan pass (G7–G10) added Always Encrypted columns, ledger
 tables, FileTables and external tables. **Refused, not scripted** (an
@@ -143,35 +144,49 @@ than failing:
 
 `ScriptDatabase` emits `CREATE DATABASE [name]` with its containment, file
 layout, collation and `WITH FILESTREAM (NON_TRANSACTED_ACCESS,
-DIRECTORY_NAME)`, then the recovery model, compatibility level, empty and
-read-only filegroups, the options that differ from a new database's
-(`AUTO_CLOSE`/`AUTO_SHRINK`/`AUTO_CREATE_STATISTICS`/`AUTO_UPDATE_STATISTICS
-[_ASYNC]`, `PAGE_VERIFY`, `TRUSTWORTHY`, `READ_COMMITTED_SNAPSHOT`,
-`ALLOW_SNAPSHOT_ISOLATION`, change tracking), and always Query Store (its
-default depends on the replaying instance) and the owner. The layout
-(2026-10-08, gossms fix plan 1) is every filegroup's files with name,
-`FILENAME`, `SIZE`, `MAXSIZE` and `FILEGROWTH`; the options (2026-10-08, fix
-plan 2) are read with `Options`, `ChangeTracking` and `QueryStore`.
-`TestLiveScriptDatabaseFileLayoutRoundTrips` and
-`TestLiveScriptDatabaseOptionsRoundTrip` replay the script under a new name
-and compare the catalog (green on 13, 14, 17; FILESTREAM only on 17).
+DIRECTORY_NAME), LEDGER = ON`, then the recovery model, compatibility level,
+empty and read-only filegroups, **every** `SET` option explicitly whatever its
+value, as SSMS does (2026-10-13, so the replaying instance's `model` no longer
+leaks in), change tracking when on, Query Store, then under `USE [db]` the TDE
+key and the scoped configurations away from their default, `SET ENCRYPTION
+ON`, the owner, and last the user access and `READ_ONLY`/`READ_WRITE`. `ACCELERATED_DATABASE_RECOVERY` is
+written for a 2019+ source only. A snapshot scripts as `CREATE DATABASE … ON
+(…) AS SNAPSHOT OF [source]` and nothing more. The options are read from
+inside the database: one `AUTO_CLOSE` has closed reports NULL at server
+scope for its collation, `TARGET_RECOVERY_TIME`, `DELAYED_DURABILITY` and
+ADR. `TestLiveScriptDatabaseFileLayoutRoundTrips`,
+`TestLiveScriptDatabaseOptionsRoundTrip`,
+`TestLiveScriptDatabaseSnapshotRoundTrips`,
+`TestLiveScriptDatabaseContainmentRoundTrips` and
+`TestLiveScriptDatabaseInDatabaseSettingsRoundTrip` replay the script and
+compare the catalog (green on 13, 14, 17; FILESTREAM, ADR and LEDGER only on
+17). The containment test turns "contained database authentication" on and
+back off; the TDE one leaves tempdb encrypted until the instance restarts.
 Knowingly left out, each of which a replay silently gets wrong rather than
 refuses:
 
-- **`CONTAINMENT = PARTIAL` has never run live**: "contained database
-  authentication" is off on all three instances, and the test skips it rather
-  than change server configuration. Unit-tested only.
-- **The rest of `sys.databases`**: the ANSI/`ARITHABORT`/`QUOTED_IDENTIFIER`
-  family, `CURSOR_DEFAULT`, `RECURSIVE_TRIGGERS`, `DB_CHAINING`, `ENABLE_BROKER`,
-  `PARAMETERIZATION`, `DELAYED_DURABILITY`, `TARGET_RECOVERY_TIME`,
-  accelerated database recovery, ledger, database-scoped configurations,
-  `user_access`, read-only and encryption (TDE). Each is one more `onOff`
-  line in `writeDatabaseSettings` where `DatabaseOptions` already reads it.
-- **Defaults are as shipped**, not the source's `model`: a replay on an
-  instance whose `model` was changed gets that `model`'s value for every
-  option at its shipped default.
-- **A database snapshot** scripts as an ordinary `CREATE DATABASE` over its
-  sparse files' paths, not `AS SNAPSHOT OF`.
+- **TDE**: the key is read only when encryption is on (its DMV needs VIEW
+  SERVER STATE, which every script would otherwise need); a key left behind
+  by `SET ENCRYPTION OFF` is not scripted. The protecting certificate or
+  asymmetric key is named, not scripted — it must exist, with its private
+  key, where the script runs. Without VIEW SERVER STATE the script says so in
+  a comment and leaves encryption out. `TRIPLE_DES_3KEY` and an asymmetric-key
+  protector are unit-tested only.
+- **Scoped configurations** are written only where they differ from the
+  default (`is_value_default`; on 2016, which lacks it, the four documented
+  defaults — any other row is skipped). A value that is not a number, 0/1 or
+  a bare keyword (Azure's `LEDGER_DIGEST_STORAGE_ENDPOINT` URL) gets a
+  comment, not a statement. Which options are numeric rather than ON/OFF is a
+  hand-kept list (`scopedConfigNumeric`): a new numeric option reporting 0 or
+  1 would be written OFF/ON and fail the replay loudly.
+- **ADR's `PERSISTENT_VERSION_STORE_FILEGROUP`** is not scripted: a source
+  with the version store off `PRIMARY` replays with it on `PRIMARY`.
+- **The in-database options read has no live test that fails without it**:
+  the layout's file reads open the database just before, so the server-scope
+  read it replaced also passes. The live test does catch the collation
+  fallback and `Options` scanning NULL on a closed database.
+- **`TestLiveScriptDatabaseOptionsRoundTrip` failed once in 18 runs on 14**
+  ("replayed settings differ") with no diff captured; 17 reruns were green.
 - **The paths and FILESTREAM directory name are the source's own**: replayed
   on the same instance under the same name after a DROP that is right; as a
   copy, the caller edits them.
@@ -218,29 +233,6 @@ user or group to name.
 What to check when one exists: that `FROM EXTERNAL PROVIDER WITH OBJECT_ID =
 …, DEFAULT_SCHEMA = …` parses in that order, and that an Entra login takes
 `DEFAULT_LANGUAGE` through `ALTER LOGIN` as it does `DEFAULT_DATABASE`.
-
-## Two login writes have no offline test, and cannot have one
-
-Every write path in the library now has a `WithScript` test pinning the exact
-statement it emits — the 2026-09-17 sweep took the zero-coverage count from 86
-to 0 — with two exceptions, both in `login.go`:
-`Login.MapToDatabase` and `Login.UnmapFromDatabase`. Each reads
-the catalog before it writes (`DatabaseByName`, and for the unmap that
-database's user mapping on top), and a read is exactly what `WithScript` cannot
-serve: nothing ran, so there is nothing to read back. They stay live-only, and
-`live_*` is where a regression in them will show — `live_api_pass_test.go`
-drives the unmap.
-
-This is the shape `CLAUDE.md` § Script mode already names — a path that reads
-to decide what to write does not work under a scripting context. The two here
-are not broken by it, because they are not scripted paths; they are simply the
-two writes whose statement a test cannot see without a server.
-
-When adding a write, add its case to the matching `script_*_write_test.go`
-table (or `drop_rename_test.go` for a one-statement drop) in the same change,
-and mutation-check it: swap a parameter name or drop a `dbo` default in the
-source and confirm the new case fails. A case built from the same constant the
-code uses proves nothing.
 
 ## Agent schedules are addressed by id — settled, do not re-raise
 

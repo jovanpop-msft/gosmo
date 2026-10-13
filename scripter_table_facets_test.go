@@ -202,8 +202,9 @@ func TestUsesFloat16Vector(t *testing.T) {
 
 // A float16 vector spelled in dynamic SQL is found in a definition that
 // executes some: in the literal's code, nested a level down, in a batch
-// assigned to a variable first. Not in a plain string with no EXEC, nor in the
-// dynamic batch's own comment or string.
+// assigned to a variable first, split across literals joined by +. Not in a
+// plain string with no EXEC, nor in the dynamic batch's own comment or string,
+// nor split around anything but a +.
 func TestBuildsFloat16Vector(t *testing.T) {
 	for _, c := range []struct {
 		name, def string
@@ -216,6 +217,10 @@ func TestBuildsFloat16Vector(t *testing.T) {
 		{"after a doubled quote", "CREATE PROCEDURE p AS EXEC (N'SELECT N''it''''s''; DECLARE @v vector(4, float16)')", true},
 		{"nested dynamic SQL", "CREATE PROCEDURE p AS EXEC (N'EXEC (N''DECLARE @v vector(4, float16)'')')", true},
 		{"comment inside the batch's code span", "CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector/* c */(4, float16)')", true},
+		{"split across literals", "CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector(4, ' + N'float16)')", true},
+		{"split three ways, via a variable", "CREATE PROCEDURE p AS DECLARE @s nvarchar(max) = 'DECLARE @v vec' +\n  'tor(4, ' + /* c */ 'float16)'; EXEC (@s)", true},
+		{"split after a doubled quote", "CREATE PROCEDURE p AS EXEC (N'SELECT N''x''; DECLARE @v vector(4, ' + N'float16)')", true},
+		{"split nested", "CREATE PROCEDURE p AS EXEC (N'EXEC (N''DECLARE @v vector(4, '' + N''float16)'')')", true},
 
 		{"plain string, no EXEC", "CREATE PROCEDURE p AS SELECT N'DECLARE @v vector(4, float16)'", false},
 		{"EXEC in a comment only", "CREATE PROCEDURE p AS /* EXEC */ SELECT N'vector(4, float16)'", false},
@@ -223,7 +228,11 @@ func TestBuildsFloat16Vector(t *testing.T) {
 		{"executed batch's string", "CREATE PROCEDURE p AS EXEC (N'SELECT N''vector(4, float16)''')", false},
 		{"float32", "CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector(4, float32)')", false},
 		{"longer word than EXEC", "CREATE PROCEDURE p AS SELECT executed, @exec FROM t WHERE x = N'vector(4, float16)'", false},
-		{"split across literals", "CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector(4, ' + N'float16)')", false},
+		{"a + before any literal", "+ N'x' EXEC", false},
+		{"split around a variable", "CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector(4, ' + @t + N'float16)')", false},
+		{"split around a quoted identifier", `CREATE PROCEDURE p AS EXEC (N'DECLARE @v vector(4, ' + "x" + N'float16)')`, false},
+		{"separate arguments", "CREATE PROCEDURE p AS EXEC sys.sp_executesql N'SELECT vector(4, ', N'float16)'", false},
+		{"split into a string of the batch", "CREATE PROCEDURE p AS EXEC (N'SELECT N''vector(4, '' + N''float16)''')", false},
 	} {
 		if got := buildsFloat16Vector(c.def); got != c.want {
 			t.Errorf("%s: buildsFloat16Vector(%q) = %v, want %v", c.name, c.def, got, c.want)

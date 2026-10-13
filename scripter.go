@@ -2,6 +2,8 @@ package gosmo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -140,15 +142,19 @@ func NewScripter(db *Database, opts ScriptOptions) *Scripter {
 // The CREATE carries the containment, the file layout — every filegroup
 // with its files under ON PRIMARY/FILEGROUP, CONTAINS FILESTREAM or
 // MEMORY_OPTIMIZED_DATA, the default filegroup, and the log under LOG ON —
-// the collation and WITH FILESTREAM's non-transacted access and directory
-// name. The recovery model, compatibility level, read-only filegroups, Query
-// Store and the owner always follow as ALTER DATABASE / ALTER AUTHORIZATION;
-// AUTO_CLOSE, AUTO_SHRINK, AUTO_CREATE_STATISTICS, AUTO_UPDATE_STATISTICS(
-// _ASYNC), PAGE_VERIFY, TRUSTWORTHY, READ_COMMITTED_SNAPSHOT,
-// ALLOW_SNAPSHOT_ISOLATION and change tracking follow only where they differ
-// from what CREATE DATABASE gives (see writeDatabaseSettings). The physical
-// paths and FILESTREAM directory name are this database's own, so a replay
-// on the same instance needs them, or the name, edited first.
+// the collation and the WITH list: FILESTREAM's non-transacted access and
+// directory name, and LEDGER = ON. The recovery model, compatibility level,
+// read-only filegroups, every SET option, change tracking, Query Store, the
+// TDE key and SET ENCRYPTION ON, the scoped configurations away from their
+// default, the owner, and last the user access and READ_ONLY/READ_WRITE
+// follow as ALTER DATABASE / ALTER
+// AUTHORIZATION (see writeDatabaseSettings). The physical paths and
+// FILESTREAM directory name are this database's own, so a replay on the same
+// instance needs them, or the name, edited first.
+//
+// A database snapshot scripts as CREATE DATABASE … ON (its sparse files) AS
+// SNAPSHOT OF [source], with nothing after it: a snapshot takes no options,
+// owner or Query Store setting of its own.
 //
 // The layout is read from the database itself (Database.FileGroups and
 // Files), so a database that cannot be entered — OFFLINE, RESTORING, or one
@@ -188,17 +194,39 @@ func (sc *Scripter) ScriptDatabase(ctx context.Context) (string, error) {
 // built from beyond the Database's own fields: the filegroups with their
 // files, the log files, which belong to none, and the database's options,
 // change tracking and Query Store settings. A nil settings field scripts
-// none of its statements.
+// none of its statements. major is the source server's major version (0 when
+// unknown, which scripts every version-gated option).
+//
+// For a snapshot only snapshotOf (the source database's name) and
+// snapshotFiles (its sparse ROWS files) are set.
 type databaseLayout struct {
 	groups []*FileGroup
 	logs   []*DatabaseFileInfo
 
-	opts *DatabaseOptions
-	ct   *ChangeTrackingInfo
-	qs   *QueryStoreInfo
+	opts  *DatabaseOptions
+	ct    *ChangeTrackingInfo
+	qs    *QueryStoreInfo
+	major int
+	// collation stands in for Database.Collation when that read came back
+	// empty (a database AUTO_CLOSE had closed).
+	collation string
+
+	// scoped is every database scoped configuration; writeScopedConfigs
+	// picks those away from their default.
+	scoped []*DatabaseScopedConfig
+	// tde is the encryption key of a database with encryption on; nil when
+	// it is off, or when the read was refused, which tdeRefused records.
+	tde        *DatabaseEncryptionKey
+	tdeRefused bool
+
+	snapshotOf    string
+	snapshotFiles []*DatabaseFileInfo
 }
 
 func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, error) {
+	if d.IsSnapshot() {
+		return readSnapshotLayout(ctx, d)
+	}
 	groups, err := d.FileGroups(ctx)
 	if err != nil {
 		return nil, err
@@ -213,14 +241,67 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 			l.logs = append(l.logs, f)
 		}
 	}
-	if l.opts, err = d.Options(ctx); err != nil {
+	// From inside the database, which keeps it open: one AUTO_CLOSE has
+	// closed reports NULL for several options (and its collation) at server
+	// scope.
+	if l.opts, err = d.readOptions(ctx, d.queryRow); err != nil {
 		return nil, err
+	}
+	if d.Collation == "" {
+		if err := d.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&l.collation) },
+			"SELECT ISNULL(CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation')), '')"); err != nil {
+			return nil, err
+		}
 	}
 	if l.ct, err = d.ChangeTracking(ctx); err != nil {
 		return nil, err
 	}
 	if l.qs, err = d.QueryStore(ctx); err != nil {
 		return nil, err
+	}
+	if l.scoped, err = d.DatabaseScopedConfigs(ctx); err != nil {
+		return nil, err
+	}
+	// Only when encryption is on: the DMV needs VIEW SERVER STATE, which
+	// every other database's script would otherwise need too. A key left
+	// behind by SET ENCRYPTION OFF is not scripted.
+	if l.opts.IsEncrypted {
+		switch l.tde, err = d.EncryptionKey(ctx); {
+		case IsPermissionDenied(err):
+			l.tde, l.tdeRefused = nil, true
+		case errors.Is(err, ErrNotFound):
+			// is_encrypted is set but the key is gone — nothing to restate.
+		case err != nil:
+			return nil, err
+		}
+	}
+	l.major = d.server.serverMajorVersion()
+	return l, nil
+}
+
+// readSnapshotLayout reads what a snapshot's CREATE needs: its source's name
+// and its sparse files, from sys.master_files — the snapshot's own logical
+// names are the source's, which is what AS SNAPSHOT OF matches on.
+func readSnapshotLayout(ctx context.Context, d *Database) (*databaseLayout, error) {
+	snap, err := d.server.DatabaseSnapshotByName(ctx, d.Name)
+	if err != nil {
+		return nil, err
+	}
+	if snap.SourceDatabase == "" {
+		return nil, notFoundf("gosmo: the source of snapshot %q is not visible", d.Name)
+	}
+	files, err := d.server.DatabaseFiles(ctx, d.Name)
+	if err != nil {
+		return nil, err
+	}
+	l := &databaseLayout{snapshotOf: snap.SourceDatabase}
+	for _, f := range files {
+		if f.Type == "ROWS" {
+			l.snapshotFiles = append(l.snapshotFiles, f)
+		}
+	}
+	if len(l.snapshotFiles) == 0 {
+		return nil, notFoundf("gosmo: snapshot %q has no visible data files", d.Name)
 	}
 	return l, nil
 }
@@ -334,6 +415,22 @@ func (sc *Scripter) scriptDatabaseFrom(d *Database, layout *databaseLayout) (str
 			fmt.Fprintf(sb, "IF DB_ID(N'%s') IS NULL\nBEGIN\n    ", escapeSingle(d.Name))
 		}
 		fmt.Fprintf(sb, "CREATE DATABASE %s", quoteIdent(d.Name))
+		if layout != nil && layout.snapshotOf != "" {
+			for i, f := range layout.snapshotFiles {
+				sep := ",\n"
+				if i == 0 {
+					sep = " ON\n"
+				}
+				fmt.Fprintf(sb, "%s( NAME = %s, FILENAME = %s )", sep, quoteIdent(f.Name), QuoteLiteral(f.PhysicalName))
+			}
+			fmt.Fprintf(sb, "\nAS SNAPSHOT OF %s;\n", quoteIdent(layout.snapshotOf))
+			if sc.opts.IncludeIfNotExists {
+				sb.WriteString("END\nGO\n")
+			} else {
+				sb.WriteString("GO\n")
+			}
+			return
+		}
 		// CONTAINMENT = PARTIAL needs the server's "contained database
 		// authentication" on; a replay where it is off fails here, loudly,
 		// rather than creating an uncontained database.
@@ -343,11 +440,15 @@ func (sc *Scripter) scriptDatabaseFrom(d *Database, layout *databaseLayout) (str
 		if layout != nil {
 			writeDatabaseFileClauses(sb, layout)
 		}
-		if d.Collation != "" {
-			fmt.Fprintf(sb, " COLLATE %s", d.Collation)
+		collation := d.Collation
+		if collation == "" && layout != nil {
+			collation = layout.collation
+		}
+		if collation != "" {
+			fmt.Fprintf(sb, " COLLATE %s", collation)
 		}
 		if layout != nil && layout.opts != nil {
-			writeFileStreamOptions(sb, layout.opts)
+			writeCreateWithOptions(sb, layout.opts)
 		}
 		sb.WriteString(";\n")
 		if sc.opts.IncludeIfNotExists {
@@ -375,45 +476,53 @@ func (sc *Scripter) scriptDatabaseFrom(d *Database, layout *databaseLayout) (str
 			}
 			for _, g := range layout.groups {
 				// Read-only cannot be said in CREATE DATABASE. PRIMARY can be
-				// read-only too, but only on a read-only database, which is
-				// not scripted.
+				// read-only too, but only on a read-only database, whose
+				// READ_ONLY comes last (writeDatabaseSettings).
 				if g.IsReadOnly && g.Name != "PRIMARY" {
 					fmt.Fprintf(sb, "ALTER DATABASE %s MODIFY FILEGROUP %s READ_ONLY;\nGO\n",
 						quoteIdent(d.Name), quoteIdent(g.Name))
 				}
 			}
-			writeDatabaseSettings(sb, d.Name, layout)
+			writeDatabaseSettings(sb, d, layout)
 		}
 	}))
 	return sb.String(), nil
 }
 
-// writeFileStreamOptions writes CREATE DATABASE's " WITH FILESTREAM (…)" when
-// either option differs from a new database's (access OFF, no directory). It
-// belongs to the CREATE: SET FILESTREAM after it would need the database to
-// itself, which a script cannot promise.
-func writeFileStreamOptions(sb *strings.Builder, o *DatabaseOptions) {
-	var parts []string
+// writeCreateWithOptions writes CREATE DATABASE's WITH list: FILESTREAM (…)
+// when either option differs from a new database's (access OFF, no
+// directory), and LEDGER = ON for a ledger database. Both belong to the
+// CREATE: SET FILESTREAM after it would need the database to itself, which a
+// script cannot promise, and LEDGER has no SET form at all.
+func writeCreateWithOptions(sb *strings.Builder, o *DatabaseOptions) {
+	var with, fs []string
 	switch o.NonTransactedAccess {
 	case "READ_ONLY", "FULL":
-		parts = append(parts, "NON_TRANSACTED_ACCESS = "+o.NonTransactedAccess)
+		fs = append(fs, "NON_TRANSACTED_ACCESS = "+o.NonTransactedAccess)
 	}
 	if o.DirectoryName != "" {
-		parts = append(parts, "DIRECTORY_NAME = "+QuoteLiteral(o.DirectoryName))
+		fs = append(fs, "DIRECTORY_NAME = "+QuoteLiteral(o.DirectoryName))
 	}
-	if len(parts) > 0 {
-		fmt.Fprintf(sb, " WITH FILESTREAM (%s)", strings.Join(parts, ", "))
+	if len(fs) > 0 {
+		with = append(with, "FILESTREAM ("+strings.Join(fs, ", ")+")")
+	}
+	if o.IsLedger {
+		with = append(with, "LEDGER = ON")
+	}
+	if len(with) > 0 {
+		sb.WriteString(" WITH " + strings.Join(with, ", "))
 	}
 }
 
 // writeDatabaseSettings writes the ALTER DATABASE … SET statements for the
 // options CREATE DATABASE cannot carry, and the owner.
 //
-// An option is written only where it differs from what CREATE DATABASE gives
-// on an instance whose model is as shipped — AUTO_CLOSE and AUTO_SHRINK off,
-// statistics created and updated synchronously, PAGE_VERIFY CHECKSUM, neither
-// snapshot option, TRUSTWORTHY off (always, whatever model says), no change
-// tracking — so a script stays short. Two are written whatever their value:
+// Every option is written whatever its value, as SSMS does: a new database
+// takes its options from the replaying instance's model, so an option left
+// out because it matched the shipped default would silently take whatever
+// that model says. Change tracking is the exception — written only when on,
+// since it is off on every new database and SET CHANGE_TRACKING = OFF on one
+// is refused. Also written whatever their value:
 //
 //   - Query Store, because a new database's default depends on the instance
 //     the script runs on — off before SQL Server 2022, READ_WRITE from it —
@@ -422,39 +531,86 @@ func writeFileStreamOptions(sb *strings.Builder, o *DatabaseOptions) {
 //   - The owner, because a new database belongs to whoever runs the script.
 //     An owner SID that maps to no login cannot be restated, and says so.
 //
+// The TDE key and scoped configurations follow Query Store (see
+// writeInDatabaseSettings). The user access and READ_ONLY/READ_WRITE come
+// last, after the owner:
+// READ_ONLY first would refuse every ALTER after it, and SINGLE_USER would
+// let the first other session in the database lock the script out.
+// ACCELERATED_DATABASE_RECOVERY is written only for a source of SQL Server
+// 2019 or later (l.major), since an older one has no such option to restate.
+//
 // Every keyword spliced in is checked against the values the catalog
 // reports; anything else is left out rather than written.
-func writeDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout) {
+func writeDatabaseSettings(sb *strings.Builder, d *Database, l *databaseLayout) {
+	name := d.Name
 	set := func(clause string) {
 		fmt.Fprintf(sb, "ALTER DATABASE %s SET %s;\nGO\n", quoteIdent(name), clause)
 	}
-	if o := l.opts; o != nil {
-		onOff := func(opt string, v, def bool) {
-			if v == def {
-				return
-			}
-			if v {
-				set(opt + " ON")
-			} else {
-				set(opt + " OFF")
-			}
+	onOff := func(opt string, v bool) {
+		if v {
+			set(opt + " ON")
+		} else {
+			set(opt + " OFF")
 		}
-		onOff("AUTO_CLOSE", o.AutoClose, false)
-		onOff("AUTO_SHRINK", o.AutoShrink, false)
-		onOff("AUTO_CREATE_STATISTICS", o.AutoCreateStats, true)
-		onOff("AUTO_UPDATE_STATISTICS", o.AutoUpdateStats, true)
-		onOff("AUTO_UPDATE_STATISTICS_ASYNC", o.AutoUpdateStatsAsync, false)
-		switch o.PageVerify {
-		case "TORN_PAGE_DETECTION", "NONE":
-			set("PAGE_VERIFY " + o.PageVerify)
+	}
+	o := l.opts
+	if o != nil {
+		onOff("ANSI_NULL_DEFAULT", o.ANSINullDefault)
+		onOff("ANSI_NULLS", o.ANSINulls)
+		onOff("ANSI_PADDING", o.ANSIPadding)
+		onOff("ANSI_WARNINGS", o.ANSIWarnings)
+		onOff("ARITHABORT", o.ArithAbort)
+		onOff("AUTO_CLOSE", o.AutoClose)
+		onOff("AUTO_SHRINK", o.AutoShrink)
+		onOff("AUTO_CREATE_STATISTICS", o.AutoCreateStats)
+		onOff("AUTO_UPDATE_STATISTICS", o.AutoUpdateStats)
+		onOff("AUTO_UPDATE_STATISTICS_ASYNC", o.AutoUpdateStatsAsync)
+		onOff("CURSOR_CLOSE_ON_COMMIT", o.CursorCloseOnCommit)
+		switch o.DefaultCursor {
+		case "LOCAL", "GLOBAL":
+			set("CURSOR_DEFAULT " + o.DefaultCursor)
 		}
-		onOff("TRUSTWORTHY", o.IsTrustworthy, false)
-		// A database the script has just created has no other session in
-		// it, so READ_COMMITTED_SNAPSHOT needs no termination clause.
-		onOff("READ_COMMITTED_SNAPSHOT", o.ReadCommittedSnapshot, false)
+		onOff("CONCAT_NULL_YIELDS_NULL", o.ConcatNullYieldsNull)
+		onOff("NUMERIC_ROUNDABORT", o.NumericRoundAbort)
+		onOff("QUOTED_IDENTIFIER", o.QuotedIdentifier)
+		onOff("RECURSIVE_TRIGGERS", o.RecursiveTriggers)
+		if o.IsBrokerEnabled {
+			set("ENABLE_BROKER")
+		} else {
+			set("DISABLE_BROKER")
+		}
+		onOff("DATE_CORRELATION_OPTIMIZATION", o.DateCorrelation)
+		onOff("TRUSTWORTHY", o.IsTrustworthy)
 		// IN_TRANSITION_TO_ON settles at ON once the open transactions end.
 		onOff("ALLOW_SNAPSHOT_ISOLATION",
-			o.SnapshotIsolation == "ON" || o.SnapshotIsolation == "IN_TRANSITION_TO_ON", false)
+			o.SnapshotIsolation == "ON" || o.SnapshotIsolation == "IN_TRANSITION_TO_ON")
+		if o.ForcedParameterization {
+			set("PARAMETERIZATION FORCED")
+		} else {
+			set("PARAMETERIZATION SIMPLE")
+		}
+		// A database the script has just created has no other session in
+		// it, so READ_COMMITTED_SNAPSHOT needs no termination clause.
+		onOff("READ_COMMITTED_SNAPSHOT", o.ReadCommittedSnapshot)
+		onOff("HONOR_BROKER_PRIORITY", o.HonorBrokerPriority)
+		switch o.PageVerify {
+		case "CHECKSUM", "TORN_PAGE_DETECTION", "NONE":
+			set("PAGE_VERIFY " + o.PageVerify)
+		}
+		onOff("DB_CHAINING", o.DBChaining)
+		if o.TargetRecoveryTimeSeconds >= 0 {
+			set(fmt.Sprintf("TARGET_RECOVERY_TIME = %d SECONDS", o.TargetRecoveryTimeSeconds))
+		}
+		switch o.DelayedDurability {
+		case "DISABLED", "ALLOWED", "FORCED":
+			set("DELAYED_DURABILITY = " + o.DelayedDurability)
+		}
+		// Not hasColumnSince, which is reserved for GROUP BY gates (the
+		// version-gate inventory counts its calls); same rule, major 0 newest.
+		if l.major == 0 || l.major >= int(SQLServer2019) {
+			// The one option here spelled with "=".
+			onOff("ACCELERATED_DATABASE_RECOVERY =", o.AcceleratedDatabaseRecovery)
+		}
 	}
 	if ct := l.ct; ct != nil && ct.Enabled && changeTrackingRetentionUnits[ct.RetentionUnit] {
 		cleanup := "OFF"
@@ -488,11 +644,140 @@ func writeDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout) 
 			sb.WriteString("-- Query Store reports a setting with no SET form: QUERY_STORE not scripted.\n")
 		}
 	}
-	if o := l.opts; o != nil {
+	writeInDatabaseSettings(sb, name, l)
+	if o != nil {
 		if o.Owner != "" {
 			fmt.Fprintf(sb, "ALTER AUTHORIZATION ON DATABASE::%s TO %s;\nGO\n", quoteIdent(name), quoteIdent(o.Owner))
 		} else {
 			sb.WriteString("-- The owner's SID maps to no login: ALTER AUTHORIZATION not scripted.\n")
 		}
+		if userAccessModes[o.UserAccess] {
+			set(string(o.UserAccess))
+		}
 	}
+	if d.IsReadOnly {
+		set("READ_ONLY")
+	} else {
+		set("READ_WRITE")
+	}
+}
+
+// writeInDatabaseSettings writes what is set from inside the database — the
+// TDE key and the scoped configurations away from their default — between
+// USE [db] and USE [master], then SET ENCRYPTION ON. It runs before the
+// owner, user access and READ_ONLY: a key cannot be created in a read-only
+// database, and nor can a scoped configuration be changed.
+//
+// The TDE key is protected by a certificate or asymmetric key in master,
+// referenced by name like an Always Encrypted key: it must exist on the
+// instance the script runs on, with its private key.
+func writeInDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout) {
+	scoped := scopedConfigStatements(l)
+	if l.tde == nil && !l.tdeRefused && len(scoped) == 0 {
+		return
+	}
+	fmt.Fprintf(sb, "USE %s;\nGO\n", quoteIdent(name))
+	encrypt := false
+	if k := l.tde; k != nil {
+		var by string
+		switch {
+		case k.ServerCertificate != "":
+			by = "SERVER CERTIFICATE " + quoteIdent(k.ServerCertificate)
+		case k.ServerAsymmetricKey != "":
+			by = "SERVER ASYMMETRIC KEY " + quoteIdent(k.ServerAsymmetricKey)
+		}
+		switch alg := k.Algorithm(); {
+		case by == "":
+			sb.WriteString("-- The database encryption key's protector is not visible in master: encryption not scripted.\n")
+		case alg == "":
+			sb.WriteString("-- The database encryption key reports an algorithm with no CREATE form: encryption not scripted.\n")
+		default:
+			fmt.Fprintf(sb, "CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = %s ENCRYPTION BY %s;\nGO\n", alg, by)
+			encrypt = true
+		}
+	} else if l.tdeRefused {
+		sb.WriteString("-- Encryption is on, and reading its key needs VIEW SERVER STATE: encryption not scripted.\n")
+	}
+	for _, s := range scoped {
+		sb.WriteString(s)
+	}
+	sb.WriteString("USE [master];\nGO\n")
+	if encrypt {
+		fmt.Fprintf(sb, "ALTER DATABASE %s SET ENCRYPTION ON;\nGO\n", quoteIdent(name))
+	}
+}
+
+// scopedConfigDefaults2016 are the documented defaults of the four scoped
+// configurations SQL Server 2016 has. Its catalog has no is_value_default
+// (DatabaseScopedConfigs reads false for every row), so a 2016 source is
+// compared against these instead.
+var scopedConfigDefaults2016 = map[string]string{
+	"MAXDOP": "0", "LEGACY_CARDINALITY_ESTIMATION": "0",
+	"PARAMETER_SNIFFING": "1", "QUERY_OPTIMIZER_HOTFIXES": "0",
+}
+
+// scopedConfigNumeric are the scoped configurations whose value is a number
+// rather than a switch: every other "0"/"1" is written OFF/ON.
+var scopedConfigNumeric = map[string]bool{
+	"MAXDOP": true, "PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES": true, "FULLTEXT_INDEX_VERSION": true,
+}
+
+// scopedConfigStatements renders an ALTER DATABASE SCOPED CONFIGURATION for
+// each of l.scoped whose value is away from its default, and a FOR
+// SECONDARY one for each with a secondary value of its own (NULL, the
+// default, means "as the primary").
+//
+// Only what differs is written, unlike the SET options: the set of scoped
+// configurations grows with every release, and restating one the replaying
+// instance does not know fails the script. On a 2016 source a row missing
+// from scopedConfigDefaults2016 is left out — its default is not known.
+func scopedConfigStatements(l *databaseLayout) []string {
+	var out []string
+	add := func(c *DatabaseScopedConfig, raw string, secondary bool) {
+		v, ok := scopedConfigValue(c.Name, raw)
+		stmt, err := buildScopedConfigStatement(c.Name, v, secondary)
+		if !ok || err != nil {
+			out = append(out, fmt.Sprintf("-- Database scoped configuration %s reports a value with no SET form: not scripted.\n", commentSafe(c.Name)))
+			return
+		}
+		out = append(out, stmt+";\nGO\n")
+	}
+	for _, c := range l.scoped {
+		isDefault := c.IsValueDefault
+		if l.major == int(SQLServer2016) {
+			def, known := scopedConfigDefaults2016[c.Name]
+			isDefault = !known || c.Value == def
+		}
+		if !isDefault {
+			add(c, c.Value, false)
+		}
+		if c.ValueForSecondary != "" {
+			add(c, c.ValueForSecondary, true)
+		}
+	}
+	return out
+}
+
+// scopedConfigValue is raw — the value as CAST to nvarchar — as the SET
+// clause spells it: a number for a numeric option, OFF/ON for a switch
+// reported as 0/1, a keyword (WHEN_SUPPORTED, PRIMARY) as it is. Anything
+// else, a quoted string or a value with spaces, is not written (false).
+func scopedConfigValue(name, raw string) (string, bool) {
+	digits := raw != ""
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			digits = false
+		}
+	}
+	switch {
+	case digits && scopedConfigNumeric[name]:
+		return raw, true
+	case raw == "0":
+		return "OFF", true
+	case raw == "1":
+		return "ON", true
+	case !digits && isSimpleIdentifier(raw):
+		return raw, true
+	}
+	return "", false
 }

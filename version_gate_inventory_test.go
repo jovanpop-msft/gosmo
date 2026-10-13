@@ -72,6 +72,10 @@ var gatedColumns = []gatedColumn{
 
 	// sys.databases — the catalog collation, 2019 (Azure SQL Database's CATALOG_COLLATION).
 	{"databases", "catalog_collation_type_desc", "catalog_collation_type_desc", SQLServer2019, false, ""},
+	// sys.databases — accelerated database recovery, 2019.
+	{"databases", "is_accelerated_database_recovery_on", "d.is_accelerated_database_recovery_on", SQLServer2019, false, ""},
+	// sys.databases — ledger databases, 2022.
+	{"databases", "is_ledger_on", "d.is_ledger_on", SQLServer2022, false, ""},
 
 	// sys.tables — ledger tables, 2022.
 	{"tables", "ledger_type_desc", "t.ledger_type_desc", SQLServer2022, false, ""},

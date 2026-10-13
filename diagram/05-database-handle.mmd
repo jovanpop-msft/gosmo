@@ -171,6 +171,7 @@ classDiagram
         +Options() *DatabaseOptions
         +SetDatabaseOption(opt, value, term) error
         +SetOwner(principal) error
+        +EncryptionKey() *DatabaseEncryptionKey
         +DatabaseScopedConfigs() []*DatabaseScopedConfig
         +SetDatabaseScopedConfig(name, value, forSecondary) error
         +QueryStore() *QueryStoreInfo

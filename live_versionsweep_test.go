@@ -112,6 +112,9 @@ func (sw *sweep) call(label string, fn func() error) {
 		// Only dbo.sweep_parent has a full-text index (and only where the
 		// component is installed); every other table answering "none" is
 		// the read working.
+	case strings.HasPrefix(label, "Database.EncryptionKey") && errors.Is(err, ErrNotFound):
+		// The sweep's database is not TDE-encrypted, so "no key" is the
+		// read working.
 	default:
 		sw.failed = append(sw.failed, fmt.Sprintf("%s: %v", label, err))
 	}

@@ -5,7 +5,9 @@
 // (TestLiveFullText, on an instance with the component: win10cli and
 // win10cli\SQL2017), and against an instance without it
 // (TestLiveFullTextNotInstalled: win10cli\SQL2016), where every read must
-// come back empty rather than fail.
+// come back empty rather than fail. Where a semantic language statistics
+// database is registered (win10cli's default instance), TestLiveFullText
+// also creates, scripts and replays STATISTICAL_SEMANTICS columns.
 //
 //	go test -tags livedb . -run TestLiveFullText -v \
 //	  -livedb 'sqlserver://sa:PASS@host?TrustServerCertificate=true'
@@ -16,6 +18,7 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -240,6 +243,51 @@ func TestLiveFullText(t *testing.T) {
 		t.Errorf("Populations as %s with no VIEW SERVER STATE: no error", login)
 	}
 	other.Close()
+
+	// STATISTICAL_SEMANTICS, only where a semantic language statistics
+	// database is registered (win10cli's 2025 instance): create, add a
+	// column, read back, script, replay.
+	var semantic int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sys.fulltext_semantic_language_statistics_database`).Scan(&semantic); err != nil {
+		t.Fatalf("semantic database probe: %v", err)
+	}
+	if semantic == 0 {
+		t.Log("no semantic language statistics database registered; STATISTICAL_SEMANTICS not exercised")
+		return
+	}
+	liveExecIn(t, d, ctx, `CREATE TABLE dbo.Sem (id int NOT NULL CONSTRAINT PK_Sem PRIMARY KEY, abstract nvarchar(max), title nvarchar(200))`)
+	sem, err := d.TableByName(ctx, "dbo", "Sem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	semIdx, err := sem.CreateFullTextIndex(ctx, CreateFullTextIndexRequest{
+		KeyIndex: "PK_Sem", Catalog: "ftc_b", ChangeTracking: FullTextChangeTrackingOff, NoPopulation: true,
+		Columns: []FullTextIndexColumnSpec{{Name: "abstract", Language: "1033", StatisticalSemantics: true}},
+	})
+	if err != nil {
+		t.Fatalf("CreateFullTextIndex with STATISTICAL_SEMANTICS: %v", err)
+	}
+	if err := semIdx.AddColumn(ctx, FullTextIndexColumnSpec{Name: "title", Language: "English", StatisticalSemantics: true}, true); err != nil {
+		t.Fatalf("AddColumn with STATISTICAL_SEMANTICS: %v", err)
+	}
+	semIdx, err = sem.FullTextIndex(ctx)
+	if err != nil || len(semIdx.Columns) != 2 || !semIdx.Columns[0].StatisticalSemantics || !semIdx.Columns[1].StatisticalSemantics {
+		t.Fatalf("Sem's index = %+v, %v; want both columns STATISTICAL_SEMANTICS", semIdx, err)
+	}
+	script, err := NewScripter(d, ScriptOptions{Verb: ScriptCreate}).ScriptFullTextIndex(ctx, "dbo", "Sem")
+	if err != nil {
+		t.Fatalf("ScriptFullTextIndex(Sem): %v", err)
+	}
+	if !strings.Contains(script, "[abstract] LANGUAGE 1033 STATISTICAL_SEMANTICS, [title] LANGUAGE 1033 STATISTICAL_SEMANTICS") {
+		t.Errorf("Sem's script lost STATISTICAL_SEMANTICS:\n%s", script)
+	}
+	if err := semIdx.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	liveRunScript(t, d, ctx, script)
+	if again, err := sem.FullTextIndex(ctx); err != nil || len(again.Columns) != 2 || !again.Columns[0].StatisticalSemantics || !again.Columns[1].StatisticalSemantics {
+		t.Errorf("Sem's index after replaying its script = %+v, %v", again, err)
+	}
 }
 
 // On an instance without the component every read is empty, not an error.

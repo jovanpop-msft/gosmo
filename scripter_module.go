@@ -188,8 +188,8 @@ var executesDynamicSQL = regexp.MustCompile(`(?i)(?:^|[^\w@#$])(?:exec(?:ute)?|s
 // It is conservative, not a parse: any EXEC in the code — a procedure call
 // too — admits every literal of the definition, since the batch is usually
 // assigned to a variable before it is executed. A false positive costs a
-// comment. A batch whose type name is split across concatenated literals is
-// not found.
+// comment. Literals joined by + are folded first (stringLiterals), so a type
+// name split across them is found; one split around a variable is not.
 func buildsFloat16Vector(def string) bool {
 	spans := scriptCodeSpans(def)
 	var code strings.Builder
@@ -200,25 +200,49 @@ func buildsFloat16Vector(def string) bool {
 	if !executesDynamicSQL.MatchString(code.String()) {
 		return false
 	}
-	// A doubled quote splits one literal into adjacent skipped spans with no
-	// code between them (scriptCodeSpans); they are rejoined before the
-	// literal is unescaped, or a nested 'string' would be read as code.
+	for _, text := range stringLiterals(def, spans) {
+		if usesFloat16Vector(text) || buildsFloat16Vector(text) {
+			return true
+		}
+	}
+	return false
+}
+
+// concatenatesLiterals matches the code between two string literals that
+// concatenates them: a +, then the second literal's optional N prefix.
+var concatenatesLiterals = regexp.MustCompile(`^\s*\+\s*[Nn]?$`)
+
+// stringLiterals returns the values of def's string literals, unescaped, in
+// order, given its scriptCodeSpans. A literal joined to the one before it by
+// + alone, comments aside, is folded into it, as the server would concatenate
+// them: 'vector(4, ' + N'float16)' is one value.
+func stringLiterals(def string, spans []codeSpan) []string {
+	var lits []string
+	var between strings.Builder // the code since the last literal
 	for i := 0; i < len(spans); i++ {
 		from := spans[i].prev
 		if spans[i].start == from || def[from] != '\'' {
+			between.WriteString(def[spans[i].start:spans[i].end])
 			continue
 		}
+		// A doubled quote splits one literal into adjacent skipped spans with
+		// no code between them (scriptCodeSpans); they are rejoined before the
+		// literal is unescaped, or a nested 'string' would be read as code.
 		for i+1 < len(spans) && spans[i].start == spans[i].end &&
 			spans[i+1].start > spans[i+1].prev && def[spans[i+1].prev] == '\'' {
 			i++
 		}
 		lit := def[from:spans[i].start]
 		text := strings.ReplaceAll(strings.TrimSuffix(lit[1:], "'"), "''", "'")
-		if usesFloat16Vector(text) || buildsFloat16Vector(text) {
-			return true
+		if len(lits) > 0 && concatenatesLiterals.MatchString(between.String()) {
+			lits[len(lits)-1] += text
+		} else {
+			lits = append(lits, text)
 		}
+		between.Reset()
+		between.WriteString(def[spans[i].start:spans[i].end])
 	}
-	return false
+	return lits
 }
 
 // moduleSetOptions renders the two SET options a module is compiled under,

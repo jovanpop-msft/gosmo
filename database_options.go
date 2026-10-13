@@ -42,6 +42,24 @@ type DatabaseOptions struct {
 	IsBrokerEnabled       bool
 	IsEncrypted           bool
 
+	DBChaining             bool // DB_CHAINING (cross-database ownership chaining)
+	ForcedParameterization bool // PARAMETERIZATION FORCED; false is SIMPLE
+	DateCorrelation        bool // DATE_CORRELATION_OPTIMIZATION
+	HonorBrokerPriority    bool // HONOR_BROKER_PRIORITY
+
+	// DelayedDurability is "DISABLED", "ALLOWED" or "FORCED" ("" unknown —
+	// see Options).
+	DelayedDurability string
+	// TargetRecoveryTimeSeconds is TARGET_RECOVERY_TIME; 0 is automatic
+	// (non-indirect) checkpoints, -1 unknown (see Options).
+	TargetRecoveryTimeSeconds int
+	// AcceleratedDatabaseRecovery is ACCELERATED_DATABASE_RECOVERY, which
+	// SQL Server 2019 introduced; false on an older instance.
+	AcceleratedDatabaseRecovery bool
+	// IsLedger is LEDGER = ON, which SQL Server 2022 introduced and only
+	// CREATE DATABASE can set; false on an older instance.
+	IsLedger bool
+
 	// FILESTREAM's database-level options (sys.database_filestream_options):
 	// NonTransactedAccess is "OFF", "READ_ONLY" or "FULL", and
 	// DirectoryName is "" while none is set. Both are present whether or not
@@ -54,28 +72,27 @@ type DatabaseOptions struct {
 //
 // Queried against sys.databases at server scope (like
 // Server.DatabaseByName), not through d.query — these are
-// catalog-view columns, not per-database data.
+// catalog-view columns, not per-database data, and the read works on a
+// database that cannot be entered.
+//
+// A database AUTO_CLOSE has closed reports NULL for some columns until it
+// is next opened: those read as unknown — DelayedDurability "",
+// TargetRecoveryTimeSeconds -1, AcceleratedDatabaseRecovery and IsLedger
+// false.
+// ScriptDatabase reads them from inside the database, which opens it.
 func (d *Database) Options(ctx context.Context) (*DatabaseOptions, error) {
-	const q = `
-SELECT SUSER_SNAME(d.owner_sid), d.page_verify_option_desc, d.user_access_desc,
-       d.containment_desc, d.is_local_cursor_default, d.snapshot_isolation_state_desc,
-       d.is_auto_close_on, d.is_auto_shrink_on, d.is_auto_create_stats_on,
-       d.is_auto_update_stats_on, d.is_auto_update_stats_async_on,
-       d.is_ansi_null_default_on, d.is_ansi_nulls_on, d.is_ansi_padding_on,
-       d.is_ansi_warnings_on, d.is_arithabort_on, d.is_concat_null_yields_null_on,
-       d.is_numeric_roundabort_on, d.is_quoted_identifier_on, d.is_recursive_triggers_on,
-       d.is_cursor_close_on_commit_on, d.is_read_committed_snapshot_on,
-       d.is_trustworthy_on, d.is_broker_enabled, d.is_encrypted,
-       ISNULL(fo.non_transacted_access_desc, 'OFF'), ISNULL(fo.directory_name, '')
-FROM   sys.databases d
-LEFT   JOIN sys.database_filestream_options fo ON fo.database_id = d.database_id
-WHERE  d.name = @p1`
+	return d.readOptions(ctx, d.server.queryRow)
+}
 
+// readOptions runs optionsSelect through queryRow: Server.queryRow for the
+// server-scope read, Database.queryRow for one from inside the database.
+func (d *Database) readOptions(ctx context.Context, queryRow func(context.Context, func(*sql.Row) error, string, ...any) error) (*DatabaseOptions, error) {
 	o := &DatabaseOptions{}
-	var owner sql.NullString
+	var owner, delayed sql.NullString
 	var isLocalCursor bool
+	var adr, ledger sql.NullBool
 
-	err := d.server.queryRow(ctx, func(row *sql.Row) error {
+	err := queryRow(ctx, func(row *sql.Row) error {
 		return row.Scan(
 			&owner, &o.PageVerify, &o.UserAccess, &o.Containment, &isLocalCursor, &o.SnapshotIsolation,
 			&o.AutoClose, &o.AutoShrink, &o.AutoCreateStats,
@@ -86,19 +103,50 @@ WHERE  d.name = @p1`
 			&o.CursorCloseOnCommit, &o.ReadCommittedSnapshot,
 			&o.IsTrustworthy, &o.IsBrokerEnabled, &o.IsEncrypted,
 			&o.NonTransactedAccess, &o.DirectoryName,
+			&o.DBChaining, &o.ForcedParameterization, &o.DateCorrelation,
+			&o.HonorBrokerPriority, &delayed,
+			&o.TargetRecoveryTimeSeconds,
+			&adr, &ledger,
 		)
-	}, q, d.Name)
+	}, d.optionsSelect(), d.Name)
 	if err != nil {
 		return nil, rowErr(err, notFoundf("gosmo: database %q not found", d.Name),
 			fmt.Sprintf("database options for %q", d.Name))
 	}
 	o.Owner = owner.String
+	o.DelayedDurability = delayed.String
+	o.AcceleratedDatabaseRecovery = adr.Bool
+	o.IsLedger = ledger.Bool
 	if isLocalCursor {
 		o.DefaultCursor = "LOCAL"
 	} else {
 		o.DefaultCursor = "GLOBAL"
 	}
 	return o, nil
+}
+
+// optionsSelect is Options' query for the connected server's version:
+// ACCELERATED_DATABASE_RECOVERY is gated to 2019, LEDGER to 2022.
+func (d *Database) optionsSelect() string {
+	return `
+SELECT SUSER_SNAME(d.owner_sid), d.page_verify_option_desc, d.user_access_desc,
+       d.containment_desc, d.is_local_cursor_default, d.snapshot_isolation_state_desc,
+       d.is_auto_close_on, d.is_auto_shrink_on, d.is_auto_create_stats_on,
+       d.is_auto_update_stats_on, d.is_auto_update_stats_async_on,
+       d.is_ansi_null_default_on, d.is_ansi_nulls_on, d.is_ansi_padding_on,
+       d.is_ansi_warnings_on, d.is_arithabort_on, d.is_concat_null_yields_null_on,
+       d.is_numeric_roundabort_on, d.is_quoted_identifier_on, d.is_recursive_triggers_on,
+       d.is_cursor_close_on_commit_on, d.is_read_committed_snapshot_on,
+       d.is_trustworthy_on, d.is_broker_enabled, d.is_encrypted,
+       ISNULL(fo.non_transacted_access_desc, 'OFF'), ISNULL(fo.directory_name, ''),
+       d.is_db_chaining_on, d.is_parameterization_forced, d.is_date_correlation_on,
+       d.is_honor_broker_priority_on, d.delayed_durability_desc,
+       ISNULL(d.target_recovery_time_in_seconds, -1),
+       ` + colSince(d.server.serverMajorVersion(), SQLServer2019, "d.is_accelerated_database_recovery_on", "CAST(0 AS bit)") + `,
+       ` + colSince(d.server.serverMajorVersion(), SQLServer2022, "d.is_ledger_on", "CAST(0 AS bit)") + `
+FROM   sys.databases d
+LEFT   JOIN sys.database_filestream_options fo ON fo.database_id = d.database_id
+WHERE  d.name = @p1`
 }
 
 // DatabaseOption identifies one ALTER DATABASE ... SET option.

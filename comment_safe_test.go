@@ -49,6 +49,15 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 			}
 			return s
 		},
+		"database scoped configuration": func(n string) string {
+			sc := scripterOverDatabase("d")
+			s, err := sc.scriptDatabaseFrom(sc.db, &databaseLayout{major: 17,
+				scoped: []*DatabaseScopedConfig{{Name: n, Value: "x y"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return s
+		},
 		"encrypted bound object": func(n string) string {
 			return buildBoundObjectScript("RULE", n, n, "", DefaultScriptOptions())
 		},

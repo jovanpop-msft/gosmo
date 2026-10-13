@@ -232,34 +232,107 @@ func TestScriptDatabaseNoPrimaryFileWritesNoFileClauses(t *testing.T) {
 // DATABASE has just made on an instance whose model is as shipped.
 func shippedDefaults() *DatabaseOptions {
 	return &DatabaseOptions{
-		Owner: "sa", PageVerify: "CHECKSUM", Containment: "NONE", SnapshotIsolation: "OFF",
-		AutoCreateStats: true, AutoUpdateStats: true, NonTransactedAccess: "OFF",
+		Owner: "sa", PageVerify: "CHECKSUM", UserAccess: UserAccessMulti, Containment: "NONE",
+		DefaultCursor: "GLOBAL", SnapshotIsolation: "OFF",
+		AutoCreateStats: true, AutoUpdateStats: true, IsBrokerEnabled: true, NonTransactedAccess: "OFF",
+		DelayedDurability: "DISABLED", TargetRecoveryTimeSeconds: 60,
 	}
 }
 
-// A database at every default scripts no SET beyond the three always
-// written: Query Store (its default depends on the replaying instance) and
-// the owner (else the replaying login).
-func TestScriptDatabaseDefaultSettingsStayShort(t *testing.T) {
-	layout := &databaseLayout{opts: shippedDefaults(), ct: &ChangeTrackingInfo{}, qs: &QueryStoreInfo{DesiredState: QueryStoreOff}}
+// A database at every default still scripts every option, in SSMS's order:
+// left out, each would take the replaying instance's model value instead.
+// Query Store, the owner, then user access and READ_WRITE close it.
+func TestScriptDatabaseScriptsEveryOptionExplicitly(t *testing.T) {
+	layout := &databaseLayout{opts: shippedDefaults(), ct: &ChangeTrackingInfo{},
+		qs: &QueryStoreInfo{DesiredState: QueryStoreOff}, major: 16}
 	got := render(t, scripterOverDatabase("Sales"), layout)
-	sets := strings.Count(got, " SET ")
-	// RECOVERY, COMPATIBILITY_LEVEL, QUERY_STORE.
-	if sets != 3 {
-		t.Errorf("%d SET statements for a database at its defaults, want 3:\n%s", sets, got)
-	}
-	for _, w := range []string{
-		"ALTER DATABASE [Sales] SET QUERY_STORE = OFF;",
-		"ALTER AUTHORIZATION ON DATABASE::[Sales] TO [sa];",
+	var want strings.Builder
+	for _, c := range []string{
+		"ANSI_NULL_DEFAULT OFF", "ANSI_NULLS OFF", "ANSI_PADDING OFF", "ANSI_WARNINGS OFF",
+		"ARITHABORT OFF", "AUTO_CLOSE OFF", "AUTO_SHRINK OFF", "AUTO_CREATE_STATISTICS ON",
+		"AUTO_UPDATE_STATISTICS ON", "AUTO_UPDATE_STATISTICS_ASYNC OFF", "CURSOR_CLOSE_ON_COMMIT OFF",
+		"CURSOR_DEFAULT GLOBAL", "CONCAT_NULL_YIELDS_NULL OFF", "NUMERIC_ROUNDABORT OFF",
+		"QUOTED_IDENTIFIER OFF", "RECURSIVE_TRIGGERS OFF", "ENABLE_BROKER",
+		"DATE_CORRELATION_OPTIMIZATION OFF", "TRUSTWORTHY OFF", "ALLOW_SNAPSHOT_ISOLATION OFF",
+		"PARAMETERIZATION SIMPLE", "READ_COMMITTED_SNAPSHOT OFF", "HONOR_BROKER_PRIORITY OFF",
+		"PAGE_VERIFY CHECKSUM", "DB_CHAINING OFF", "TARGET_RECOVERY_TIME = 60 SECONDS",
+		"DELAYED_DURABILITY = DISABLED", "ACCELERATED_DATABASE_RECOVERY = OFF", "QUERY_STORE = OFF",
 	} {
-		if !strings.Contains(got, w) {
-			t.Errorf("script missing %q:\n%s", w, got)
-		}
+		want.WriteString("ALTER DATABASE [Sales] SET " + c + ";\nGO\n")
 	}
-	for _, bad := range []string{"CONTAINMENT", "WITH FILESTREAM"} {
+	want.WriteString("ALTER AUTHORIZATION ON DATABASE::[Sales] TO [sa];\nGO\n")
+	want.WriteString("ALTER DATABASE [Sales] SET MULTI_USER;\nGO\n")
+	want.WriteString("ALTER DATABASE [Sales] SET READ_WRITE;\nGO\n")
+	if !strings.HasSuffix(got, want.String()) {
+		t.Errorf("settings wrong.\n--- got ---\n%s\n--- want suffix ---\n%s", got, want.String())
+	}
+	for _, bad := range []string{"CONTAINMENT", "WITH FILESTREAM", "CHANGE_TRACKING"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("default database scripts %q:\n%s", bad, got)
 		}
+	}
+}
+
+// ACCELERATED_DATABASE_RECOVERY is SQL Server 2019's: a 2017 source has no
+// value to restate, and the line would fail on a 2017 replay. An unknown
+// major (0) is treated as newest, as every version gate here does.
+func TestScriptDatabaseGatesAcceleratedDatabaseRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		major int
+		want  bool
+	}{{14, false}, {15, true}, {0, true}} {
+		o := shippedDefaults()
+		o.AcceleratedDatabaseRecovery = true
+		got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: o, major: tc.major})
+		if has := strings.Contains(got, "SET ACCELERATED_DATABASE_RECOVERY = ON;"); has != tc.want {
+			t.Errorf("major %d: ACCELERATED_DATABASE_RECOVERY scripted = %v, want %v:\n%s", tc.major, has, tc.want, got)
+		}
+	}
+}
+
+// A read-only, restricted database restates both last — after the owner and
+// Query Store, which READ_ONLY would refuse.
+func TestScriptDatabaseReadOnlyAndUserAccessComeLast(t *testing.T) {
+	sc := scripterOverDatabase("Sales")
+	sc.db.IsReadOnly = true
+	o := shippedDefaults()
+	o.UserAccess = UserAccessRestricted
+	got := render(t, sc, &databaseLayout{opts: o, qs: &QueryStoreInfo{DesiredState: QueryStoreOff}})
+	want := "ALTER AUTHORIZATION ON DATABASE::[Sales] TO [sa];\nGO\n" +
+		"ALTER DATABASE [Sales] SET RESTRICTED_USER;\nGO\n" +
+		"ALTER DATABASE [Sales] SET READ_ONLY;\nGO\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("tail wrong.\n--- got ---\n%s\n--- want suffix ---\n%s", got, want)
+	}
+	// A user-access value the catalog never reports is not spliced in.
+	o.UserAccess = "MULTI_USER; DROP DATABASE x"
+	if got := render(t, sc, &databaseLayout{opts: o}); strings.Contains(got, "DROP DATABASE x") {
+		t.Errorf("unknown user access spliced in:\n%s", got)
+	}
+}
+
+// A snapshot is a CREATE … AS SNAPSHOT OF over its sparse files and nothing
+// else — not a plain database, which is what it used to script as.
+func TestScriptDatabaseSnapshot(t *testing.T) {
+	sc := scripterOverDatabase("Sales_snap")
+	sc.db.SourceDatabaseID = 5
+	sc.opts.IncludeIfNotExists = false
+	layout := &databaseLayout{snapshotOf: "Sal]es", snapshotFiles: []*DatabaseFileInfo{
+		layoutFile(1, "Sales", `D:\data\Sales_snap.ss`, "ROWS", 0, 0, 0, 0),
+		layoutFile(3, "arch", `D:\data\O'Neil_snap.ss`, "ROWS", 0, 0, 0, 0)}}
+	got := render(t, sc, layout)
+	want := "CREATE DATABASE [Sales_snap] ON\n" +
+		"( NAME = [Sales], FILENAME = N'D:\\data\\Sales_snap.ss' ),\n" +
+		"( NAME = [arch], FILENAME = N'D:\\data\\O''Neil_snap.ss' )\n" +
+		"AS SNAPSHOT OF [Sal]]es];\nGO\n"
+	if got != want {
+		t.Errorf("snapshot script wrong.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	sc.opts.IncludeIfNotExists = true
+	got = render(t, sc, layout)
+	if !strings.HasPrefix(got, "IF DB_ID(N'Sales_snap') IS NULL\nBEGIN\n    CREATE DATABASE [Sales_snap] ON\n") ||
+		!strings.HasSuffix(got, "AS SNAPSHOT OF [Sal]]es];\nEND\nGO\n") {
+		t.Errorf("guarded snapshot script wrong:\n%s", got)
 	}
 }
 
@@ -270,6 +343,11 @@ func TestScriptDatabaseSettingsAwayFromDefault(t *testing.T) {
 		SnapshotIsolation: "IN_TRANSITION_TO_ON", AutoClose: true, AutoShrink: true,
 		AutoUpdateStatsAsync: true, IsTrustworthy: true, ReadCommittedSnapshot: true,
 		NonTransactedAccess: "FULL", DirectoryName: "Sales'docs",
+		ANSINullDefault: true, ANSINulls: true, ANSIPadding: true, ANSIWarnings: true, ArithAbort: true,
+		ConcatNullYieldsNull: true, NumericRoundAbort: true, QuotedIdentifier: true,
+		RecursiveTriggers: true, CursorCloseOnCommit: true, DefaultCursor: "LOCAL",
+		DBChaining: true, ForcedParameterization: true, DateCorrelation: true, HonorBrokerPriority: true,
+		DelayedDurability: "FORCED", TargetRecoveryTimeSeconds: 0, AcceleratedDatabaseRecovery: true,
 	}
 	layout := &databaseLayout{
 		opts: o,
@@ -285,6 +363,13 @@ func TestScriptDatabaseSettingsAwayFromDefault(t *testing.T) {
 		"SET AUTO_UPDATE_STATISTICS OFF;", "SET AUTO_UPDATE_STATISTICS_ASYNC ON;",
 		"SET PAGE_VERIFY TORN_PAGE_DETECTION;", "SET TRUSTWORTHY ON;",
 		"SET READ_COMMITTED_SNAPSHOT ON;", "SET ALLOW_SNAPSHOT_ISOLATION ON;",
+		"SET ANSI_NULL_DEFAULT ON;", "SET ANSI_NULLS ON;", "SET ANSI_PADDING ON;", "SET ANSI_WARNINGS ON;",
+		"SET ARITHABORT ON;", "SET CONCAT_NULL_YIELDS_NULL ON;", "SET NUMERIC_ROUNDABORT ON;",
+		"SET QUOTED_IDENTIFIER ON;", "SET RECURSIVE_TRIGGERS ON;", "SET CURSOR_CLOSE_ON_COMMIT ON;",
+		"SET CURSOR_DEFAULT LOCAL;", "SET DISABLE_BROKER;", "SET DB_CHAINING ON;",
+		"SET PARAMETERIZATION FORCED;", "SET DATE_CORRELATION_OPTIMIZATION ON;",
+		"SET HONOR_BROKER_PRIORITY ON;", "SET DELAYED_DURABILITY = FORCED;",
+		"SET TARGET_RECOVERY_TIME = 0 SECONDS;", "SET ACCELERATED_DATABASE_RECOVERY = ON;",
 		"SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 3 HOURS, AUTO_CLEANUP = ON);",
 		"SET QUERY_STORE = ON (OPERATION_MODE = READ_WRITE, MAX_STORAGE_SIZE_MB = 500, DATA_FLUSH_INTERVAL_SECONDS = 900, INTERVAL_LENGTH_MINUTES = 15, MAX_PLANS_PER_QUERY = 200, SIZE_BASED_CLEANUP_MODE = AUTO, QUERY_CAPTURE_MODE = AUTO, CLEANUP_POLICY = (STALE_QUERY_THRESHOLD_DAYS = 30), WAIT_STATS_CAPTURE_MODE = ON);",
 		`ALTER AUTHORIZATION ON DATABASE::[Sales] TO [CORP\o'neil];`,
@@ -315,5 +400,120 @@ func TestScriptDatabaseSettingsEdgeCases(t *testing.T) {
 	got = render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: o, qs: qs})
 	if strings.Contains(got, "QUERY_STORE = ON") || !strings.Contains(got, "QUERY_STORE not scripted") {
 		t.Errorf("unknown capture mode spliced in or not noted:\n%s", got)
+	}
+}
+
+// LEDGER = ON exists only on the CREATE, and shares its WITH list with
+// FILESTREAM's options.
+func TestScriptDatabaseLedger(t *testing.T) {
+	o := shippedDefaults()
+	o.IsLedger = true
+	got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: o})
+	if !strings.Contains(got, "CREATE DATABASE [Sales] COLLATE SQL_Latin1_General_CP1_CI_AS WITH LEDGER = ON;\n") {
+		t.Errorf("ledger CREATE wrong:\n%s", got)
+	}
+	o.NonTransactedAccess, o.DirectoryName = "READ_ONLY", "d"
+	got = render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: o})
+	if !strings.Contains(got, " WITH FILESTREAM (NON_TRANSACTED_ACCESS = READ_ONLY, DIRECTORY_NAME = N'd'), LEDGER = ON;\n") {
+		t.Errorf("FILESTREAM and LEDGER not one WITH list:\n%s", got)
+	}
+}
+
+// A TDE database restates its key from inside the database, then turns
+// encryption on — both before the owner and READ_ONLY, which would refuse
+// the key.
+func TestScriptDatabaseEncryption(t *testing.T) {
+	sc := scripterOverDatabase("Sales")
+	sc.db.IsReadOnly = true
+	got := render(t, sc, &databaseLayout{opts: shippedDefaults(),
+		tde: &DatabaseEncryptionKey{KeyAlgorithm: "AES", KeyLength: 256, EncryptionState: 3, ServerCertificate: "TDE]Cert"}})
+	want := "USE [Sales];\nGO\n" +
+		"CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = AES_256 ENCRYPTION BY SERVER CERTIFICATE [TDE]]Cert];\nGO\n" +
+		"USE [master];\nGO\n" +
+		"ALTER DATABASE [Sales] SET ENCRYPTION ON;\nGO\n" +
+		"ALTER AUTHORIZATION ON DATABASE::[Sales] TO [sa];\nGO\n" +
+		"ALTER DATABASE [Sales] SET MULTI_USER;\nGO\n" +
+		"ALTER DATABASE [Sales] SET READ_ONLY;\nGO\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("TDE wrong.\n--- got ---\n%s\n--- want suffix ---\n%s", got, want)
+	}
+	for _, tc := range []struct {
+		key  DatabaseEncryptionKey
+		want string
+	}{
+		{DatabaseEncryptionKey{KeyAlgorithm: "AES", KeyLength: 128, ServerAsymmetricKey: "ekm"},
+			"WITH ALGORITHM = AES_128 ENCRYPTION BY SERVER ASYMMETRIC KEY [ekm];"},
+		{DatabaseEncryptionKey{KeyAlgorithm: "TRIPLE_DES_3KEY", KeyLength: 192, ServerCertificate: "c"},
+			"WITH ALGORITHM = TRIPLE_DES_3KEY ENCRYPTION BY SERVER CERTIFICATE [c];"},
+		{DatabaseEncryptionKey{KeyAlgorithm: "AES", KeyLength: 256},
+			"-- The database encryption key's protector is not visible in master: encryption not scripted."},
+		{DatabaseEncryptionKey{KeyAlgorithm: "AES", KeyLength: 512, ServerCertificate: "c"},
+			"-- The database encryption key reports an algorithm with no CREATE form: encryption not scripted."},
+	} {
+		got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), tde: &tc.key})
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%+v: missing %q:\n%s", tc.key, tc.want, got)
+		}
+		if strings.HasPrefix(tc.want, "--") == strings.Contains(got, "SET ENCRYPTION ON") {
+			t.Errorf("%+v: SET ENCRYPTION ON written iff a key is:\n%s", tc.key, got)
+		}
+	}
+	got = render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), tdeRefused: true})
+	if !strings.Contains(got, "-- Encryption is on, and reading its key needs VIEW SERVER STATE: encryption not scripted.\n") ||
+		strings.Contains(got, "ENCRYPTION ON") {
+		t.Errorf("refused key read not noted:\n%s", got)
+	}
+	if got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults()}); strings.Contains(got, "USE [Sales]") {
+		t.Errorf("unencrypted database with default scoped configurations enters the database:\n%s", got)
+	}
+}
+
+// Scoped configurations: only what is away from its default, by
+// is_value_default from 2017 and by the documented defaults on 2016, and a
+// secondary value whenever one is set.
+func TestScriptDatabaseScopedConfigurations(t *testing.T) {
+	cfg := func(name, v, sec string, def bool) *DatabaseScopedConfig {
+		return &DatabaseScopedConfig{Name: name, Value: v, ValueForSecondary: sec, IsValueDefault: def}
+	}
+	scoped := []*DatabaseScopedConfig{
+		cfg("ELEVATE_ONLINE", "WHEN_SUPPORTED", "", false),
+		cfg("IDENTITY_CACHE", "1", "", true),
+		cfg("LEGACY_CARDINALITY_ESTIMATION", "1", "PRIMARY", false),
+		cfg("MAXDOP", "4", "1", false),
+		cfg("OPTIMIZE_FOR_AD_HOC_WORKLOADS", "1", "", false),
+		cfg("PARAMETER_SNIFFING", "1", "", true),
+		cfg("PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES", "0", "", false),
+		cfg("LEDGER_DIGEST_STORAGE_ENDPOINT", "https://x/y", "", false),
+	}
+	got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), scoped: scoped, major: 17})
+	stmt := func(s string) string { return "ALTER DATABASE SCOPED CONFIGURATION " + s + ";\nGO\n" }
+	want := "USE [Sales];\nGO\n" +
+		stmt("SET ELEVATE_ONLINE = WHEN_SUPPORTED") +
+		stmt("SET LEGACY_CARDINALITY_ESTIMATION = ON") +
+		stmt("FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION = PRIMARY") +
+		stmt("SET MAXDOP = 4") +
+		stmt("FOR SECONDARY SET MAXDOP = 1") +
+		stmt("SET OPTIMIZE_FOR_AD_HOC_WORKLOADS = ON") +
+		stmt("SET PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES = 0") +
+		"-- Database scoped configuration LEDGER_DIGEST_STORAGE_ENDPOINT reports a value with no SET form: not scripted.\n" +
+		"USE [master];\nGO\n" +
+		"ALTER AUTHORIZATION ON DATABASE::[Sales]"
+	if !strings.Contains(got, want) {
+		t.Errorf("scoped configurations wrong.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+
+	// 2016 has no is_value_default: every row reads false, and the
+	// documented defaults decide.
+	scoped16 := []*DatabaseScopedConfig{
+		cfg("LEGACY_CARDINALITY_ESTIMATION", "0", "", false),
+		cfg("MAXDOP", "2", "", false),
+		cfg("PARAMETER_SNIFFING", "0", "", false),
+		cfg("QUERY_OPTIMIZER_HOTFIXES", "0", "", false),
+		cfg("SOMETHING_NEWER", "1", "", false),
+	}
+	got = render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), scoped: scoped16, major: 13})
+	want = "USE [Sales];\nGO\n" + stmt("SET MAXDOP = 2") + stmt("SET PARAMETER_SNIFFING = OFF") + "USE [master];\nGO\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("2016 scoped configurations wrong.\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }

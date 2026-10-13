@@ -46,6 +46,12 @@ exercise the write, drop them; never mutate pre-existing objects.
 
 - **`go vet ./...` does not compile the `livedb` tests** — the 2026-09-17 `Ref`
   rename silently broke 17 of them. Hence the `-tags livedb` line above.
+- **Every write has an offline test of its exact statement.** Add the case to
+  the matching `script_*_write_test.go` table (or `drop_rename_test.go` for a
+  one-statement drop) in the same change; a write that reads before it writes
+  uses a row-serving fake driver instead (`login_map_test.go`). Mutation-check
+  it — swap a parameter name or drop a `dbo` default in the source and confirm
+  the case fails; a case built from the constant the code uses proves nothing.
 - **A DSN test asserts what the driver parses**, not only what gosmo writes
   (four Entra methods shipped unable to connect). Go through `buildConnector`
   and assert on `msdsn.Parse(dsn).Parameters`; `auth_test.go`'s `driverParams`
