@@ -279,3 +279,21 @@ func TestHasViewServerState(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockedRequestsScansEveryColumnAndPassesThePID(t *testing.T) {
+	s, c := activityServer(t, activityReply{key: "blocking_session_id", cols: cols(7), rows: [][]driver.Value{
+		{int64(61), "LCK_M_X", int64(12000), int64(57), "sa", "WS1", "SSMS"},
+	}})
+	got, err := s.BlockedRequests(t.Context(), 4242)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []BlockedRequest{{SessionID: 61, WaitType: "LCK_M_X", WaitTimeMS: 12000, BlockingSessionID: 57,
+		BlockerLogin: "sa", BlockerHost: "WS1", BlockerProgram: "SSMS"}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("BlockedRequests = %+v, want %+v", got, want)
+	}
+	if len(c.args) != 1 || c.args[0].Value != int64(4242) {
+		t.Errorf("args = %+v, want the client PID 4242", c.args)
+	}
+}

@@ -254,6 +254,56 @@ WHERE  s.is_user_process = 1`, nil,
 	return a, nil
 }
 
+// BlockedRequest is one request waiting on another session, as
+// BlockedRequests reports it.
+type BlockedRequest struct {
+	SessionID  int
+	WaitType   string
+	WaitTimeMS int64
+	// BlockingSessionID is the session it waits on directly, which may itself
+	// be waiting further down a chain.
+	BlockingSessionID int
+	// The blocking session's login, client host and program, as it reported
+	// them at login; empty when it has none (a system session).
+	BlockerLogin   string
+	BlockerHost    string
+	BlockerProgram string
+}
+
+// BlockedRequests returns the requests of one client process that are blocked
+// by another session, longest wait first. The process is the one whose
+// sessions report clientPID as their host_process_id from the caller's own
+// host (HOST_NAME()), so a client finds its own pooled connections waiting
+// with its process id — go-mssqldb sends os.Getpid() at login. The reading
+// connection is left out. The negative blocking ids (orphaned distributed
+// transactions, latch owners not yet identified) are not sessions and are
+// left out too.
+//
+// Without VIEW SERVER STATE the caller sees only its own session, so the
+// result is empty rather than an error — ask HasViewServerState to tell the
+// two apart.
+func (s *Server) BlockedRequests(ctx context.Context, clientPID int) ([]BlockedRequest, error) {
+	const q = `
+SELECT r.session_id, ISNULL(r.wait_type, N''), r.wait_time, r.blocking_session_id,
+       ISNULL(b.login_name, N''), ISNULL(b.host_name, N''), ISNULL(b.program_name, N'')
+FROM   sys.dm_exec_requests AS r
+JOIN   sys.dm_exec_sessions AS s ON s.session_id = r.session_id
+LEFT   JOIN sys.dm_exec_sessions AS b ON b.session_id = r.blocking_session_id
+WHERE  r.blocking_session_id > 0
+  AND  r.session_id <> @@SPID
+  AND  s.host_process_id = @p1
+  AND  s.host_name = HOST_NAME()
+ORDER  BY r.wait_time DESC, r.session_id`
+
+	rows, err := s.query(ctx, q, clientPID)
+	return scanRows(rows, err, "blocked requests", func(scan func(...any) error) (BlockedRequest, error) {
+		var b BlockedRequest
+		err := scan(&b.SessionID, &b.WaitType, &b.WaitTimeMS, &b.BlockingSessionID,
+			&b.BlockerLogin, &b.BlockerHost, &b.BlockerProgram)
+		return b, err
+	})
+}
+
 // HostCPU is the host's busy CPU at the newest scheduler-monitor record,
 // split between SQL Server and every other process. It is host-wide, unlike
 // a scheduler's load: a server pinned by another process shows only here.
