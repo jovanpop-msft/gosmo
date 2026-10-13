@@ -61,10 +61,11 @@ func txFrom(ctx context.Context, s *Server) *serverTx {
 // InTransaction runs fn in one transaction on s: every statement a gosmo
 // method issues through s with fn's context — writes and reads, server- and
 // database-scoped — runs on that transaction's one session. fn returning nil
-// commits; an error, a panic, or ctx (or s) ending first rolls back, and the
-// error is returned. Pool and workload-group DDL, CREATE and ALTER of most
-// securables and objects, and permission statements are transactional, so a
-// multi-step change either lands whole or not at all.
+// commits; an error, or ctx (or s) ending first, rolls back and the error is
+// returned. A panic in fn rolls back too, then keeps unwinding: it reaches the
+// caller as the same panic, not as an error. Pool and workload-group DDL,
+// CREATE and ALTER of most securables and objects, and permission statements
+// are transactional, so a multi-step change either lands whole or not at all.
 //
 // Reads go through the transaction too. They see its uncommitted writes, and
 // they have to: a read on another session of a catalog row the transaction

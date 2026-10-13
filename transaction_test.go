@@ -243,3 +243,31 @@ func TestInTransactionSendsUSEOnlyWhenMoving(t *testing.T) {
 		})
 	}
 }
+
+// A panic in fn rolls back and reaches the caller as the same panic, not an
+// error; the observer hears of nothing, since nothing committed.
+func TestInTransactionPanicRollsBackAndPropagates(t *testing.T) {
+	rec := &txRecDriver{}
+	s := &Server{db: sql.OpenDB(rec)}
+	defer s.db.Close()
+	ctx, seen := observed(context.Background())
+	type boom struct{}
+	defer func() {
+		if r := recover(); r != (boom{}) {
+			t.Errorf("recovered %v, want the panic fn raised", r)
+		}
+		if slices.Contains(rec.log, "COMMIT") || !slices.Contains(rec.log, "ROLLBACK") {
+			t.Errorf("sent %q, want a ROLLBACK and no COMMIT", rec.log)
+		}
+		if len(*seen) != 0 {
+			t.Errorf("observer heard %v after a rollback", *seen)
+		}
+	}()
+	_ = s.InTransaction(ctx, func(ctx context.Context) error {
+		if _, err := s.DatabaseRef("app").exec(ctx, "W1"); err != nil {
+			t.Fatal(err)
+		}
+		panic(boom{})
+	})
+	t.Error("InTransaction returned, want the panic to propagate")
+}
