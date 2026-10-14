@@ -290,6 +290,36 @@ func TestScriptDatabaseGatesAcceleratedDatabaseRecovery(t *testing.T) {
 	}
 }
 
+// ADR's version store off PRIMARY is restated with the ON, which is the
+// only form that sets it; on PRIMARY, with ADR off, or unread the line is
+// the bare one. A refused read says so above the bare ON.
+func TestScriptDatabaseVersionStoreFileGroup(t *testing.T) {
+	const refused = "-- Reading ADR's version store filegroup needs VIEW DATABASE PERFORMANCE STATE (VIEW SERVER STATE before 2022): PERSISTENT_VERSION_STORE_FILEGROUP not scripted.\n"
+	for _, tc := range []struct {
+		adr     bool
+		fg      string
+		refused bool
+		want    string
+	}{
+		{true, "PVS]fg", false, "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = ON (PERSISTENT_VERSION_STORE_FILEGROUP = [PVS]]fg]);\nGO\n"},
+		{true, "PRIMARY", false, "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = ON;\nGO\n"},
+		{true, "", false, "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = ON;\nGO\n"},
+		{false, "PVS", false, "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = OFF;\nGO\n"},
+		{true, "", true, refused + "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = ON;\nGO\n"},
+		{false, "", true, "ALTER DATABASE [Sales] SET ACCELERATED_DATABASE_RECOVERY = OFF;\nGO\n"},
+	} {
+		o := shippedDefaults()
+		o.AcceleratedDatabaseRecovery = tc.adr
+		got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: o, major: 17, pvsFileGroup: tc.fg, pvsRefused: tc.refused})
+		if !strings.Contains(got, tc.want) || strings.Count(got, "ACCELERATED_DATABASE_RECOVERY") != 1 {
+			t.Errorf("%+v: want %q once:\n%s", tc, tc.want, got)
+		}
+		if !tc.refused && strings.Contains(got, refused) || !tc.adr && strings.Contains(got, "--") {
+			t.Errorf("%+v: refusal noted wrongly:\n%s", tc, got)
+		}
+	}
+}
+
 // A read-only, restricted database restates both last — after the owner and
 // Query Store, which READ_ONLY would refuse.
 func TestScriptDatabaseReadOnlyAndUserAccessComeLast(t *testing.T) {
@@ -463,8 +493,33 @@ func TestScriptDatabaseEncryption(t *testing.T) {
 		strings.Contains(got, "ENCRYPTION ON") {
 		t.Errorf("refused key read not noted:\n%s", got)
 	}
+	// A key SET ENCRYPTION OFF left behind is created, and encryption is
+	// left off.
+	got = render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), tdeOff: true,
+		tde: &DatabaseEncryptionKey{KeyAlgorithm: "AES", KeyLength: 192, EncryptionState: 1, ServerCertificate: "c"}})
+	if !strings.Contains(got, "USE [Sales];\nGO\nCREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = AES_192 ENCRYPTION BY SERVER CERTIFICATE [c];\nGO\nUSE [master];\nGO\n") ||
+		strings.Contains(got, "ENCRYPTION ON") {
+		t.Errorf("key left by SET ENCRYPTION OFF wrong:\n%s", got)
+	}
 	if got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults()}); strings.Contains(got, "USE [Sales]") {
 		t.Errorf("unencrypted database with default scoped configurations enters the database:\n%s", got)
+	}
+}
+
+// The database's own extended properties are added from inside it, before
+// READ_ONLY would refuse them; with nothing else to set there, they alone
+// enter the database.
+func TestScriptDatabaseExtendedProperties(t *testing.T) {
+	sc := scripterOverDatabase("Sales")
+	sc.db.IsReadOnly = true
+	prop := "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'db';\nGO\n"
+	got := render(t, sc, &databaseLayout{opts: shippedDefaults(), extProps: prop})
+	want := "USE [Sales];\nGO\n" + prop + "USE [master];\nGO\n" +
+		"ALTER AUTHORIZATION ON DATABASE::[Sales] TO [sa];\nGO\n" +
+		"ALTER DATABASE [Sales] SET MULTI_USER;\nGO\n" +
+		"ALTER DATABASE [Sales] SET READ_ONLY;\nGO\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("database properties wrong.\n--- got ---\n%s\n--- want suffix ---\n%s", got, want)
 	}
 }
 

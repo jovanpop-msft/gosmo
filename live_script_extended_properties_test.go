@@ -3,15 +3,17 @@
 // Live round trips of what a table or module script carries beyond the
 // object itself: an indexed view's indexes, and the extended properties of
 // the object, its columns, parameters, indexes and constraints, each value
-// with its own base type.
+// with its own base type; of a database's and a schema's own properties; and
+// of every other securable's a single-object script restates them for.
 //
 //	go test -tags livedb . -run TestLiveScript.*ExtendedProperties -v \
 //	  -livedb 'sqlserver://sa:PASS@host?TrustServerCertificate=true'
 //
-// Creates and drops two throwaway databases; touches nothing else.
+// Creates and drops throwaway databases; touches nothing else.
 package gosmo
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -194,6 +196,285 @@ func TestLiveScriptIndexedViewAndExtendedProperties(t *testing.T) {
 
 	// Off, nothing is restated.
 	off := DefaultScriptOptions()
+	off.ExtendedProperties = false
+	for _, s := range scriptAll(NewScripter(src, off)) {
+		if strings.Contains(s, "sp_addextendedproperty") {
+			t.Errorf("ExtendedProperties off, but:\n%s", s)
+		}
+	}
+}
+
+// liveDBSchemaExtPropsOracle is liveExtPropsOracle for the database's own
+// properties (class 0) and its schemas' (class 3).
+const liveDBSchemaExtPropsOracle = `
+SELECT ep.class, CASE ep.class WHEN 3 THEN ISNULL(SCHEMA_NAME(ep.major_id), '?') ELSE '' END AS sch, ep.minor_id,
+       ep.name,
+       ISNULL(CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')), '') AS base,
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Precision')), -1) AS prec,
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Scale')), -1) AS scale,
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'MaxLength')), -1) AS len,
+       ISNULL(CONVERT(varchar(max), CONVERT(varbinary(max), ep.value), 1), 'NULL') AS bytes
+FROM   sys.extended_properties ep
+WHERE  ep.class IN (0, 3)`
+
+// A database's and a schema's own properties round-trip through
+// ScriptDatabase and ScriptSchema. The source is READ_ONLY, so the replay
+// fails unless the database's properties are added before its READ_ONLY.
+func TestLiveScriptDatabaseAndSchemaExtendedProperties(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	t.Cleanup(done)
+	const name, copyName = "gosmo_extprop_db", "gosmo_extprop_db_copy"
+	dropDBs := func() {
+		c := context.Background()
+		for _, n := range []string{copyName, name} {
+			db.ExecContext(c, "IF DB_ID('"+n+"') IS NOT NULL ALTER DATABASE ["+n+"] SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
+			db.ExecContext(c, "IF DB_ID('"+n+"') IS NOT NULL DROP DATABASE ["+n+"]")
+		}
+	}
+	dropDBs()
+	t.Cleanup(dropDBs)
+	src, _ := liveScratchDB(t, db, ctx, name)
+	liveExecIn(t, src, ctx,
+		`CREATE SCHEMA [Sa'les]`,
+		`CREATE SCHEMA bare`,
+		`EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'The database, it''s here'`,
+		`DECLARE @v sql_variant = CAST(3 AS int); EXEC sys.sp_addextendedproperty @name = N'Version', @value = @v`,
+		`EXEC sys.sp_addextendedproperty @name = N'Empty', @value = NULL`,
+		`EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'sales', @level0type = N'SCHEMA', @level0name = N'Sa''les'`,
+		`DECLARE @v sql_variant = CAST('2026-10-14T01:02:03.997' AS datetime);
+		 EXEC sys.sp_addextendedproperty @name = N'Since', @value = @v, @level0type = N'SCHEMA', @level0name = N'Sa''les'`,
+	)
+	if _, err := db.ExecContext(ctx, "ALTER DATABASE ["+name+"] SET READ_ONLY"); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultScriptOptions()
+	opts.IncludeHeaders = false
+	script, err := NewScripter(srv.DatabaseRef(name), opts).ScriptDatabase(ctx)
+	if err != nil {
+		t.Fatalf("ScriptDatabase: %v", err)
+	}
+	t.Logf("script:\n%s", script)
+	replayScript(t, ctx, db, strings.ReplaceAll(script, name, copyName))
+	// Writable again for the schemas.
+	if _, err := db.ExecContext(ctx, "ALTER DATABASE ["+copyName+"] SET READ_WRITE"); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := srv.DatabaseByName(ctx, copyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := NewScripter(src, opts)
+	for _, schema := range []string{"Sa'les", "bare"} {
+		s, err := sc.ScriptSchema(ctx, schema)
+		if err != nil {
+			t.Fatalf("ScriptSchema %s: %v", schema, err)
+		}
+		livePinnedRun(t, db, ctx, copyName, s)
+		// Guarded, a second run changes nothing.
+		livePinnedRun(t, db, ctx, copyName, s)
+	}
+	compare := func(what string) {
+		t.Helper()
+		want := liveRowsAsStrings(t, src, ctx, liveDBSchemaExtPropsOracle)
+		got := liveRowsAsStrings(t, cp, ctx, liveDBSchemaExtPropsOracle)
+		if len(want) != 5 {
+			t.Fatalf("%s: the source has %d properties, want 5", what, len(want))
+		}
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(want, got) {
+			t.Errorf("%s: properties differ.\nsource:\n  %s\nreplay:\n  %s", what, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
+		}
+	}
+	compare("CREATE")
+
+	// DROP AND CREATE of a schema takes its properties along and puts them
+	// back.
+	dc := opts
+	dc.Verb = ScriptDropAndCreate
+	s, err := NewScripter(src, dc).ScriptSchema(ctx, "Sa'les")
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePinnedRun(t, db, ctx, copyName, s)
+	compare("DROP AND CREATE")
+
+	off := opts
+	off.ExtendedProperties = false
+	for _, f := range []func(*Scripter) (string, error){
+		func(sc *Scripter) (string, error) { return sc.ScriptDatabase(ctx) },
+		func(sc *Scripter) (string, error) { return sc.ScriptSchema(ctx, "Sa'les") },
+	} {
+		s, err := f(NewScripter(src, off))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(s, "sp_addextendedproperty") {
+			t.Errorf("ExtendedProperties off, but:\n%s", s)
+		}
+	}
+}
+
+// liveOtherExtPropsOracle is liveExtPropsOracle for the securables outside
+// tables and modules, each named rather than numbered: users and roles
+// (class 4), types and table-type columns (6, 8), sequences, synonyms, DDL
+// triggers and constraints (1), indexes (7), XML schema collections (10),
+// partition schemes (20) and functions (21).
+const liveOtherExtPropsOracle = `
+SELECT ep.class,
+       CASE ep.class
+           WHEN 1  THEN ISNULL(OBJECT_SCHEMA_NAME(ep.major_id) + '.' + OBJECT_NAME(ep.major_id),
+                               (SELECT 'ddl.' + tr.name FROM sys.triggers tr WHERE tr.object_id = ep.major_id AND tr.parent_class = 0))
+           WHEN 4  THEN USER_NAME(ep.major_id)
+           WHEN 6  THEN (SELECT SCHEMA_NAME(ty.schema_id) + '.' + ty.name FROM sys.types ty WHERE ty.user_type_id = ep.major_id)
+           WHEN 8  THEN (SELECT SCHEMA_NAME(tt.schema_id) + '.' + tt.name + '.' + c.name FROM sys.table_types tt
+                         JOIN sys.columns c ON c.object_id = tt.type_table_object_id AND c.column_id = ep.minor_id
+                         WHERE tt.user_type_id = ep.major_id)
+           WHEN 7  THEN OBJECT_SCHEMA_NAME(ep.major_id) + '.' + OBJECT_NAME(ep.major_id) + '.' +
+                        (SELECT i.name FROM sys.indexes i WHERE i.object_id = ep.major_id AND i.index_id = ep.minor_id)
+           WHEN 10 THEN (SELECT SCHEMA_NAME(x.schema_id) + '.' + x.name FROM sys.xml_schema_collections x WHERE x.xml_collection_id = ep.major_id)
+           WHEN 20 THEN (SELECT ds.name FROM sys.data_spaces ds WHERE ds.data_space_id = ep.major_id)
+           WHEN 21 THEN (SELECT pf.name FROM sys.partition_functions pf WHERE pf.function_id = ep.major_id)
+       END AS target,
+       ep.name,
+       ISNULL(CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')), '') AS base,
+       ISNULL(CONVERT(varchar(max), CONVERT(varbinary(max), ep.value), 1), 'NULL') AS bytes
+FROM   sys.extended_properties ep
+WHERE  ep.class IN (1, 4, 6, 7, 8, 10, 20, 21)`
+
+// Each single-object script outside tables and modules restates its own
+// properties — and only its own: the check constraint and the index named
+// alike on one table each carry the other's name, so a script that filters
+// by name alone picks up the wrong one.
+func TestLiveScriptOtherSecurablesExtendedProperties(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	src, dropSrc := liveScratchDB(t, db, ctx, "gosmo_extprop_other_src")
+	defer dropSrc()
+	dst, dropDst := liveScratchDB(t, db, ctx, "gosmo_extprop_other_dst")
+	defer dropDst()
+
+	add := func(name, value string, levels ...string) string {
+		s := "DECLARE @v sql_variant = " + value + "; EXEC sys.sp_addextendedproperty @name = N'" + name + "', @value = @v"
+		for i := 0; i < len(levels); i += 2 {
+			s += ", @level" + string(rune('0'+i/2)) + "type = N'" + levels[i] + "', @level" + string(rune('0'+i/2)) +
+				"name = N'" + strings.ReplaceAll(levels[i+1], "'", "''") + "'"
+		}
+		return s
+	}
+	tables := []string{
+		`CREATE TABLE dbo.P (ID int NOT NULL, Code int NOT NULL)`,
+		`CREATE TABLE dbo.C (ID int NOT NULL, PID int NOT NULL, Qty int NOT NULL)`,
+	}
+	liveExecIn(t, src, ctx, tables...)
+	liveExecIn(t, dst, ctx, tables...)
+	liveExecIn(t, src, ctx,
+		`ALTER TABLE dbo.P ADD CONSTRAINT PK_P PRIMARY KEY (ID), CONSTRAINT UQ_P UNIQUE (Code)`,
+		`ALTER TABLE dbo.C ADD CONSTRAINT [CK_C'Qty] CHECK (Qty > 0), CONSTRAINT FK_C_P FOREIGN KEY (PID) REFERENCES dbo.P (ID)`,
+		`CREATE INDEX [CK_C'Qty] ON dbo.C (Qty)`,
+		`CREATE USER [u'1] WITHOUT LOGIN`,
+		`CREATE ROLE r1`,
+		`CREATE TYPE dbo.Alias FROM int NOT NULL`,
+		`CREATE TYPE dbo.TT AS TABLE (A int, B nvarchar(10))`,
+		`CREATE SEQUENCE dbo.Seq AS int START WITH 1`,
+		`CREATE SYNONYM dbo.Syn FOR dbo.P`,
+		`CREATE XML SCHEMA COLLECTION dbo.XC AS N'<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:element name="a" type="xsd:string"/></xsd:schema>'`,
+		`CREATE PARTITION FUNCTION PF (int) AS RANGE LEFT FOR VALUES (1, 10)`,
+		`CREATE PARTITION SCHEME PS AS PARTITION PF ALL TO ([PRIMARY])`,
+		`CREATE TRIGGER ddl_tr ON DATABASE FOR CREATE_TABLE AS SET NOCOUNT ON`,
+		add("MS_Description", "N'user, it''s'", "USER", "u'1"),
+		add("Version", "CAST(2 AS int)", "USER", "u'1"),
+		add("MS_Description", "N'role'", "USER", "r1"),
+		add("MS_Description", "N'alias'", "SCHEMA", "dbo", "TYPE", "Alias"),
+		add("MS_Description", "N'table type'", "SCHEMA", "dbo", "TYPE", "TT"),
+		add("MS_Description", "N'tt column b'", "SCHEMA", "dbo", "TYPE", "TT", "COLUMN", "B"),
+		add("Empty", "NULL", "SCHEMA", "dbo", "TYPE", "TT", "COLUMN", "A"),
+		add("MS_Description", "N'sequence'", "SCHEMA", "dbo", "SEQUENCE", "Seq"),
+		add("MS_Description", "N'synonym'", "SCHEMA", "dbo", "SYNONYM", "Syn"),
+		add("MS_Description", "N'xml'", "SCHEMA", "dbo", "XML SCHEMA COLLECTION", "XC"),
+		add("MS_Description", "N'pf'", "PARTITION FUNCTION", "PF"),
+		add("MS_Description", "N'ps'", "PARTITION SCHEME", "PS"),
+		add("MS_Description", "N'ddl'", "TRIGGER", "ddl_tr"),
+		add("MS_Description", "N'pk constraint'", "SCHEMA", "dbo", "TABLE", "P", "CONSTRAINT", "PK_P"),
+		add("MS_Description", "N'pk index'", "SCHEMA", "dbo", "TABLE", "P", "INDEX", "PK_P"),
+		add("MS_Description", "N'uq'", "SCHEMA", "dbo", "TABLE", "P", "CONSTRAINT", "UQ_P"),
+		add("MS_Description", "N'check'", "SCHEMA", "dbo", "TABLE", "C", "CONSTRAINT", "CK_C'Qty"),
+		add("MS_Description", "N'index named as the check'", "SCHEMA", "dbo", "TABLE", "C", "INDEX", "CK_C'Qty"),
+		add("MS_Description", "N'fk'", "SCHEMA", "dbo", "TABLE", "C", "CONSTRAINT", "FK_C_P"),
+	)
+
+	// In dependency order: the partition function before its scheme, the
+	// referenced key before the foreign key.
+	scriptAll := func(sc *Scripter) []string {
+		t.Helper()
+		var out []string
+		for _, f := range []func() (string, error){
+			func() (string, error) { return sc.ScriptUser(ctx, "u'1") },
+			func() (string, error) { return sc.ScriptDatabaseRole(ctx, "r1") },
+			func() (string, error) { return sc.ScriptUserDefinedDataType(ctx, "dbo", "Alias") },
+			func() (string, error) { return sc.ScriptUserDefinedTableType(ctx, "dbo", "TT") },
+			func() (string, error) { return sc.ScriptSequence(ctx, "dbo", "Seq") },
+			func() (string, error) { return sc.ScriptSynonym(ctx, "dbo", "Syn") },
+			func() (string, error) { return sc.ScriptXMLSchemaCollection(ctx, "dbo", "XC") },
+			func() (string, error) { return sc.ScriptPartitionFunction(ctx, "PF") },
+			func() (string, error) { return sc.ScriptPartitionScheme(ctx, "PS") },
+			func() (string, error) { return sc.ScriptDatabaseTrigger(ctx, "ddl_tr") },
+			func() (string, error) { return sc.ScriptIndex(ctx, "dbo", "P", "PK_P") },
+			func() (string, error) { return sc.ScriptIndex(ctx, "dbo", "P", "UQ_P") },
+			func() (string, error) { return sc.ScriptCheckConstraint(ctx, "dbo", "C", "CK_C'Qty") },
+			func() (string, error) { return sc.ScriptIndex(ctx, "dbo", "C", "CK_C'Qty") },
+			func() (string, error) { return sc.ScriptForeignKey(ctx, "dbo", "C", "FK_C_P") },
+		} {
+			s, err := f()
+			if err != nil {
+				t.Fatalf("script: %v", err)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	compare := func(what string) {
+		t.Helper()
+		want := liveRowsAsStrings(t, src, ctx, liveOtherExtPropsOracle)
+		got := liveRowsAsStrings(t, dst, ctx, liveOtherExtPropsOracle)
+		if len(want) != 19 {
+			t.Fatalf("%s: the source has %d properties, want 19:\n  %s", what, len(want), strings.Join(want, "\n  "))
+		}
+		slices.Sort(want)
+		slices.Sort(got)
+		if !slices.Equal(want, got) {
+			t.Errorf("%s: properties differ.\nsource:\n  %s\nreplay:\n  %s", what, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
+		}
+	}
+
+	opts := DefaultScriptOptions()
+	opts.IncludeHeaders = false
+	creates := scriptAll(NewScripter(src, opts))
+	for _, s := range creates {
+		livePinnedRun(t, db, ctx, dst.Name, s)
+	}
+	compare("CREATE")
+
+	// DROP AND CREATE of everything nothing else depends on takes the
+	// properties along and puts them back. Not the alias and table types,
+	// the partition function and scheme, or the referenced primary key.
+	dc := opts
+	dc.Verb = ScriptDropAndCreate
+	for i, s := range scriptAll(NewScripter(src, dc)) {
+		switch i {
+		case 2, 3, 7, 8, 10:
+			continue
+		}
+		livePinnedRun(t, db, ctx, dst.Name, s)
+	}
+	compare("DROP AND CREATE")
+
+	off := opts
 	off.ExtendedProperties = false
 	for _, s := range scriptAll(NewScripter(src, off)) {
 		if strings.Contains(s, "sp_addextendedproperty") {

@@ -639,7 +639,8 @@ WHERE name = 'contained database authentication'`).Scan(&contained); err != nil 
 
 // What is set from inside the database round-trips: a TDE key under a
 // throwaway server certificate with encryption on, scoped configurations
-// away from their default (one FOR SECONDARY), LEDGER = ON from 2022, and
+// away from their default (one FOR SECONDARY), LEDGER = ON from 2022, ADR's
+// version store on its own filegroup from 2019 (read from a DMV), and
 // READ_ONLY after all of them. Encryption also encrypts tempdb until the
 // instance restarts — accepted for the test instances (2026-10-13).
 func TestLiveScriptDatabaseInDatabaseSettingsRoundTrip(t *testing.T) {
@@ -695,6 +696,15 @@ func TestLiveScriptDatabaseInDatabaseSettingsRoundTrip(t *testing.T) {
 	for _, sc := range scoped {
 		setup = append(setup, "USE ["+name+"]; ALTER DATABASE SCOPED CONFIGURATION SET "+sc)
 	}
+	if major >= 15 {
+		setup = append(setup,
+			"ALTER DATABASE ["+name+"] ADD FILEGROUP [pvs]",
+			"DECLARE @p nvarchar(400) = CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(400)); "+
+				"EXEC (N'ALTER DATABASE ["+name+"] ADD FILE (NAME = N''"+name+"_pvs'', FILENAME = N''' + @p + N'"+name+"_pvs.ndf'') TO FILEGROUP [pvs]')",
+			"ALTER DATABASE ["+name+"] SET ACCELERATED_DATABASE_RECOVERY = ON (PERSISTENT_VERSION_STORE_FILEGROUP = [pvs])")
+	} else {
+		t.Log("pre-2019 instance: ADR's version store filegroup is not covered")
+	}
 	setup = append(setup, "USE [master]; ALTER DATABASE ["+name+"] SET ENCRYPTION ON")
 	for _, q := range setup {
 		if _, err := conn.ExecContext(ctx, q); err != nil {
@@ -727,11 +737,15 @@ func TestLiveScriptDatabaseInDatabaseSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("ScriptDatabase: %v", err)
 	}
 	t.Logf("script:\n%s", script)
-	for _, w := range []string{
+	wants := []string{
 		"CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = AES_128 ENCRYPTION BY SERVER CERTIFICATE [" + cert + "];",
 		"ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET MAXDOP = 1;",
 		"ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 3;",
-	} {
+	}
+	if major >= 15 {
+		wants = append(wants, "SET ACCELERATED_DATABASE_RECOVERY = ON (PERSISTENT_VERSION_STORE_FILEGROUP = [pvs]);")
+	}
+	for _, w := range wants {
 		if !strings.Contains(script, w) {
 			t.Errorf("script missing %q", w)
 		}
@@ -761,6 +775,15 @@ FROM sys.database_scoped_configurations ORDER BY name`)
 		}
 		defer rows.Close()
 		out := []string{head}
+		if major >= 15 {
+			var pvs string
+			if err := db.QueryRowContext(ctx, `USE [`+n+`];
+SELECT CONCAT('pvs=', fg.name) FROM sys.dm_tran_persistent_version_store_stats s
+JOIN sys.filegroups fg ON fg.data_space_id = s.pvs_filegroup_id WHERE s.database_id = DB_ID()`).Scan(&pvs); err != nil {
+				t.Fatalf("version store filegroup of %s: %v", n, err)
+			}
+			out = append(out, pvs)
+		}
 		for rows.Next() {
 			var s string
 			if err := rows.Scan(&s); err != nil {
@@ -777,5 +800,153 @@ FROM sys.database_scoped_configurations ORDER BY name`)
 	t.Logf("source settings:\n%s", want)
 	if got != want {
 		t.Errorf("replayed settings differ:\n--- replay ---\n%s\n--- source ---\n%s", got, want)
+	}
+}
+
+// The layout reads a database's options and collation from inside it: one
+// AUTO_CLOSE has closed reports NULL for its collation, TARGET_RECOVERY_TIME,
+// DELAYED_DURABILITY and ADR at server scope. The options round trip covers
+// the whole script, but its file reads open the database first, so this
+// calls the two in-database reads directly on a closed database. Read at
+// server scope (Options), the options half fails here.
+func TestLiveScriptDatabaseReadsAClosedDatabaseFromInside(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	t.Cleanup(done)
+
+	const name = "gosmo_scriptdb_closed"
+	srv, err := NewServer(ctx, db)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	major := srv.Info().VersionMajor
+	_, drop := liveScratchDB(t, db, ctx, name)
+	t.Cleanup(drop)
+	set := "ALTER DATABASE [" + name + "] SET "
+	setup := []string{set + "TARGET_RECOVERY_TIME = 90 SECONDS", set + "DELAYED_DURABILITY = ALLOWED", set + "AUTO_CLOSE ON"}
+	if major >= 15 {
+		setup = append(setup, set+"ACCELERATED_DATABASE_RECOVERY = ON")
+	}
+	for _, q := range setup {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("setup %q: %v", q, err)
+		}
+	}
+	// Each read below opens the database, so each waits for it to close.
+	waitClosed := func() {
+		t.Helper()
+		for range 80 {
+			var coll sql.NullString
+			if err := db.QueryRowContext(ctx, "SELECT collation_name FROM sys.databases WHERE name = @p1", name).Scan(&coll); err != nil {
+				t.Fatalf("collation of %s: %v", name, err)
+			}
+			if !coll.Valid {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		t.Fatalf("%s never auto-closed: nothing here would be covered", name)
+	}
+
+	d := srv.DatabaseRef(name)
+	waitClosed()
+	o, err := d.readOptions(ctx, d.queryRow)
+	if err != nil {
+		t.Fatalf("options of a closed database: %v", err)
+	}
+	if o.TargetRecoveryTimeSeconds != 90 || o.DelayedDurability != "ALLOWED" || major >= 15 && !o.AcceleratedDatabaseRecovery {
+		t.Errorf("options of a closed database read as unknown: TARGET_RECOVERY_TIME %d, DELAYED_DURABILITY %q, ADR %v",
+			o.TargetRecoveryTimeSeconds, o.DelayedDurability, o.AcceleratedDatabaseRecovery)
+	}
+	waitClosed()
+	if c, err := d.inDatabaseCollation(ctx); err != nil || c == "" {
+		t.Errorf("collation of a closed database: %q, %v", c, err)
+	}
+}
+
+// A key SET ENCRYPTION OFF left behind is restated, and encryption is not
+// turned on: the replay has the same key, algorithm and protector, and is
+// not encrypted.
+func TestLiveScriptDatabaseKeyLeftByEncryptionOff(t *testing.T) {
+	db, ctx, done := liveDBTimeout(t, 3*time.Minute)
+	t.Cleanup(done)
+
+	const name, copyName, cert = "gosmo_scriptdb_tdeoff", "gosmo_scriptdb_tdeoff_copy", "gosmo_tdecert_tdeoff"
+	srv, err := NewServer(ctx, db)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(ensureMasterKey(t, srv, ctx))
+	dropCert := func() {
+		db.ExecContext(context.Background(), "USE [master]; IF CERT_ID('"+cert+"') IS NOT NULL DROP CERTIFICATE ["+cert+"]")
+	}
+	dropDBs := func() {
+		c := context.Background()
+		for _, n := range []string{copyName, name} {
+			db.ExecContext(c, "IF DB_ID('"+n+"') IS NOT NULL ALTER DATABASE ["+n+"] SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
+			db.ExecContext(c, "IF DB_ID('"+n+"') IS NOT NULL DROP DATABASE ["+n+"]")
+		}
+	}
+	dropDBs()
+	dropCert()
+	t.Cleanup(dropCert) // after the databases, whose keys it protects
+	t.Cleanup(dropDBs)
+
+	waitState := func(n string, want int) {
+		t.Helper()
+		for range 120 {
+			var state int
+			if err := db.QueryRowContext(ctx, "SELECT encryption_state FROM sys.dm_database_encryption_keys WHERE database_id = DB_ID(@p1)", n).Scan(&state); err != nil {
+				t.Fatalf("encryption state of %s: %v", n, err)
+			}
+			if state == want {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		t.Fatalf("%s never reached encryption state %d", n, want)
+	}
+	for _, q := range []string{
+		"USE [master]; CREATE CERTIFICATE [" + cert + "] WITH SUBJECT = 'gosmo ScriptDatabase TDE off test'",
+		"CREATE DATABASE [" + name + "]",
+		"USE [" + name + "]; CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = AES_192 ENCRYPTION BY SERVER CERTIFICATE [" + cert + "]",
+		"USE [master]; ALTER DATABASE [" + name + "] SET ENCRYPTION ON",
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("setup %.100q: %v", q, err)
+		}
+	}
+	waitState(name, 3)
+	if _, err := db.ExecContext(ctx, "ALTER DATABASE ["+name+"] SET ENCRYPTION OFF"); err != nil {
+		t.Fatalf("ENCRYPTION OFF: %v", err)
+	}
+	waitState(name, 1)
+
+	opts := DefaultScriptOptions()
+	opts.IncludeHeaders = false
+	script, err := NewScripter(srv.DatabaseRef(name), opts).ScriptDatabase(ctx)
+	if err != nil {
+		t.Fatalf("ScriptDatabase: %v", err)
+	}
+	t.Logf("script:\n%s", script)
+	if !strings.Contains(script, "CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = AES_192 ENCRYPTION BY SERVER CERTIFICATE ["+cert+"];") ||
+		strings.Contains(script, "ENCRYPTION ON") {
+		t.Fatalf("script does not restate the key alone")
+	}
+	replayScript(t, ctx, db, strings.ReplaceAll(script, name, copyName))
+
+	key := func(n string) string {
+		var s string
+		if err := db.QueryRowContext(ctx, `
+SELECT CONCAT(d.is_encrypted, '|', k.encryption_state, '|', k.key_algorithm, k.key_length, '|', c.name)
+FROM   sys.databases d
+LEFT   JOIN sys.dm_database_encryption_keys k ON k.database_id = d.database_id
+LEFT   JOIN master.sys.certificates c ON c.thumbprint = k.encryptor_thumbprint
+WHERE  d.name = @p1`, n).Scan(&s); err != nil {
+			t.Fatalf("key of %s: %v", n, err)
+		}
+		return s
+	}
+	if want, got := key(name), key(copyName); got != want || want != "0|1|AES192|"+cert {
+		t.Errorf("replayed key %q, source %q", got, want)
 	}
 }

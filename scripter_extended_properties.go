@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -117,24 +118,126 @@ ORDER  BY p.kind, p.ord, ep.name`
 	})
 }
 
+// extendedPropertiesAt reads the extended properties on one entry of
+// sys.extended_properties's (class, major_id, minor_id) — a securable that
+// is not a schema-scoped object or one of its children, which
+// objectExtendedProperties covers — at level, which the caller names: the
+// catalog keys the property by id, and the statement that restates it by
+// name. A database's own (class 0) take the zero level.
+func (d *Database) extendedPropertiesAt(ctx context.Context, class, majorID, minorID int, level ExtendedPropertyLevel) ([]scriptedExtProp, error) {
+	q := `
+SELECT ep.name,
+       ISNULL(CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')), ''),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Precision')), 0),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Scale')), 0),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'MaxLength')), 0),
+       ` + extPropValueText + `
+FROM   sys.extended_properties ep
+WHERE  ep.class = @p1 AND ep.major_id = @p2 AND ep.minor_id = @p3
+ORDER  BY ep.name`
+	rows, err := d.query(ctx, q, class, majorID, minorID)
+	return scanRows(rows, err, "extended properties to script", func(scan func(...any) error) (scriptedExtProp, error) {
+		p := scriptedExtProp{level: level}
+		err := scan(&p.name, &p.baseType, &p.precision, &p.scale, &p.maxLength, &p.value)
+		return p, err
+	})
+}
+
+// typeColumnExtendedProperties reads the properties on a table type's
+// columns (class 8, keyed by the type's user_type_id and the column's id in
+// the type's internal table), each at SCHEMA/TYPE/COLUMN level, in column
+// order.
+func (d *Database) typeColumnExtendedProperties(ctx context.Context, t *UserDefinedTableType) ([]scriptedExtProp, error) {
+	q := `
+SELECT c.name, ep.name,
+       ISNULL(CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')), ''),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Precision')), 0),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'Scale')), 0),
+       ISNULL(CONVERT(int, SQL_VARIANT_PROPERTY(ep.value, 'MaxLength')), 0),
+       ` + extPropValueText + `
+FROM   sys.extended_properties ep
+JOIN   sys.columns c ON c.object_id = @p2 AND c.column_id = ep.minor_id
+WHERE  ep.class = 8 AND ep.major_id = @p1
+ORDER  BY c.column_id, ep.name`
+	rows, err := d.query(ctx, q, t.UserTypeID, t.TypeTableObjectID)
+	return scanRows(rows, err, "extended properties to script", func(scan func(...any) error) (scriptedExtProp, error) {
+		p := scriptedExtProp{level: ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: t.Schema,
+			Level1Type: "TYPE", Level1Name: t.Name, Level2Type: "COLUMN"}}
+		err := scan(&p.level.Level2Name, &p.name, &p.baseType, &p.precision, &p.scale, &p.maxLength, &p.value)
+		return p, err
+	})
+}
+
+// wantsExtendedProperties reports whether a script restates extended
+// properties: when the options ask for them and the script creates anything
+// — a DROP alone leaves them out.
+func (sc *Scripter) wantsExtendedProperties() bool {
+	return sc.opts.ExtendedProperties && sc.opts.verb() != ScriptDrop
+}
+
 // scriptExtendedProperties appends the extended-property statements for
-// objectID to a script, when the options ask for them and the script creates
-// anything: a DROP alone leaves them out. skip drops properties at levels the
-// script does not create (nil keeps every one).
-//
-// Under ScriptAlter every statement is guarded whatever IncludeIfNotExists
-// says: ALTER keeps some of an object's properties and drops others with what
-// it recreates (a view's indexes), and the guard restores exactly the missing
-// ones.
+// objectID to a script (see wantsExtendedProperties). skip drops properties
+// at levels the script does not create (nil keeps every one).
 func (sc *Scripter) scriptExtendedProperties(ctx context.Context, objectID int, constraints bool,
 	skip func(scriptedExtProp) bool) (string, error) {
-	if !sc.opts.ExtendedProperties || sc.opts.verb() == ScriptDrop || objectID == 0 {
+	if !sc.wantsExtendedProperties() || objectID == 0 {
 		return "", nil
 	}
 	props, err := sc.db.objectExtendedProperties(ctx, objectID, constraints)
 	if err != nil {
 		return "", err
 	}
+	return sc.renderExtendedProperties(props, skip), nil
+}
+
+// scriptExtendedPropertiesAt is scriptExtendedProperties for one
+// extendedPropertiesAt entry.
+func (sc *Scripter) scriptExtendedPropertiesAt(ctx context.Context, class, majorID, minorID int, level ExtendedPropertyLevel) (string, error) {
+	if !sc.wantsExtendedProperties() {
+		return "", nil
+	}
+	props, err := sc.db.extendedPropertiesAt(ctx, class, majorID, minorID, level)
+	if err != nil {
+		return "", err
+	}
+	return sc.renderExtendedProperties(props, nil), nil
+}
+
+// withExtendedPropertiesAt appends to script, the script of one securable,
+// the properties scriptExtendedPropertiesAt reads for it; what names the
+// securable in an error ("sequence [dbo].[s]").
+func (sc *Scripter) withExtendedPropertiesAt(ctx context.Context, script, what string, class, majorID, minorID int,
+	level ExtendedPropertyLevel) (string, error) {
+	props, err := sc.scriptExtendedPropertiesAt(ctx, class, majorID, minorID, level)
+	if err != nil {
+		return "", fmt.Errorf("gosmo: script %s: %w", what, err)
+	}
+	return script + props, nil
+}
+
+// withTableChildExtendedProperties appends to script, the script of one
+// index or constraint on table, that child's own properties: those
+// objectExtendedProperties reads for the table at one of levels (INDEX,
+// CONSTRAINT) under name. A primary key or unique constraint can carry them
+// at both — on its index and on the constraint.
+func (sc *Scripter) withTableChildExtendedProperties(ctx context.Context, script string, t *Table, name string,
+	levels ...string) (string, error) {
+	props, err := sc.scriptExtendedProperties(ctx, t.ObjectID, true, func(p scriptedExtProp) bool {
+		return p.level.Level2Name != name || !slices.Contains(levels, p.level.Level2Type)
+	})
+	if err != nil {
+		return "", fmt.Errorf("gosmo: script %s on %s: %w", quoteIdent(name), t.FullName(), err)
+	}
+	return script + props, nil
+}
+
+// renderExtendedProperties renders props but those skip drops.
+//
+// Under ScriptAlter every statement is guarded whatever IncludeIfNotExists
+// says: ALTER keeps some of an object's properties and drops others with what
+// it recreates (a view's indexes), and the guard restores exactly the missing
+// ones.
+func (sc *Scripter) renderExtendedProperties(props []scriptedExtProp, skip func(scriptedExtProp) bool) string {
 	guard := sc.opts.IncludeIfNotExists || sc.opts.verb() == ScriptAlter
 	var sb strings.Builder
 	for _, p := range props {
@@ -142,7 +245,7 @@ func (sc *Scripter) scriptExtendedProperties(ctx context.Context, objectID int, 
 			sb.WriteString(extendedPropertyStatement(p, guard))
 		}
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // extendedPropertyStatement renders one EXEC sys.sp_addextendedproperty, in
@@ -156,13 +259,15 @@ func (sc *Scripter) scriptExtendedProperties(ctx context.Context, objectID int, 
 // argument cannot be an expression, and N'5' would make an int property an
 // nvarchar one. A base type with no conversion here is a comment rather than
 // a statement with the wrong type.
+//
+// The levels are written down to the first empty type: a database's own
+// property has none, a schema's or a user's only level 0.
 func extendedPropertyStatement(p scriptedExtProp, guard bool) string {
 	l := p.level
-	levels := []string{"SCHEMA", l.Level0Name, l.Level1Type, l.Level1Name, l.Level2Type, l.Level2Name}
-	args := fmt.Sprintf("@level0type = N'SCHEMA', @level0name = %s, @level1type = %s, @level1name = %s",
-		QuoteLiteral(l.Level0Name), QuoteLiteral(l.Level1Type), QuoteLiteral(l.Level1Name))
-	if l.Level2Type != "" {
-		args += fmt.Sprintf(", @level2type = %s, @level2name = %s", QuoteLiteral(l.Level2Type), QuoteLiteral(l.Level2Name))
+	levels := []string{l.Level0Type, l.Level0Name, l.Level1Type, l.Level1Name, l.Level2Type, l.Level2Name}
+	var args string
+	for i := 0; i < len(levels) && levels[i] != ""; i += 2 {
+		args += fmt.Sprintf(", @level%[1]dtype = %[2]s, @level%[1]dname = %[3]s", i/2, QuoteLiteral(levels[i]), QuoteLiteral(levels[i+1]))
 	}
 
 	var sb strings.Builder
@@ -180,8 +285,12 @@ func extendedPropertyStatement(p scriptedExtProp, guard bool) string {
 					where = append(where, quoteIdent(levels[i]))
 				}
 			}
+			on := "the database"
+			if len(where) > 0 {
+				on = strings.Join(where, ".")
+			}
 			return fmt.Sprintf("-- Extended property %s on %s holds a %s value with no literal form: not scripted.\n",
-				commentSafe(QuoteLiteral(p.name)), commentSafe(strings.Join(where, ".")), commentSafe(p.baseType))
+				commentSafe(QuoteLiteral(p.name)), commentSafe(on), commentSafe(p.baseType))
 		}
 		fmt.Fprintf(&sb, "DECLARE @value sql_variant = CONVERT(%s, %s%s);\n", typ, QuoteLiteral(p.value.String), style)
 		value = "@value"
@@ -197,7 +306,7 @@ func extendedPropertyStatement(p scriptedExtProp, guard bool) string {
 		fmt.Fprintf(&sb, "IF NOT EXISTS (SELECT 1 FROM sys.fn_listextendedproperty(%s, %s))\n    ",
 			QuoteLiteral(p.name), strings.Join(lits, ", "))
 	}
-	fmt.Fprintf(&sb, "EXEC sys.sp_addextendedproperty @name = %s, @value = %s, %s;\nGO\n", QuoteLiteral(p.name), value, args)
+	fmt.Fprintf(&sb, "EXEC sys.sp_addextendedproperty @name = %s, @value = %s%s;\nGO\n", QuoteLiteral(p.name), value, args)
 	return sb.String()
 }
 

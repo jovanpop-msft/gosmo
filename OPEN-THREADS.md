@@ -150,24 +150,31 @@ value, as SSMS does (2026-10-13, so the replaying instance's `model` no longer
 leaks in), change tracking when on, Query Store, then under `USE [db]` the TDE
 key and the scoped configurations away from their default, `SET ENCRYPTION
 ON`, the owner, and last the user access and `READ_ONLY`/`READ_WRITE`. `ACCELERATED_DATABASE_RECOVERY` is
-written for a 2019+ source only. A snapshot scripts as `CREATE DATABASE … ON
+written for a 2019+ source only, with `PERSISTENT_VERSION_STORE_FILEGROUP`
+when ADR is on and its version store is off `PRIMARY` (read from
+`sys.dm_tran_persistent_version_store_stats` inside the database; a refused
+read leaves a comment). A snapshot scripts as `CREATE DATABASE … ON
 (…) AS SNAPSHOT OF [source]` and nothing more. The options are read from
 inside the database: one `AUTO_CLOSE` has closed reports NULL at server
 scope for its collation, `TARGET_RECOVERY_TIME`, `DELAYED_DURABILITY` and
-ADR. `TestLiveScriptDatabaseFileLayoutRoundTrips`,
+ADR — `TestLiveScriptDatabaseReadsAClosedDatabaseFromInside` calls both
+reads on a closed database and fails at server scope.
+`TestLiveScriptDatabaseFileLayoutRoundTrips`,
 `TestLiveScriptDatabaseOptionsRoundTrip`,
 `TestLiveScriptDatabaseSnapshotRoundTrips`,
 `TestLiveScriptDatabaseContainmentRoundTrips` and
-`TestLiveScriptDatabaseInDatabaseSettingsRoundTrip` replay the script and
+`TestLiveScriptDatabaseInDatabaseSettingsRoundTrip` and
+`TestLiveScriptDatabaseKeyLeftByEncryptionOff` replay the script and
 compare the catalog (green on 13, 14, 17; FILESTREAM, ADR and LEDGER only on
 17). The containment test turns "contained database authentication" on and
 back off; the TDE one leaves tempdb encrypted until the instance restarts.
 Knowingly left out, each of which a replay silently gets wrong rather than
 refuses:
 
-- **TDE**: the key is read only when encryption is on (its DMV needs VIEW
-  SERVER STATE, which every script would otherwise need); a key left behind
-  by `SET ENCRYPTION OFF` is not scripted. The protecting certificate or
+- **TDE**: the key is read whether encryption is on or not — a key left
+  behind by `SET ENCRYPTION OFF` is created without `SET ENCRYPTION ON`. Its
+  DMV needs VIEW SERVER STATE; a refusal is silent for an unencrypted
+  database, so a key left behind is not scripted without it. The protecting certificate or
   asymmetric key is named, not scripted — it must exist, with its private
   key, where the script runs. Without VIEW SERVER STATE the script says so in
   a comment and leaves encryption out. `TRIPLE_DES_3KEY` and an asymmetric-key
@@ -178,12 +185,9 @@ refuses:
   a bare keyword (Azure's `LEDGER_DIGEST_STORAGE_ENDPOINT` URL) gets a
   comment, not a statement. The value's sql_variant base type decides its
   spelling (`bit` → OFF/ON, an integer type → the number), the same on 2016.
-- **ADR's `PERSISTENT_VERSION_STORE_FILEGROUP`** is not scripted: a source
-  with the version store off `PRIMARY` replays with it on `PRIMARY`.
-- **The in-database options read has no live test that fails without it**:
-  the layout's file reads open the database just before, so the server-scope
-  read it replaced also passes. The live test does catch the collation
-  fallback and `Options` scanning NULL on a closed database.
+- **ADR's version store filegroup on 2019 and 2022 is untested**: no such
+  instance exists here, and the DMV's permission differs by version (VIEW
+  SERVER STATE before 2022, VIEW DATABASE PERFORMANCE STATE after).
 - **`ScriptDatabase` once left out `SET CHANGE_TRACKING` on 14** although the
   source had it on — `TestLiveScriptDatabaseOptionsRoundTrip`, 1 in 30 runs
   (1 in 18 earlier, undiagnosed); the next 60 were green. Ruled out: the
@@ -198,17 +202,24 @@ refuses:
 
 ## Scripter: extended properties beyond tables and modules
 
-`ScriptOptions.ExtendedProperties` (2026-10-13) restates the properties of a
-table, view, procedure, function and DML trigger, and of their columns,
-parameters, indexes and (a table's) constraints. Every other script leaves
-its object's properties out: database, schema, user, role, type, table
-type, sequence, synonym, XML schema collection, partition function/scheme
-and DDL trigger. A table script also leaves out its triggers' properties
-(it does not create the triggers — `ScriptTrigger` carries them), and a
-FileTable's system-defined constraints' and indexes' (AS FILETABLE names
-those afresh). `CREATE INDEX`, `ScriptCheckConstraint` and `ScriptForeignKey`
-alone carry none either. A `sql_variant` base type without a case in
-`extPropType` is a comment, not a statement — none known to exist.
+`ScriptOptions.ExtendedProperties` restates the properties of every object
+a single-object script creates in a table's, a module's, a database's, a
+schema's, a user's, a role's, an alias or table type's (and its columns'),
+a sequence's, a synonym's, an XML schema collection's, a partition
+function's and scheme's and a DDL trigger's script, and of the one index or
+constraint `ScriptIndex`, `ScriptCheckConstraint` and `ScriptForeignKey`
+create (2026-10-14).
+
+Still left out, not yet asked for: a CLR type's, rule's, default's,
+assembly's, plan guide's, Service Broker object's, filegroup's and file's.
+Each is an `extendedPropertiesAt` call at its class and level (a CLR type is
+class 6 under SCHEMA/TYPE, as an alias type is).
+
+By design: a table script leaves out its triggers' properties (it does not
+create the triggers — `ScriptTrigger` carries them), and a FileTable's
+system-defined constraints' and indexes' (AS FILETABLE names those afresh).
+A `sql_variant` base type without a case in `extPropType` is a comment, not
+a statement — none known to exist.
 
 ## `ScriptTable` is 8–11 round trips — considered, not batched
 

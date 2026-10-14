@@ -10,13 +10,18 @@ import (
 // Scripter — database principals (schema, user, role)
 // ============================================================
 
-// ScriptSchema generates the CREATE (or DROP) script for one schema.
+// ScriptSchema generates the CREATE (or DROP) script for one schema, with
+// its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptSchema(ctx context.Context, name string) (string, error) {
 	s, err := sc.db.SchemaByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return buildSchemaScript(s, sc.opts), nil
+	props, err := sc.scriptExtendedPropertiesAt(ctx, 3, s.ID, 0, ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: s.Name})
+	if err != nil {
+		return "", fmt.Errorf("gosmo: script schema %q: %w", s.Name, err)
+	}
+	return buildSchemaScript(s, sc.opts) + props, nil
 }
 
 // buildSchemaScript assembles one schema's script. CREATE SCHEMA has to be
@@ -38,13 +43,15 @@ func buildSchemaScript(s *Schema, opts ScriptOptions) string {
 	})
 }
 
-// ScriptUser generates the CREATE (or DROP) script for one database user.
+// ScriptUser generates the CREATE (or DROP) script for one database user,
+// with its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptUser(ctx context.Context, name string) (string, error) {
 	u, err := sc.db.UserByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return buildUserScript(u, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildUserScript(u, sc.opts), fmt.Sprintf("user %q", u.Name),
+		4, u.ID, 0, ExtendedPropertyLevel{Level0Type: "USER", Level0Name: u.Name})
 }
 
 // buildUserScript assembles one database user's script.
@@ -158,13 +165,17 @@ func mappedUserObject(u *User, kind string) string {
 }
 
 // ScriptDatabaseRole generates the CREATE (or DROP) script for one database
-// role, including the ALTER ROLE statements that restore its membership.
+// role, including the ALTER ROLE statements that restore its membership, and
+// its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptDatabaseRole(ctx context.Context, name string) (string, error) {
 	r, err := sc.db.RoleByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return buildDatabaseRoleScript(r, sc.opts), nil
+	// A role's properties take the USER level type: sp_addextendedproperty
+	// has no ROLE, and USER names any database principal (class 4).
+	return sc.withExtendedPropertiesAt(ctx, buildDatabaseRoleScript(r, sc.opts), fmt.Sprintf("database role %q", r.Name),
+		4, r.ID, 0, ExtendedPropertyLevel{Level0Type: "USER", Level0Name: r.Name})
 }
 
 // buildDatabaseRoleScript assembles one database role's script.

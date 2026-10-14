@@ -3,6 +3,7 @@ package gosmo
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -147,6 +148,36 @@ SELECT SUSER_SNAME(d.owner_sid), d.page_verify_option_desc, d.user_access_desc,
 FROM   sys.databases d
 LEFT   JOIN sys.database_filestream_options fo ON fo.database_id = d.database_id
 WHERE  d.name = @p1`
+}
+
+// PersistentVersionStoreFileGroup names the filegroup holding the
+// database's ADR persistent version store — "PRIMARY" unless
+// ACCELERATED_DATABASE_RECOVERY was turned on with
+// PERSISTENT_VERSION_STORE_FILEGROUP — or "" when the server reports none,
+// as an instance older than SQL Server 2019 never does.
+//
+// sys.databases has no such column: only
+// sys.dm_tran_persistent_version_store_stats reports it, and it keeps the
+// filegroup after ADR is turned off, though SET ACCELERATED_DATABASE_RECOVERY
+// = ON without the clause then moves it back to PRIMARY (both seen on 2025).
+// Read from inside the database, where its owner has the DMV's permission
+// (VIEW DATABASE PERFORMANCE STATE from SQL Server 2022): from master it
+// takes a server-level grant. A refusal is Msg 262/297, which
+// IsPermissionDenied recognises.
+func (d *Database) PersistentVersionStoreFileGroup(ctx context.Context) (string, error) {
+	if m := d.serverMajorVersion(); m != 0 && m < int(SQLServer2019) {
+		return "", nil
+	}
+	var name sql.NullString
+	err := d.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&name) }, `
+SELECT fg.name
+FROM   sys.dm_tran_persistent_version_store_stats s
+JOIN   sys.filegroups fg ON fg.data_space_id = s.pvs_filegroup_id
+WHERE  s.database_id = DB_ID()`)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("gosmo: persistent version store filegroup of %q: %w", d.Name, err)
+	}
+	return name.String, nil
 }
 
 // DatabaseOption identifies one ALTER DATABASE ... SET option.

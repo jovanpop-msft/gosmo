@@ -61,7 +61,8 @@ type ScriptOptions struct {
 	// its columns, parameters, indexes and (a table's) constraints, as SSMS's
 	// "Script extended properties" option does, on by default there too.
 	// Applies to ScriptTable, ScriptView, ScriptStoredProcedure,
-	// ScriptFunction and ScriptTrigger; never to a DROP.
+	// ScriptFunction, ScriptTrigger, ScriptSchema and ScriptDatabase (its
+	// own, not a snapshot's); never to a DROP.
 	ExtendedProperties bool
 }
 
@@ -196,6 +197,12 @@ func (sc *Scripter) ScriptDatabase(ctx context.Context) (string, error) {
 		if layout, err = readDatabaseLayout(ctx, d); err != nil {
 			return "", fmt.Errorf("gosmo: script database %q: %w", d.Name, err)
 		}
+		// A snapshot's are its source's, and it is read-only.
+		if layout.snapshotOf == "" {
+			if layout.extProps, err = sc.scriptExtendedPropertiesAt(ctx, 0, 0, 0, ExtendedPropertyLevel{}); err != nil {
+				return "", fmt.Errorf("gosmo: script database %q: %w", d.Name, err)
+			}
+		}
 	}
 	return sc.scriptDatabaseFrom(d, layout)
 }
@@ -224,10 +231,22 @@ type databaseLayout struct {
 	// scoped is every database scoped configuration; writeScopedConfigs
 	// picks those away from their default.
 	scoped []*DatabaseScopedConfig
-	// tde is the encryption key of a database with encryption on; nil when
-	// it is off, or when the read was refused, which tdeRefused records.
+	// tde is the database's encryption key; nil when it has none, or when
+	// the read was refused, which tdeRefused records for a database with
+	// encryption on. tdeOff marks a key SET ENCRYPTION OFF left behind: it
+	// is created, but encryption is not turned on.
 	tde        *DatabaseEncryptionKey
 	tdeRefused bool
+	tdeOff     bool
+
+	// pvsFileGroup is the ADR persistent version store's filegroup when ADR
+	// is on ("" when unread); pvsRefused records that the read was refused.
+	pvsFileGroup string
+	pvsRefused   bool
+
+	// extProps is the database's own extended properties, rendered ("" for
+	// none, or with ScriptOptions.ExtendedProperties off).
+	extProps string
 
 	snapshotOf    string
 	snapshotFiles []*DatabaseFileInfo
@@ -258,8 +277,7 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 		return nil, err
 	}
 	if d.Collation == "" {
-		if err := d.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&l.collation) },
-			"SELECT ISNULL(CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation')), '')"); err != nil {
+		if l.collation, err = d.inDatabaseCollation(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -272,21 +290,44 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 	if l.scoped, err = d.DatabaseScopedConfigs(ctx); err != nil {
 		return nil, err
 	}
-	// Only when encryption is on: the DMV needs VIEW SERVER STATE, which
-	// every other database's script would otherwise need too. A key left
-	// behind by SET ENCRYPTION OFF is not scripted.
-	if l.opts.IsEncrypted {
-		switch l.tde, err = d.EncryptionKey(ctx); {
+	// Whether encryption is on or not: SET ENCRYPTION OFF leaves the key
+	// behind. The DMV needs VIEW SERVER STATE; a refusal is noted only when
+	// encryption is on, so a caller without it scripts an unencrypted
+	// database exactly as before, with no comment about a key it may not
+	// have.
+	switch l.tde, err = d.EncryptionKey(ctx); {
+	case IsPermissionDenied(err):
+		l.tde, l.tdeRefused = nil, l.opts.IsEncrypted
+	case errors.Is(err, ErrNotFound):
+		// No key; or is_encrypted is set but the key is gone — nothing to
+		// restate either way.
+	case err != nil:
+		return nil, err
+	}
+	l.tdeOff = l.tde != nil && !l.opts.IsEncrypted
+	l.major = d.server.serverMajorVersion()
+	// Only with ADR on: turned on without the clause, it moves the version
+	// store back to PRIMARY, so a filegroup kept from before it was turned
+	// off has nothing to restate.
+	if l.opts.AcceleratedDatabaseRecovery && (l.major == 0 || l.major >= int(SQLServer2019)) {
+		switch l.pvsFileGroup, err = d.PersistentVersionStoreFileGroup(ctx); {
 		case IsPermissionDenied(err):
-			l.tde, l.tdeRefused = nil, true
-		case errors.Is(err, ErrNotFound):
-			// is_encrypted is set but the key is gone — nothing to restate.
+			l.pvsRefused = true
 		case err != nil:
 			return nil, err
 		}
 	}
-	l.major = d.server.serverMajorVersion()
 	return l, nil
+}
+
+// inDatabaseCollation reads the database's collation from inside it, which
+// opens a database AUTO_CLOSE has closed: sys.databases reports NULL for it
+// until then.
+func (d *Database) inDatabaseCollation(ctx context.Context) (string, error) {
+	var c string
+	err := d.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&c) },
+		"SELECT ISNULL(CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation')), '')")
+	return c, err
 }
 
 // readSnapshotLayout reads what a snapshot's CREATE needs: its source's name
@@ -547,7 +588,8 @@ func writeCreateWithOptions(sb *strings.Builder, o *DatabaseOptions) {
 // READ_ONLY first would refuse every ALTER after it, and SINGLE_USER would
 // let the first other session in the database lock the script out.
 // ACCELERATED_DATABASE_RECOVERY is written only for a source of SQL Server
-// 2019 or later (l.major), since an older one has no such option to restate.
+// 2019 or later (l.major), since an older one has no such option to restate;
+// when on, with its version store's filegroup if that is not PRIMARY.
 //
 // Every keyword spliced in is checked against the values the catalog
 // reports; anything else is left out rather than written.
@@ -618,8 +660,17 @@ func writeDatabaseSettings(sb *strings.Builder, d *Database, l *databaseLayout) 
 		// Not hasColumnSince, which is reserved for GROUP BY gates (the
 		// version-gate inventory counts its calls); same rule, major 0 newest.
 		if l.major == 0 || l.major >= int(SQLServer2019) {
-			// The one option here spelled with "=".
-			onOff("ACCELERATED_DATABASE_RECOVERY =", o.AcceleratedDatabaseRecovery)
+			// The one option here spelled with "=". The version store's
+			// filegroup exists by now: CREATE DATABASE made every one.
+			switch {
+			case o.AcceleratedDatabaseRecovery && l.pvsFileGroup != "" && l.pvsFileGroup != "PRIMARY":
+				set("ACCELERATED_DATABASE_RECOVERY = ON (PERSISTENT_VERSION_STORE_FILEGROUP = " + quoteIdent(l.pvsFileGroup) + ")")
+			case o.AcceleratedDatabaseRecovery && l.pvsRefused:
+				sb.WriteString("-- Reading ADR's version store filegroup needs VIEW DATABASE PERFORMANCE STATE (VIEW SERVER STATE before 2022): PERSISTENT_VERSION_STORE_FILEGROUP not scripted.\n")
+				fallthrough
+			default:
+				onOff("ACCELERATED_DATABASE_RECOVERY =", o.AcceleratedDatabaseRecovery)
+			}
 		}
 	}
 	if ct := l.ct; ct != nil && ct.Enabled && changeTrackingRetentionUnits[ct.RetentionUnit] {
@@ -673,17 +724,19 @@ func writeDatabaseSettings(sb *strings.Builder, d *Database, l *databaseLayout) 
 }
 
 // writeInDatabaseSettings writes what is set from inside the database — the
-// TDE key and the scoped configurations away from their default — between
-// USE [db] and USE [master], then SET ENCRYPTION ON. It runs before the
-// owner, user access and READ_ONLY: a key cannot be created in a read-only
-// database, and nor can a scoped configuration be changed.
+// TDE key, the scoped configurations away from their default and the
+// database's extended properties — between USE [db] and USE [master], then
+// SET ENCRYPTION ON. It runs before the owner, user access and READ_ONLY: a
+// key cannot be created in a read-only database, nor a scoped configuration
+// changed or a property added.
 //
 // The TDE key is protected by a certificate or asymmetric key in master,
 // referenced by name like an Always Encrypted key: it must exist on the
-// instance the script runs on, with its private key.
+// instance the script runs on, with its private key. A key SET ENCRYPTION
+// OFF left behind (tdeOff) is created all the same, and encryption stays off.
 func writeInDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout) {
 	scoped := scopedConfigStatements(l)
-	if l.tde == nil && !l.tdeRefused && len(scoped) == 0 {
+	if l.tde == nil && !l.tdeRefused && len(scoped) == 0 && l.extProps == "" {
 		return
 	}
 	fmt.Fprintf(sb, "USE %s;\nGO\n", quoteIdent(name))
@@ -703,7 +756,7 @@ func writeInDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout
 			sb.WriteString("-- The database encryption key reports an algorithm with no CREATE form: encryption not scripted.\n")
 		default:
 			fmt.Fprintf(sb, "CREATE DATABASE ENCRYPTION KEY WITH ALGORITHM = %s ENCRYPTION BY %s;\nGO\n", alg, by)
-			encrypt = true
+			encrypt = !l.tdeOff
 		}
 	} else if l.tdeRefused {
 		sb.WriteString("-- Encryption is on, and reading its key needs VIEW SERVER STATE: encryption not scripted.\n")
@@ -711,6 +764,7 @@ func writeInDatabaseSettings(sb *strings.Builder, name string, l *databaseLayout
 	for _, s := range scoped {
 		sb.WriteString(s)
 	}
+	sb.WriteString(l.extProps)
 	sb.WriteString("USE [master];\nGO\n")
 	if encrypt {
 		fmt.Fprintf(sb, "ALTER DATABASE %s SET ENCRYPTION ON;\nGO\n", quoteIdent(name))

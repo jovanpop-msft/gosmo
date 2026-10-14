@@ -16,7 +16,8 @@ import (
 // ScriptIndex generates the CREATE (or DROP) script for one index on a
 // table. An index backing a primary key or unique constraint is scripted as
 // the ALTER TABLE ... ADD CONSTRAINT it really is — CREATE INDEX cannot
-// recreate it.
+// recreate it. The index's extended properties follow, and a constraint's
+// own with them (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptIndex(ctx context.Context, schema, table, name string) (string, error) {
 	if err := requireSchema("script index", schema, table); err != nil {
 		return "", err
@@ -39,7 +40,11 @@ func (sc *Scripter) ScriptIndex(ctx context.Context, schema, table, name string)
 	if err != nil {
 		return "", err
 	}
-	return buildIndexScript(idx, qualifiedName(schema, table), tableDS, sc.opts), nil
+	script := buildIndexScript(idx, qualifiedName(schema, table), tableDS, sc.opts)
+	if idx.IsPrimaryKey || idx.IsUniqueConstraint {
+		return sc.withTableChildExtendedProperties(ctx, script, t, idx.Name, "INDEX", "CONSTRAINT")
+	}
+	return sc.withTableChildExtendedProperties(ctx, script, t, idx.Name, "INDEX")
 }
 
 // tableChild picks the table child the Scripter was asked for by matchName:
@@ -94,7 +99,8 @@ func scriptKeyConstraint(idx *Index, tableName string, tableDS DataSpace, opts S
 	return sb.String()
 }
 
-// ScriptCheckConstraint generates the script for one CHECK constraint.
+// ScriptCheckConstraint generates the script for one CHECK constraint, with
+// its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptCheckConstraint(ctx context.Context, schema, table, name string) (string, error) {
 	if err := requireSchema("script check constraint", schema, table); err != nil {
 		return "", err
@@ -111,7 +117,8 @@ func (sc *Scripter) ScriptCheckConstraint(ctx context.Context, schema, table, na
 	if err != nil {
 		return "", err
 	}
-	return buildCheckConstraintScript(ck, qualifiedName(schema, table), sc.opts), nil
+	return sc.withTableChildExtendedProperties(ctx, buildCheckConstraintScript(ck, qualifiedName(schema, table), sc.opts),
+		t, ck.Name, "CONSTRAINT")
 }
 
 // buildCheckConstraintScript assembles one CHECK constraint's script.
@@ -213,7 +220,8 @@ func buildStatisticScript(st *Statistic, cols []string, tableName string, opts S
 	})
 }
 
-// ScriptForeignKey generates the script for one foreign key.
+// ScriptForeignKey generates the script for one foreign key, with its
+// extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptForeignKey(ctx context.Context, schema, table, name string) (string, error) {
 	if err := requireSchema("script foreign key", schema, table); err != nil {
 		return "", err
@@ -230,7 +238,8 @@ func (sc *Scripter) ScriptForeignKey(ctx context.Context, schema, table, name st
 	if err != nil {
 		return "", err
 	}
-	return buildForeignKeyScript(fk, qualifiedName(schema, table), sc.opts), nil
+	return sc.withTableChildExtendedProperties(ctx, buildForeignKeyScript(fk, qualifiedName(schema, table), sc.opts),
+		t, fk.Name, "CONSTRAINT")
 }
 
 // buildForeignKeyScript assembles one foreign key's script, reusing the same
@@ -242,7 +251,8 @@ func buildForeignKeyScript(fk *ForeignKey, tableName string, opts ScriptOptions)
 	})
 }
 
-// ScriptSequence generates the CREATE (or DROP) script for one sequence.
+// ScriptSequence generates the CREATE (or DROP) script for one sequence, with
+// its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptSequence(ctx context.Context, schema, name string) (string, error) {
 	if err := requireSchema("script sequence", schema, name); err != nil {
 		return "", err
@@ -251,7 +261,8 @@ func (sc *Scripter) ScriptSequence(ctx context.Context, schema, name string) (st
 	if err != nil {
 		return "", err
 	}
-	return buildSequenceScript(seq, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildSequenceScript(seq, sc.opts), "sequence "+qualifiedName(seq.Schema, seq.Name),
+		1, seq.ObjectID, 0, ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: seq.Schema, Level1Type: "SEQUENCE", Level1Name: seq.Name})
 }
 
 // buildSequenceScript assembles one sequence's script. START WITH is the
@@ -352,7 +363,8 @@ func sequenceStartWith(seq *Sequence) (start string, exhausted bool) {
 	return next.String(), false
 }
 
-// ScriptSynonym generates the CREATE (or DROP) script for one synonym.
+// ScriptSynonym generates the CREATE (or DROP) script for one synonym, with
+// its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptSynonym(ctx context.Context, schema, name string) (string, error) {
 	if err := requireSchema("script synonym", schema, name); err != nil {
 		return "", err
@@ -361,7 +373,8 @@ func (sc *Scripter) ScriptSynonym(ctx context.Context, schema, name string) (str
 	if err != nil {
 		return "", err
 	}
-	return buildSynonymScript(syn, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildSynonymScript(syn, sc.opts), "synonym "+qualifiedName(syn.Schema, syn.Name),
+		1, syn.ObjectID, 0, ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: syn.Schema, Level1Type: "SYNONYM", Level1Name: syn.Name})
 }
 
 // buildSynonymScript assembles one synonym's script. BaseObject comes from
@@ -376,13 +389,15 @@ func buildSynonymScript(syn *Synonym, opts ScriptOptions) string {
 }
 
 // ScriptPartitionFunction generates the CREATE (or DROP) script for one
-// partition function.
+// partition function, with its extended properties
+// (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptPartitionFunction(ctx context.Context, name string) (string, error) {
 	pf, err := sc.db.PartitionFunctionByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return buildPartitionFunctionScript(pf, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildPartitionFunctionScript(pf, sc.opts), fmt.Sprintf("partition function %q", pf.Name),
+		21, pf.FunctionID, 0, ExtendedPropertyLevel{Level0Type: "PARTITION FUNCTION", Level0Name: pf.Name})
 }
 
 // buildPartitionFunctionScript assembles one partition function's script.
@@ -402,13 +417,17 @@ func buildPartitionFunctionScript(pf *PartitionFunction, opts ScriptOptions) str
 }
 
 // ScriptPartitionScheme generates the CREATE (or DROP) script for one
-// partition scheme.
+// partition scheme, with its extended properties
+// (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptPartitionScheme(ctx context.Context, name string) (string, error) {
 	ps, err := sc.db.PartitionSchemeByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return buildPartitionSchemeScript(ps, sc.opts), nil
+	// A scheme is a data space: its properties are class 20, a filegroup's
+	// class, keyed by data_space_id.
+	return sc.withExtendedPropertiesAt(ctx, buildPartitionSchemeScript(ps, sc.opts), fmt.Sprintf("partition scheme %q", ps.Name),
+		20, ps.SchemeID, 0, ExtendedPropertyLevel{Level0Type: "PARTITION SCHEME", Level0Name: ps.Name})
 }
 
 // buildPartitionSchemeScript assembles one partition scheme's script.

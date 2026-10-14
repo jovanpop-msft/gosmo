@@ -32,7 +32,7 @@ import (
 // ============================================================
 
 // ScriptUserDefinedDataType generates the CREATE (or DROP) script for one
-// alias type.
+// alias type, with its extended properties (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptUserDefinedDataType(ctx context.Context, schema, name string) (string, error) {
 	if err := requireSchema("script user defined data type", schema, name); err != nil {
 		return "", err
@@ -41,7 +41,8 @@ func (sc *Scripter) ScriptUserDefinedDataType(ctx context.Context, schema, name 
 	if err != nil {
 		return "", err
 	}
-	return buildUserDefinedDataTypeScript(t, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildUserDefinedDataTypeScript(t, sc.opts), "type "+qualifiedName(t.Schema, t.Name),
+		6, t.UserTypeID, 0, ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: t.Schema, Level1Type: "TYPE", Level1Name: t.Name})
 }
 
 // buildUserDefinedDataTypeScript assembles one alias type's script.
@@ -102,6 +103,8 @@ func nullClause(nullable bool) string {
 // reads or fail on them. The shape is the columns, the PRIMARY KEY, UNIQUE
 // and CHECK constraints and the indexes — all on the type's internal table —
 // plus the database collation, against which a column's COLLATE is decided.
+// The type's and its columns' extended properties follow the CREATE
+// (ScriptOptions.ExtendedProperties).
 func (sc *Scripter) ScriptUserDefinedTableType(ctx context.Context, schema, name string) (string, error) {
 	if err := requireSchema("script user defined table type", schema, name); err != nil {
 		return "", err
@@ -116,7 +119,16 @@ func (sc *Scripter) ScriptUserDefinedTableType(ctx context.Context, schema, name
 			return "", err
 		}
 	}
-	return buildUserDefinedTableTypeScript(t, p, sc.opts), nil
+	script, err := sc.withExtendedPropertiesAt(ctx, buildUserDefinedTableTypeScript(t, p, sc.opts), "type "+t.FullName(),
+		6, t.UserTypeID, 0, ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: t.Schema, Level1Type: "TYPE", Level1Name: t.Name})
+	if err != nil || !sc.wantsExtendedProperties() {
+		return script, err
+	}
+	props, err := sc.db.typeColumnExtendedProperties(ctx, t)
+	if err != nil {
+		return "", fmt.Errorf("gosmo: script type %s: %w", t.FullName(), err)
+	}
+	return script + sc.renderExtendedProperties(props, nil), nil
 }
 
 // tableTypeScriptParts is what a table type's CREATE is built from.
@@ -302,7 +314,8 @@ func buildClrTypeScript(t *ClrType, opts ScriptOptions) string {
 // ============================================================
 
 // ScriptXMLSchemaCollection generates the CREATE (or DROP) script for one XML
-// schema collection.
+// schema collection, with its extended properties
+// (ScriptOptions.ExtendedProperties).
 //
 // The schema documents are read only for a verb that emits a CREATE:
 // XML_SCHEMA_NAMESPACE reassembles the whole collection, which a drop does not
@@ -321,7 +334,9 @@ func (sc *Scripter) ScriptXMLSchemaCollection(ctx context.Context, schema, name 
 			return "", err
 		}
 	}
-	return buildXMLSchemaCollectionScript(c, def, sc.opts), nil
+	return sc.withExtendedPropertiesAt(ctx, buildXMLSchemaCollectionScript(c, def, sc.opts),
+		"XML schema collection "+qualifiedName(c.Schema, c.Name), 10, c.CollectionID, 0,
+		ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: c.Schema, Level1Type: "XML SCHEMA COLLECTION", Level1Name: c.Name})
 }
 
 // buildXMLSchemaCollectionScript assembles one collection's script.

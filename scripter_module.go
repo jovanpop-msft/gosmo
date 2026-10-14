@@ -666,7 +666,8 @@ ORDER  BY te.type`
 // ============================================================
 
 // ScriptDatabaseTrigger generates the CREATE (or DROP) script for one
-// database-scope DDL trigger.
+// database-scope DDL trigger, with its extended properties
+// (ScriptOptions.ExtendedProperties).
 //
 // scriptModule is not reusable here: it addresses a module by schema and name,
 // and a DDL trigger has no schema.
@@ -685,7 +686,12 @@ func (sc *Scripter) ScriptDatabaseTrigger(ctx context.Context, name string) (str
 		}
 		t.Definition = def
 	}
-	return buildDatabaseTriggerScript(t, sc.opts)
+	script, err := buildDatabaseTriggerScript(t, sc.opts)
+	if err != nil {
+		return "", err
+	}
+	return sc.withExtendedPropertiesAt(ctx, script, fmt.Sprintf("database trigger %q", t.Name),
+		1, t.ObjectID, 0, ExtendedPropertyLevel{Level0Type: "TRIGGER", Level0Name: t.Name})
 }
 
 // buildDatabaseTriggerScript assembles one database trigger's script from the

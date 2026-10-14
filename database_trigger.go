@@ -23,6 +23,10 @@ type DatabaseTrigger struct {
 
 	Name string
 
+	// ObjectID is the trigger's object_id in sys.triggers; 0 on a
+	// DatabaseTriggerRef handle.
+	ObjectID int
+
 	// IsEnabled is the inverse of the catalog's is_disabled.
 	IsEnabled bool
 
@@ -65,7 +69,7 @@ SELECT tr.name, tr.is_disabled, tr.create_date, tr.modify_date,
         FROM   sys.trigger_events te
         WHERE  te.object_id = tr.object_id`, "") + ` AS events,
        m.definition, ISNULL(m.uses_ansi_nulls, 0), ISNULL(m.uses_quoted_identifier, 0),
-       CAST(CASE WHEN tr.type = 'TA' THEN 1 ELSE 0 END AS bit)
+       CAST(CASE WHEN tr.type = 'TA' THEN 1 ELSE 0 END AS bit), tr.object_id
 FROM   sys.triggers tr
 LEFT   JOIN sys.sql_modules m ON m.object_id = tr.object_id
 WHERE  tr.is_ms_shipped = 0 AND tr.parent_class = 0`
@@ -121,7 +125,7 @@ func scanDatabaseTrigger(d *Database, scan func(...any) error) (*DatabaseTrigger
 	var isDisabled bool
 	var events, definition sql.NullString
 	if err := scan(&t.Name, &isDisabled, &t.CreateDate, &t.ModifyDate, &events, &definition,
-		&t.UsesANSINulls, &t.UsesQuotedIdentifier, &t.IsCLR); err != nil {
+		&t.UsesANSINulls, &t.UsesQuotedIdentifier, &t.IsCLR, &t.ObjectID); err != nil {
 		return nil, err
 	}
 	t.IsEnabled = !isDisabled

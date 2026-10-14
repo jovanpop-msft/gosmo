@@ -3,6 +3,8 @@ package gosmo
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"strings"
 	"testing"
 )
 
@@ -123,10 +125,55 @@ func TestExtendedPropertyStatements(t *testing.T) {
 				"    EXEC sys.sp_addextendedproperty @name = N'n', @value = @value, @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TABLE', @level1name = N'o''brien'" + tail},
 		{"unknown base type", scriptedExtProp{level: at("TABLE", "t", "COLUMN", "c"), name: "x", baseType: "hierarchyid", value: nv("/1/")}, false,
 			"-- Extended property N'x' on [s]]x].[t].[c] holds a hierarchyid value with no literal form: not scripted.\n"},
+		{"database", scriptedExtProp{name: "MS_Description", baseType: "nvarchar", value: nv("db")}, false,
+			"EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'db'" + tail},
+		{"guarded database", scriptedExtProp{name: "n", baseType: "int", value: nv("1")}, true,
+			"DECLARE @value sql_variant = CONVERT(int, N'1');\n" +
+				"IF NOT EXISTS (SELECT 1 FROM sys.fn_listextendedproperty(N'n', NULL, NULL, NULL, NULL, NULL, NULL))\n" +
+				"    EXEC sys.sp_addextendedproperty @name = N'n', @value = @value" + tail},
+		{"schema", scriptedExtProp{level: ExtendedPropertyLevel{Level0Type: "SCHEMA", Level0Name: "s'x"}, name: "n", baseType: "nvarchar", value: nv("s")}, true,
+			"IF NOT EXISTS (SELECT 1 FROM sys.fn_listextendedproperty(N'n', N'SCHEMA', N's''x', NULL, NULL, NULL, NULL))\n" +
+				"    EXEC sys.sp_addextendedproperty @name = N'n', @value = N's', @level0type = N'SCHEMA', @level0name = N's''x'" + tail},
+		{"unknown base type on the database", scriptedExtProp{name: "x", baseType: "hierarchyid", value: nv("/1/")}, false,
+			"-- Extended property N'x' on the database holds a hierarchyid value with no literal form: not scripted.\n"},
 	}
 	for _, c := range cases {
 		if got := extendedPropertyStatement(c.p, c.guard); got != c.want {
 			t.Errorf("%s:\n got: %q\nwant: %q", c.name, got, c.want)
 		}
+	}
+}
+
+// ScriptSchema reads its schema's own properties (class 3, by schema id) and
+// restates them at SCHEMA level after the CREATE; a DROP alone reads none.
+func TestScriptSchemaExtendedProperties(t *testing.T) {
+	ctx := context.Background()
+	d := captureDatabase(t)
+	canned := []cannedRow{
+		{match: "FROM   sys.schemas s", cols: []string{"name", "id", "owner"}, row: []driver.Value{"Sales", int64(7), "dbo"}},
+		{match: "FROM   sys.extended_properties ep", cols: make([]string, 6),
+			row: []driver.Value{"MS_Description", "nvarchar", int64(0), int64(0), int64(12), "orders"}},
+	}
+	captured.reset(canned...)
+	got, err := NewScripter(d, DefaultScriptOptions()).ScriptSchema(ctx, "Sales")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "IF NOT EXISTS (SELECT 1 FROM sys.fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'Sales', NULL, NULL, NULL, NULL))\n" +
+		"    EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'orders', @level0type = N'SCHEMA', @level0name = N'Sales';\nGO\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("schema property not restated:\n%s", got)
+	}
+	if q, args := captured.findArgs("FROM   sys.extended_properties ep"); !strings.Contains(q, "ep.class = @p1 AND ep.major_id = @p2 AND ep.minor_id = @p3") ||
+		len(args) != 3 || args[0] != int64(3) || args[1] != int64(7) || args[2] != int64(0) {
+		t.Errorf("read keyed wrong: %v\n%s", args, q)
+	}
+
+	drop := DefaultScriptOptions()
+	drop.Verb = ScriptDrop
+	captured.reset(canned...)
+	if got, err := NewScripter(d, drop).ScriptSchema(ctx, "Sales"); err != nil || strings.Contains(got, "sp_addextendedproperty") ||
+		captured.count("sys.extended_properties") != 0 {
+		t.Errorf("DROP reads or restates properties (%v):\n%s", err, got)
 	}
 }

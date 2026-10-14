@@ -1246,13 +1246,22 @@ sys.sp_addextendedproperty` per property, each its own batch, to
 `ScriptTable`, `ScriptView`, `ScriptStoredProcedure`, `ScriptFunction` and
 `ScriptTrigger`: the object's own, its columns', parameters', indexes' and —
 a table's — constraints'. One query reads them all
-(`objectExtendedProperties`). A value keeps its `sql_variant` base type: an
+(`objectExtendedProperties`). `ScriptSchema`, `ScriptDatabase`,
+`ScriptUser`, `ScriptDatabaseRole`, the alias/table type, sequence, synonym,
+XML schema collection, partition function/scheme and DDL trigger scripts
+append their own object's, read by `(class, major_id, minor_id)` at a level
+the caller names (`extendedPropertiesAt`) — the database's from inside it,
+before `READ_ONLY` would refuse them; a table type's columns' are class 8
+(`typeColumnExtendedProperties`). `ScriptIndex`, `ScriptCheckConstraint` and
+`ScriptForeignKey` filter the table's read down to the one child they create
+(`withTableChildExtendedProperties`) — by level as well as name, since an
+index and a constraint on one table can share a name. A value keeps its `sql_variant` base type: an
 `nvarchar` goes out as `N'…'`, any other is converted back from lossless text
 into a `DECLARE @value sql_variant` first. Guarded by `fn_listextendedproperty`
 under `IncludeIfNotExists`, and always under `ScriptAlter`, since `ALTER VIEW`
 drops the view's indexes with their properties while `ALTER` keeps the rest.
 `live_script_extended_properties_test.go` round-trips every base type and
-level, CREATE, ALTER and DROP AND CREATE. What is still not scripted is in
+level, CREATE, ALTER and DROP AND CREATE, and every securable above. What is still not scripted is in
 `OPEN-THREADS.md` § Scripter fidelity.
 
 Beyond a plain disk-based table it scripts graph node and edge tables (`AS
