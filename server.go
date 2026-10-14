@@ -370,13 +370,6 @@ func (s *Server) releaseIdle(ctx context.Context) { _ = s.ReleaseIdleConnections
 // nothing to wait for, and a repair that hangs is worse than one that gives up.
 const multiUserRepairTimeout = 10 * time.Second
 
-// restoreMultiUser puts a database this package set to SINGLE_USER back to
-// MULTI_USER — the repair after a restore cut short. restoreAccessMode is the
-// general form.
-func (s *Server) restoreMultiUser(ctx context.Context, name string) error {
-	return s.restoreAccessMode(ctx, name, UserAccessMulti)
-}
-
 // restoreAccessMode puts a database this package set to SINGLE_USER back to
 // mode, the access mode it had before (accessModeBefore) — the repair after a
 // forced detach or drop cut short with the database still there. A database

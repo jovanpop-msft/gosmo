@@ -14,6 +14,7 @@
 package gosmo
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/url"
@@ -26,7 +27,7 @@ import (
 const ftsDB = "gossms_p5_fts"
 
 func TestLiveFullText(t *testing.T) {
-	db, ctx, done := liveDBTimeout(t, 3*time.Minute)
+	db, ctx, done := liveDBTimeout(t, 6*time.Minute)
 	t.Cleanup(done) // registered first, so it runs after the drops below
 	srv := liveServer(t, db, ctx)
 
@@ -70,20 +71,9 @@ func TestLiveFullText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var docIdx *FullTextIndex
-	for deadline := time.Now().Add(60 * time.Second); ; {
-		docIdx, err = doc.FullTextIndex(ctx)
-		if err != nil {
-			t.Fatalf("Table.FullTextIndex: %v", err)
-		}
-		if docIdx.CrawlCompleted && docIdx.ItemCount == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Doc's population did not finish: %+v", docIdx)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	docIdx := liveFullTextWait(t, ctx, doc, "Doc", func(i *FullTextIndex) bool {
+		return i.CrawlCompleted && i.ItemCount == 2
+	})
 
 	// Catalogs, with the counters a finished population leaves.
 	cats, err := d.FullTextCatalogs(ctx)
@@ -288,6 +278,55 @@ func TestLiveFullText(t *testing.T) {
 	if again, err := sem.FullTextIndex(ctx); err != nil || len(again.Columns) != 2 || !again.Columns[0].StatisticalSemantics || !again.Columns[1].StatisticalSemantics {
 		t.Errorf("Sem's index after replaying its script = %+v, %v", again, err)
 	}
+}
+
+// liveFullTextWait reads tbl's full-text index until done holds, for at
+// most liveFullTextWaitFor. A crawl is the instance's own background work,
+// sharing the filter daemon with every other database's, and once outran a
+// 60 s wait in a run that then passed twice; on timeout the failure carries
+// what liveFullTextState reads, so the next one tells a slow crawl from a
+// stuck one.
+func liveFullTextWait(t *testing.T, ctx context.Context, tbl *Table, what string, done func(*FullTextIndex) bool) *FullTextIndex {
+	t.Helper()
+	for deadline := time.Now().Add(liveFullTextWaitFor); ; {
+		i, err := tbl.FullTextIndex(ctx)
+		if err != nil {
+			t.Fatalf("%s: FullTextIndex: %v", what, err)
+		}
+		if done(i) {
+			return i
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: population did not finish in %v: %+v\n%s", what, liveFullTextWaitFor, i, liveFullTextState(ctx, tbl))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+const liveFullTextWaitFor = 2 * time.Minute
+
+// liveFullTextState is tbl's catalog's PopulateStatus and ItemCount and the
+// table's sys.dm_fts_index_population rows, as one line.
+func liveFullTextState(ctx context.Context, tbl *Table) string {
+	var s string
+	err := tbl.Database().queryRow(ctx, func(r *sql.Row) error { return r.Scan(&s) }, `
+SELECT CONCAT(N'catalog ', c.name COLLATE DATABASE_DEFAULT,
+       N': PopulateStatus=', FULLTEXTCATALOGPROPERTY(c.name, 'PopulateStatus'),
+       N' ItemCount=', FULLTEXTCATALOGPROPERTY(c.name, 'ItemCount'),
+       N'; populations: ', ISNULL((
+           SELECT STRING_AGG(CONCAT(p.population_type_description COLLATE DATABASE_DEFAULT, N' ', p.status_description COLLATE DATABASE_DEFAULT,
+                      N' (', p.completion_type_description COLLATE DATABASE_DEFAULT, N') since ', CONVERT(nvarchar(23), p.start_time, 121),
+                      N', ranges ', p.completed_range_count, N'/', p.range_count,
+                      N', outstanding batches ', p.outstanding_batch_count), N'; ')
+           FROM sys.dm_fts_index_population AS p
+           WHERE p.database_id = DB_ID() AND p.table_id = i.object_id), N'none'))
+FROM sys.fulltext_indexes AS i
+JOIN sys.fulltext_catalogs AS c ON c.fulltext_catalog_id = i.fulltext_catalog_id
+WHERE i.object_id = @p1`, tbl.ObjectID)
+	if err != nil {
+		return "full-text state unread: " + err.Error()
+	}
+	return s
 }
 
 // On an instance without the component every read is empty, not an error.

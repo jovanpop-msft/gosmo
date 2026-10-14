@@ -176,38 +176,25 @@ refuses:
   default (`is_value_default`; on 2016, which lacks it, the four documented
   defaults — any other row is skipped). A value that is not a number, 0/1 or
   a bare keyword (Azure's `LEDGER_DIGEST_STORAGE_ENDPOINT` URL) gets a
-  comment, not a statement. Which options are numeric rather than ON/OFF is a
-  hand-kept list (`scopedConfigNumeric`): a new numeric option reporting 0 or
-  1 would be written OFF/ON and fail the replay loudly.
+  comment, not a statement. The value's sql_variant base type decides its
+  spelling (`bit` → OFF/ON, an integer type → the number), the same on 2016.
 - **ADR's `PERSISTENT_VERSION_STORE_FILEGROUP`** is not scripted: a source
   with the version store off `PRIMARY` replays with it on `PRIMARY`.
 - **The in-database options read has no live test that fails without it**:
   the layout's file reads open the database just before, so the server-scope
   read it replaced also passes. The live test does catch the collation
   fallback and `Options` scanning NULL on a closed database.
-- **`TestLiveScriptDatabaseOptionsRoundTrip` failed once in 18 runs on 14**
-  ("replayed settings differ") with no diff captured; 17 reruns were green.
+- **`ScriptDatabase` once left out `SET CHANGE_TRACKING` on 14** although the
+  source had it on — `TestLiveScriptDatabaseOptionsRoundTrip`, 1 in 30 runs
+  (1 in 18 earlier, undiagnosed); the next 60 were green. Ruled out: the
+  server-scope `sys.change_tracking_databases` read missing a closed
+  `AUTO_CLOSE` database's row, or missing it while the database opens,
+  closes or turns `READ_ONLY` (3,000 reads, none missed). Diagnostics in
+  place: the test now names each differing field, and when the script lacks
+  change tracking it re-reads `ChangeTracking` and logs the database's state.
 - **The paths and FILESTREAM directory name are the source's own**: replayed
   on the same instance under the same name after a DROP that is right; as a
   copy, the caller edits them.
-
-## Two live tests fail on 17 at `a50241f` — found 2026-10-13, not investigated
-
-Seen during gossms review plan S1, identically on a clean worktree of
-`a50241f`, so not caused by it; three runs each on win10cli (17):
-
-- `TestLiveScriptDatabaseInDatabaseSettingsRoundTrip` — the replayed
-  database's scoped configurations differ from the source's: the replay
-  reads `ELEVATE_ONLINE=WHEN_SUPPORTED`, `IDENTITY_CACHE=0`,
-  `LEGACY_CARDINALITY_ESTIMATION=1`, `MAXDOP=3` (secondary 1) and
-  `PARAMETER_SNIFFING=0` where the source reads the defaults — the reverse of
-  what a missing statement would give, so look at which side the test sets.
-- `TestLiveReplicationMonitor` — `SessionActions` returns no rows for both
-  agents' sessions (`live_replication_monitor_test.go:150`); likely the
-  fixture's agent history has aged out or the agents have not run.
-
-`TestLiveFullTextWrites` failed once in the same run ("population did not
-finish") and passed on both reruns.
 
 ## Scripter: extended properties beyond tables and modules
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -725,12 +726,6 @@ var scopedConfigDefaults2016 = map[string]string{
 	"PARAMETER_SNIFFING": "1", "QUERY_OPTIMIZER_HOTFIXES": "0",
 }
 
-// scopedConfigNumeric are the scoped configurations whose value is a number
-// rather than a switch: every other "0"/"1" is written OFF/ON.
-var scopedConfigNumeric = map[string]bool{
-	"MAXDOP": true, "PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES": true, "FULLTEXT_INDEX_VERSION": true,
-}
-
 // scopedConfigStatements renders an ALTER DATABASE SCOPED CONFIGURATION for
 // each of l.scoped whose value is away from its default, and a FOR
 // SECONDARY one for each with a secondary value of its own (NULL, the
@@ -742,8 +737,8 @@ var scopedConfigNumeric = map[string]bool{
 // from scopedConfigDefaults2016 is left out — its default is not known.
 func scopedConfigStatements(l *databaseLayout) []string {
 	var out []string
-	add := func(c *DatabaseScopedConfig, raw string, secondary bool) {
-		v, ok := scopedConfigValue(c.Name, raw)
+	add := func(c *DatabaseScopedConfig, raw, baseType string, secondary bool) {
+		v, ok := scopedConfigValue(raw, baseType)
 		stmt, err := buildScopedConfigStatement(c.Name, v, secondary)
 		if !ok || err != nil {
 			out = append(out, fmt.Sprintf("-- Database scoped configuration %s reports a value with no SET form: not scripted.\n", commentSafe(c.Name)))
@@ -758,35 +753,39 @@ func scopedConfigStatements(l *databaseLayout) []string {
 			isDefault = !known || c.Value == def
 		}
 		if !isDefault {
-			add(c, c.Value, false)
+			add(c, c.Value, c.ValueType, false)
 		}
 		if c.ValueForSecondary != "" {
-			add(c, c.ValueForSecondary, true)
+			add(c, c.ValueForSecondary, c.ValueForSecondaryType, true)
 		}
 	}
 	return out
 }
 
 // scopedConfigValue is raw — the value as CAST to nvarchar — as the SET
-// clause spells it: a number for a numeric option, OFF/ON for a switch
-// reported as 0/1, a keyword (WHEN_SUPPORTED, PRIMARY) as it is. Anything
-// else, a quoted string or a value with spaces, is not written (false).
-func scopedConfigValue(name, raw string) (string, bool) {
-	digits := raw != ""
-	for _, r := range raw {
-		if r < '0' || r > '9' {
-			digits = false
+// clause spells it, by its sql_variant base type: OFF/ON for a bit, the
+// number for an integer type, a keyword (WHEN_SUPPORTED) for a string as it
+// is. Anything else — a quoted string, a value with spaces, a type with no
+// known form — is not written (false). The type, not the option's name,
+// decides: a hand-kept list of numeric options would write a new one
+// reporting 0 or 1 as OFF/ON.
+func scopedConfigValue(raw, baseType string) (string, bool) {
+	switch baseType {
+	case "bit":
+		switch raw {
+		case "0":
+			return "OFF", true
+		case "1":
+			return "ON", true
 		}
-	}
-	switch {
-	case digits && scopedConfigNumeric[name]:
-		return raw, true
-	case raw == "0":
-		return "OFF", true
-	case raw == "1":
-		return "ON", true
-	case !digits && isSimpleIdentifier(raw):
-		return raw, true
+	case "tinyint", "smallint", "int", "bigint":
+		if _, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return raw, true
+		}
+	case "nvarchar", "varchar", "nchar", "char", "sysname":
+		if isSimpleIdentifier(raw) && (raw[0] < '0' || raw[0] > '9') {
+			return raw, true
+		}
 	}
 	return "", false
 }

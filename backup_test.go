@@ -674,7 +674,10 @@ func TestBuildRestoreStatementRecoveryIsOneChoice(t *testing.T) {
 // refusal would abort the RESTORE after it — and only an access mode the batch
 // itself set is released. A STANDBY database's readers are killed instead
 // (G11, 2026-09-24): left alone, they failed a log-shipping secondary's next
-// log restore with "Exclusive access could not be obtained".
+// log restore with "Exclusive access could not be obtained". The release is
+// to the access mode captured first, and only of a database still SINGLE_USER
+// (Y2, 2026-10-14): a successful RESTORE leaves the backup's own mode, and a
+// hard-coded SET MULTI_USER opened a RESTRICTED_USER database to everyone.
 func TestBuildRestoreStatementClosesConnectionsInTheSameBatch(t *testing.T) {
 	got, err := (&Server{}).BuildRestoreStatement(RestoreOptions{
 		Database: "App'DB", Devices: []BackupTarget{DiskTarget("d.bak")}, Replace: true,
@@ -685,7 +688,9 @@ func TestBuildRestoreStatementClosesConnectionsInTheSameBatch(t *testing.T) {
 	}
 	online := "EXISTS (SELECT 1 FROM sys.databases WHERE name = N'App''DB' AND state = 0 AND is_in_standby = 0)"
 	standby := "EXISTS (SELECT 1 FROM sys.databases WHERE name = N'App''DB' AND state = 0 AND is_in_standby = 1)"
-	want := "DECLARE @closed bit = 0;\n" +
+	stillSingle := "EXISTS (SELECT 1 FROM sys.databases WHERE name = N'App''DB' AND state = 0 AND is_in_standby = 0 AND user_access_desc = N'SINGLE_USER')"
+	want := "DECLARE @access nvarchar(60) = (SELECT user_access_desc FROM sys.databases WHERE name = N'App''DB');\n" +
+		"DECLARE @closed bit = 0;\n" +
 		"IF " + online + "\n" +
 		"BEGIN\n" +
 		"    ALTER DATABASE [App'DB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n" +
@@ -696,8 +701,10 @@ func TestBuildRestoreStatementClosesConnectionsInTheSameBatch(t *testing.T) {
 		killDatabaseSessionsBatch("App'DB") + ";\n" +
 		"END;\n" +
 		"RESTORE DATABASE [App'DB]\nFROM DISK = N'd.bak'\nWITH REPLACE;\n" +
-		"IF @closed = 1 AND " + online + "\n" +
-		"    ALTER DATABASE [App'DB] SET MULTI_USER;"
+		"IF @closed = 1 AND " + stillSingle + "\n" +
+		"BEGIN\n" +
+		"    " + releaseWant("[App'DB]", "    ") + "\n" +
+		"END;"
 	if got != want {
 		t.Errorf("BuildRestoreStatement =\n%s\nwant\n%s", got, want)
 	}
@@ -738,21 +745,41 @@ func TestServerBuildRestoreStatementKillsSessionsOnAManagedInstance(t *testing.T
 	}
 }
 
-// The batch's own MULTI_USER does not run when the batch is cut short, and a
+// The batch's own release does not run when the batch is cut short, and a
 // cancel is the likeliest way for a long restore to fail — so Restore
-// releases the database again, off the caller's cancellation.
-func TestARestoreCutShortIsPutBackToMultiUser(t *testing.T) {
-	s := detServer(t)
-	ctx := detCancelOn(t, "RESTORE DATABASE")
-	err := s.Restore(ctx, RestoreOptions{
-		Database: "appdb", Devices: []BackupTarget{DiskTarget("d.bak")}, CloseExistingConnections: true,
-	})
-	if err == nil {
-		t.Fatal("a restore whose context was cancelled returned no error")
-	}
-	stmts := detLog.statements()
-	if last := stmts[len(stmts)-1]; last != "ALTER DATABASE [appdb] SET MULTI_USER" {
-		t.Errorf("last statement after a cancelled restore is %q, want the MULTI_USER repair: %v", last, stmts)
+// releases the database again, off the caller's cancellation, to the mode it
+// read before the batch, and only while the database is still the batch's
+// SINGLE_USER: one RESTORING, or carrying a restored backup's mode, is left.
+// A database already SINGLE_USER before is not touched at all.
+func TestARestoreCutShortIsPutBackToItsAccessMode(t *testing.T) {
+	guard := "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'appdb' AND state = 0 AND is_in_standby = 0 AND user_access_desc = N'SINGLE_USER')\n    "
+	for _, c := range []struct{ before, want string }{
+		{"MULTI_USER", guard + "ALTER DATABASE [appdb] SET MULTI_USER"},
+		{"RESTRICTED_USER", guard + "ALTER DATABASE [appdb] SET RESTRICTED_USER"},
+		{"SINGLE_USER", ""},
+	} {
+		s := detServer(t)
+		detLog.access = c.before
+		ctx := detCancelOn(t, "RESTORE DATABASE")
+		err := s.Restore(ctx, RestoreOptions{
+			Database: "appdb", Devices: []BackupTarget{DiskTarget("d.bak")}, CloseExistingConnections: true,
+		})
+		if err == nil {
+			t.Fatalf("%s: a restore whose context was cancelled returned no error", c.before)
+		}
+		if detLog.accessReads != 1 {
+			t.Errorf("%s: read the access mode %d times before the batch, want 1", c.before, detLog.accessReads)
+		}
+		stmts := detLog.statements()
+		if c.want == "" {
+			if len(stmts) != 1 {
+				t.Errorf("%s: statements %v, want only the restore batch", c.before, stmts)
+			}
+			continue
+		}
+		if len(stmts) != 2 || stmts[1] != c.want {
+			t.Errorf("%s: statements after a cancelled restore %q, want the batch then %q", c.before, stmts, c.want)
+		}
 	}
 }
 

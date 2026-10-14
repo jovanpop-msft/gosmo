@@ -116,6 +116,70 @@ func TestLiveRestoreCloseExistingConnections(t *testing.T) {
 		}
 	})
 
+	// Y2 (2026-10-14): the release used to be a hard-coded SET MULTI_USER.
+	// A refused RESTORE over a database left RESTRICTED_USER opened it to
+	// everyone, and a successful one of a RESTRICTED_USER backup did too —
+	// RESTORE leaves the backup's own access mode, which the release then
+	// overwrote.
+	setAccess := func(t *testing.T, mode string) {
+		t.Helper()
+		if _, err := srv.db.ExecContext(ctx, "ALTER DATABASE "+quoteIdent(name)+" SET "+mode+" WITH ROLLBACK IMMEDIATE"); err != nil {
+			t.Fatalf("set %s: %v", mode, err)
+		}
+	}
+	t.Run("a refused restore puts back RESTRICTED_USER", func(t *testing.T) {
+		setAccess(t, "RESTRICTED_USER")
+		defer setAccess(t, "MULTI_USER")
+		for _, c := range []struct {
+			what string
+			opts RestoreOptions
+		}{
+			{"missing file", RestoreOptions{Devices: []BackupTarget{DiskTarget(liveBackupPath(t, srv, ctx, name+"_missing.bak"))}}},
+			{"no such backup set", RestoreOptions{Devices: []BackupTarget{DiskTarget(device)}, FileNumber: 99}},
+		} {
+			c.opts.Database, c.opts.Replace, c.opts.CloseExistingConnections = name, true, true
+			err := srv.Restore(ctx, c.opts)
+			if err == nil {
+				t.Fatalf("%s: the restore succeeded", c.what)
+			}
+			if batchCutShort(err) {
+				t.Fatalf("%s: the refusal reads as a batch cut short, so this does not test the batch's own release: %v", c.what, err)
+			}
+			if st, access := state(t, name); st != "ONLINE" || access != "RESTRICTED_USER" {
+				t.Errorf("%s: after a refused restore the database is %s / %s, want ONLINE / RESTRICTED_USER", c.what, st, access)
+			}
+		}
+	})
+
+	t.Run("a successful restore keeps the backup's access mode", func(t *testing.T) {
+		restricted := liveBackupPath(t, srv, ctx, name+"_restricted.bak")
+		defer db.ExecContext(context.Background(), "EXEC master.dbo.xp_delete_files @FilePath = N'"+restricted+"'")
+		setAccess(t, "RESTRICTED_USER")
+		if err := srv.Backup(ctx, BackupOptions{Database: name, Devices: []BackupTarget{DiskTarget(restricted)}, Init: true}); err != nil {
+			t.Fatalf("backup: %v", err)
+		}
+		setAccess(t, "MULTI_USER")
+		for _, c := range []struct {
+			before, dev, want string
+		}{
+			{"MULTI_USER", restricted, "RESTRICTED_USER"},
+			{"RESTRICTED_USER", device, "MULTI_USER"},
+			{"RESTRICTED_USER", restricted, "RESTRICTED_USER"},
+		} {
+			setAccess(t, c.before)
+			err := srv.Restore(ctx, RestoreOptions{Database: name, Devices: []BackupTarget{DiskTarget(c.dev)},
+				Replace: true, Recovery: RestoreWithRecovery, CloseExistingConnections: true})
+			if err != nil {
+				t.Fatalf("restore over %s: %v", c.before, err)
+			}
+			if st, access := state(t, name); st != "ONLINE" || access != c.want {
+				t.Errorf("a %s backup restored over a %s database left it %s / %s, want ONLINE / %s",
+					c.want, c.before, st, access, c.want)
+			}
+		}
+		setAccess(t, "MULTI_USER")
+	})
+
 	t.Run("NORECOVERY skips the release it would be refused", func(t *testing.T) {
 		if err := restore(RestoreOptions{Recovery: RestoreWithNoRecovery, CloseExistingConnections: true}); err != nil {
 			t.Fatalf("restore: %v", err)

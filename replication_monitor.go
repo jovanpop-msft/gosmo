@@ -678,14 +678,13 @@ type ReplAgentAction struct {
 // session's figures: merge history keeps only its messages per action.
 func (a *ReplicationAgent) SessionActions(ctx context.Context, s ReplAgentSession) ([]ReplAgentAction, error) {
 	what := fmt.Sprintf("read a session of replication agent %q", a.Name)
-	// The merge procedure finds the last session ending by @time, the others
-	// the session starting at it.
-	at := s.Start
-	if a.Kind == ReplMergeAgent {
-		at = s.End
-	}
+	// Every _sd procedure reads the session of the agent's newest history
+	// row (merge: session) at or before @time, so @time is the session's
+	// End, never its Start: history cleanup keeps only an agent's last row,
+	// and once a session's opening row is gone no row is at or before its
+	// Start — the session read as empty.
 	rows, err := a.dd.srv.query(ctx, "EXEC "+quoteIdent(a.dd.Name)+".dbo."+replAgentProc(a.Kind)+
-		"_sd @name = @p1, @time = @p2", a.Name, at.Format(replTimeLayout))
+		"_sd @name = @p1, @time = @p2", a.Name, s.End.Format(replTimeLayout))
 	return scanNamed(rows, err, what, func(r *namedRow) ReplAgentAction {
 		return ReplAgentAction{
 			Status:                ReplAgentStatus(r.intv("runstatus")),

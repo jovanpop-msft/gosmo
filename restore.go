@@ -48,11 +48,14 @@ type RestoreOptions struct {
 	// restore with "Exclusive access could not be obtained".
 	//
 	// An online database is set SINGLE_USER WITH ROLLBACK IMMEDIATE and,
-	// when that succeeded, put back to MULTI_USER after the RESTORE whenever
-	// it is still online and read-write — which also repairs it when the
-	// RESTORE fails, since a refused RESTORE does not end the batch; Restore
-	// repairs it again, off the caller's cancellation, only if the batch
-	// itself was cut short. A database that does not exist yet or is RESTORING has
+	// when that succeeded and it is still online, read-write and SINGLE_USER
+	// after the RESTORE, released to the access mode it had before —
+	// RESTRICTED_USER back to RESTRICTED_USER, anything else to MULTI_USER. A
+	// RESTORE that succeeded leaves the backup's own access mode, which is
+	// kept; one that failed leaves the batch's SINGLE_USER, which a refused
+	// RESTORE does not stop the batch from releasing. Restore repairs it
+	// again, off the caller's cancellation, only if the batch itself was cut
+	// short. A database that does not exist yet or is RESTORING has
 	// nobody to close and is left alone. One in STANDBY refuses the ALTER
 	// but can have readers, so its sessions are killed instead and no access
 	// mode is changed. A Managed Instance refuses SET SINGLE_USER, so
@@ -102,6 +105,14 @@ func (s *Server) Restore(ctx context.Context, opts RestoreOptions) error {
 		return err
 	}
 
+	// The mode before the batch, for the repair below; the batch's own
+	// @access goes with it when it is cut short. Read only where the batch
+	// sets an access mode at all.
+	mode := UserAccessMulti
+	closing := opts.CloseExistingConnections && !s.refusesSingleUser()
+	if closing {
+		mode = s.accessModeBefore(ctx, opts.Database)
+	}
 	if opts.Progress == nil || Scripting(ctx) {
 		err = s.exec(ctx, sqlText)
 	} else if err = refuseInTx(ctx, s, "restore with progress"); err != nil {
@@ -113,17 +124,17 @@ func (s *Server) Restore(ctx context.Context, opts RestoreOptions) error {
 		}
 	}
 	if err != nil {
-		// The batch's own MULTI_USER does not run when the batch is cut
+		// The batch's own release does not run when the batch is cut
 		// short — a cancel or an expired deadline, the likeliest ways for a
 		// long restore to fail. Only then: a failed RESTORE is
 		// statement-level (Msg 3201/3013 at severity 16, probed on 17 and
 		// 13), so the batch has already released what it took, and a
 		// repair after any error would flip a database deliberately left
 		// RESTRICTED_USER to MULTI_USER (see batchCutShort). Best effort: a
-		// database left RESTORING, or never created, refuses it, and the
+		// database left RESTORING, or never created, is not touched, and the
 		// restore's error is what the caller is told about.
-		if opts.CloseExistingConnections && batchCutShort(err) && !s.refusesSingleUser() {
-			_ = s.restoreMultiUser(ctx, opts.Database)
+		if closing && batchCutShort(err) {
+			_ = s.releaseAfterRestore(ctx, opts.Database, mode)
 		}
 		return fmt.Errorf("gosmo: restore %q: %w", opts.Database, err)
 	}
@@ -240,11 +251,27 @@ func buildRestoreStatement(opts RestoreOptions, killSessions bool) (string, erro
 	// would fail the RESTORE with "Exclusive access could not be obtained";
 	// they are killed instead, as on a Managed Instance, and no access mode
 	// is set, so none is released.
-	lit := QuoteLiteral(opts.Database)
-	online := fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state = 0 AND is_in_standby = 0)", lit)
-	standby := fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state = 0 AND is_in_standby = 1)", lit)
+	//
+	// The release afterwards is to the mode captured before, and only of a
+	// database still SINGLE_USER. RESTORE replaces the access mode with the
+	// backup's own (probed on 17, 2026-10-14: a RESTRICTED_USER backup
+	// restored over a MULTI_USER or SINGLE_USER database comes back
+	// RESTRICTED_USER, a MULTI_USER one over a RESTRICTED_USER database
+	// MULTI_USER, and a NORECOVERY restore carries it through to the RECOVERY),
+	// so after a successful RESTORE the mode is the backup's and is kept. The
+	// SINGLE_USER left behind is the batch's own: a RESTORE that failed, or
+	// one that does not replace the database (a file restore). A backup taken
+	// SINGLE_USER restores SINGLE_USER and cannot be told apart from that, so
+	// it is released too — a database locked to one session after a restore
+	// that was asked to close connections is the worse outcome. The hard-coded
+	// SET MULTI_USER this replaced opened a database the DBA had left
+	// RESTRICTED_USER to everyone when the RESTORE was refused, and opened a
+	// restored RESTRICTED_USER backup when it succeeded.
 	db := quoteIdent(opts.Database)
-	return fmt.Sprintf(`DECLARE @closed bit = 0;
+	online := restoreOnline(opts.Database, "")
+	standby := fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state = 0 AND is_in_standby = 1)", QuoteLiteral(opts.Database))
+	return fmt.Sprintf(`%[6]s
+DECLARE @closed bit = 0;
 IF %[1]s
 BEGIN
     ALTER DATABASE %[2]s SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
@@ -255,8 +282,38 @@ BEGIN
 %[5]s;
 END;
 %[3]s;
-IF @closed = 1 AND %[1]s
-    ALTER DATABASE %[2]s SET MULTI_USER;`, online, db, sb.String(), standby, killDatabaseSessionsBatch(opts.Database)), nil
+IF @closed = 1 AND %[7]s
+BEGIN
+    %[8]s
+END;`, online, db, sb.String(), standby, killDatabaseSessionsBatch(opts.Database),
+		captureAccessMode(opts.Database), restoreOnline(opts.Database, "SINGLE_USER"),
+		releaseAccessMode(db, "    ")), nil
+}
+
+// restoreOnline is the EXISTS test that the database is online and read-write
+// (not in STANDBY) — and, when access is set, in that user-access mode.
+func restoreOnline(name, access string) string {
+	cond := ""
+	if access != "" {
+		cond = " AND user_access_desc = " + QuoteLiteral(access)
+	}
+	return fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state = 0 AND is_in_standby = 0%s)",
+		QuoteLiteral(name), cond)
+}
+
+// releaseAfterRestore is restoreAccessMode for a restore with
+// CloseExistingConnections cut short: it releases the database to mode only
+// if it is still online, read-write and SINGLE_USER — the batch's own
+// SINGLE_USER. A database left RESTORING, never created, or carrying the
+// access mode of a backup that did restore is not touched.
+func (s *Server) releaseAfterRestore(ctx context.Context, name string, mode UserAccess) error {
+	if mode == UserAccessSingle {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
+	defer cancel()
+	return s.exec(rctx, fmt.Sprintf("IF %s\n    ALTER DATABASE %s SET %s",
+		restoreOnline(name, "SINGLE_USER"), quoteIdent(name), releaseMode(mode)))
 }
 
 // backupHistorySelect is the msdb read behind BackupHistory, at package

@@ -135,7 +135,9 @@ func TestLiveScriptedLoginKeepsAUserMapped(t *testing.T) {
 	orphaned := func() bool {
 		t.Helper()
 		var n int
-		q := "SELECT COUNT(*) FROM [" + dbName + "].sys.database_principals dp " +
+		// Under USE: a [db].sys… plan compiled from master keeps a
+		// recreated database's old id (live_scriptdatabase_test.go).
+		q := "USE [" + dbName + "]; SELECT COUNT(*) FROM sys.database_principals dp " +
 			"WHERE dp.name = @p1 AND dp.type = 'S' " +
 			"AND NOT EXISTS (SELECT 1 FROM sys.server_principals sp WHERE sp.sid = dp.sid)"
 		if err := db.QueryRowContext(ctx, q, login).Scan(&n); err != nil {

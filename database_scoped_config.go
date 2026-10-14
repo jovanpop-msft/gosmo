@@ -26,6 +26,13 @@ type DatabaseScopedConfig struct {
 	// sys.database_scoped_configurations has no is_value_default column —
 	// see scopedConfigSelect.
 	IsValueDefault bool
+	// ValueType and ValueForSecondaryType are the sql_variant base types
+	// of Value and ValueForSecondary (SQL_VARIANT_PROPERTY(…, 'BaseType'))
+	// — "bit" for a switch, "int"/"smallint" for a number, "nvarchar" for a
+	// keyword — and "" where the value is NULL. They are what tells a
+	// switch reporting "1" from a number reporting 1; the same on 2016.
+	ValueType             string
+	ValueForSecondaryType string
 }
 
 // scopedConfigSelect renders the read. Split out from
@@ -40,7 +47,9 @@ func (d *Database) scopedConfigSelect() string {
 	return `
 SELECT configuration_id, name, CAST(value AS NVARCHAR(256)),
        CAST(ISNULL(value_for_secondary, '') AS NVARCHAR(256)),
-       ` + colSince(d.serverMajorVersion(), SQLServer2017, "is_value_default", "CAST(0 AS bit)") + `
+       ` + colSince(d.serverMajorVersion(), SQLServer2017, "is_value_default", "CAST(0 AS bit)") + `,
+       CAST(ISNULL(SQL_VARIANT_PROPERTY(value, 'BaseType'), '') AS NVARCHAR(128)),
+       CAST(ISNULL(SQL_VARIANT_PROPERTY(value_for_secondary, 'BaseType'), '') AS NVARCHAR(128))
 FROM   sys.database_scoped_configurations
 ORDER  BY name`
 }
@@ -52,7 +61,7 @@ func (d *Database) DatabaseScopedConfigs(ctx context.Context) ([]*DatabaseScoped
 	rows, err := d.query(ctx, q)
 	return scanRows(rows, err, fmt.Sprintf("database scoped configurations in %q", d.Name), func(scan func(...any) error) (*DatabaseScopedConfig, error) {
 		c := &DatabaseScopedConfig{}
-		if err := scan(&c.ID, &c.Name, &c.Value, &c.ValueForSecondary, &c.IsValueDefault); err != nil {
+		if err := scan(&c.ID, &c.Name, &c.Value, &c.ValueForSecondary, &c.IsValueDefault, &c.ValueType, &c.ValueForSecondaryType); err != nil {
 			return nil, err
 		}
 		return c, nil

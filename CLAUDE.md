@@ -59,6 +59,10 @@ exercise the write, drop them; never mutate pre-existing objects.
 - **A live test closes its connection with `t.Cleanup`, never `defer`,** when
   it drops objects in a `t.Cleanup` — a deferred close runs first and every
   drop fails silently.
+- **Read another database's catalog under `USE [db]`, never `[db].sys.…`
+  from master** — an ad-hoc plan keeps the database id it was compiled
+  against, so after a drop/recreate reassigns ids the same text reads the
+  other database (a test's source and replay swapped, 2026-10-14).
 - **After a change to quoting, `NameKey` or script-text rewriting**
   (`bindScriptArgs`, `alterModuleDefinition`, `ParseServerAddress`), run
   `go test -run XXX -fuzz FuzzNames -fuzztime 60s -fuzzminimizetime 0`; a

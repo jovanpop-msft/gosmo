@@ -426,7 +426,7 @@ const windowRestoreTimeout = 10 * time.Second
 // cancelling a slow Apply, or the caller's deadline running out inside fn.
 // Re-enabling on that same context fails without reaching the server, so the
 // audit stayed switched off exactly when the window promised it would not. Same
-// shape as restoreMultiUser (server.go). The values are kept, so under WithScript
+// shape as restoreAccessMode (server.go). The values are kept, so under WithScript
 // the re-enable is still captured rather than run, and a rename inside the
 // window still restores under its new name. Neither the re-enable nor the
 // disable that opened the window is reported to a statement observer — see

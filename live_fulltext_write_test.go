@@ -18,7 +18,7 @@ import (
 )
 
 func TestLiveFullTextWrites(t *testing.T) {
-	db, ctx, done := liveDBTimeout(t, 4*time.Minute)
+	db, ctx, done := liveDBTimeout(t, 10*time.Minute)
 	t.Cleanup(done) // registered first, so it runs after the drops below
 	srv := liveServer(t, db, ctx)
 	if info, err := srv.FullTextInfo(ctx); err != nil {
@@ -177,19 +177,9 @@ func TestLiveFullTextWrites(t *testing.T) {
 	}
 	waitIdle := func(what string) *FullTextIndex {
 		t.Helper()
-		for deadline := time.Now().Add(60 * time.Second); ; {
-			i, err := loaded.FullTextIndex(ctx)
-			if err != nil {
-				t.Fatalf("%s: FullTextIndex: %v", what, err)
-			}
-			if i.CrawlCompleted && i.PopulateStatus == FullTextTableIdle {
-				return i
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("%s: population did not finish: %+v", what, i)
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
+		return liveFullTextWait(t, ctx, loaded, what, func(i *FullTextIndex) bool {
+			return i.CrawlCompleted && i.PopulateStatus == FullTextTableIdle
+		})
 	}
 	got := waitIdle("create")
 	if got.KeyIndex != "PK_Doc" || got.Catalog != catA || got.ChangeTracking != FullTextChangeTrackingManual ||
@@ -240,18 +230,13 @@ func TestLiveFullTextWrites(t *testing.T) {
 	if err := h.StartPopulation(ctx, FullTextPopulationUpdate); err != nil {
 		t.Errorf("StartPopulation UPDATE: %v", err)
 	}
-	for deadline := time.Now().Add(60 * time.Second); ; {
-		i := waitIdle("update population")
-		if i.ItemCount == 3 && i.PendingChanges == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the tracked insert was not applied: %+v", i)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	// A FULL started and stopped at once: STOP can find it finished already,
-	// which the server may refuse, so its result is not asserted.
+	liveFullTextWait(t, ctx, loaded, "update population", func(i *FullTextIndex) bool {
+		return i.CrawlCompleted && i.PopulateStatus == FullTextTableIdle && i.ItemCount == 3 && i.PendingChanges == 0
+	})
+	// A FULL started and stopped at once. Under MANUAL tracking the server
+	// refuses the STOP with a warning and the crawl runs on (probed on 17),
+	// and it can find the crawl finished already, so its result is not
+	// asserted.
 	if err := h.StartPopulation(ctx, FullTextPopulationFull); err != nil {
 		t.Errorf("StartPopulation FULL again: %v", err)
 	}

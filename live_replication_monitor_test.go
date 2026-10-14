@@ -141,17 +141,27 @@ func TestLiveReplicationMonitor(t *testing.T) {
 		if !sess[0].Start.Equal(a.LastStart) && a.Kind != ReplMergeAgent {
 			t.Errorf("Sessions(%q)[0].Start = %v, agent LastStart %v", name, sess[0].Start, a.LastStart)
 		}
-		acts, err := a.SessionActions(ctx, sess[0])
-		if err != nil {
-			t.Errorf("SessionActions(%q): %v", name, err)
-			continue
-		}
-		if len(acts) == 0 || acts[0].Message == "" || acts[0].Time.IsZero() {
-			t.Errorf("SessionActions(%q) = %+v", name, acts)
-		}
-		// A merge session's actions all carry the session's end time.
-		if a.Kind == ReplMergeAgent && len(acts) > 0 && !acts[0].Time.Equal(sess[0].End) {
-			t.Errorf("SessionActions(%q) of the newest session read another: %v, want %v", name, acts[0].Time, sess[0].End)
+		// Every session, not only the newest: history cleanup keeps an
+		// agent's last row alone, so an older or idle agent's session has
+		// lost its opening row — the case that once read as empty.
+		for i, s := range sess {
+			acts, err := a.SessionActions(ctx, s)
+			if err != nil {
+				t.Errorf("SessionActions(%q, %d): %v", name, i, err)
+				continue
+			}
+			if len(acts) == 0 || acts[0].Message == "" || acts[0].Time.IsZero() {
+				t.Errorf("SessionActions(%q, %d) = %+v", name, i, acts)
+				continue
+			}
+			// The newest action is the session's last (a merge session's
+			// actions all carry its end time).
+			if !acts[0].Time.Equal(s.End) {
+				t.Errorf("SessionActions(%q, %d) read another session: newest action %v, want %v", name, i, acts[0].Time, s.End)
+			}
+			if a.Kind != ReplMergeAgent && acts[len(acts)-1].Time.After(s.Start) {
+				t.Logf("SessionActions(%q, %d): opening row cleaned up, read from %v", name, i, acts[len(acts)-1].Time)
+			}
 		}
 	}
 	if a := byName[tsub.DistributionAgent]; a != nil &&

@@ -71,10 +71,12 @@ func TestLiveApplyPermissionEveryClassAndName(t *testing.T) {
 					t.Errorf("deny %s: %v", name, err)
 				}
 				var state string
-				row := db.QueryRowContext(ctx, `
+				// Under USE: a [db].sys… plan compiled from master keeps a
+				// recreated database's old id (live_scriptdatabase_test.go).
+				row := db.QueryRowContext(ctx, `USE `+quoteIdent(d.Name)+`;
 SELECT dp.state_desc
-FROM   `+quoteIdent(d.Name)+`.sys.database_permissions dp
-JOIN   `+quoteIdent(d.Name)+`.sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+FROM   sys.database_permissions dp
+JOIN   sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
 WHERE  pr.name = N'ap_user' AND dp.permission_name = @p1 AND dp.class_desc = @p2`, name, classDesc(sec.Class))
 				if err := row.Scan(&state); err != nil {
 					t.Errorf("%s: no permission row after DENY: %v", name, err)

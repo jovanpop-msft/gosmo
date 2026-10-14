@@ -470,32 +470,60 @@ func TestScriptDatabaseEncryption(t *testing.T) {
 
 // Scoped configurations: only what is away from its default, by
 // is_value_default from 2017 and by the documented defaults on 2016, and a
-// secondary value whenever one is set.
+// secondary value whenever one is set. The value's sql_variant base type
+// decides its spelling: a bit is OFF/ON, an integer a number — so a numeric
+// option no list names (NEW_NUMERIC, reporting 1) is written as 1, not ON.
 func TestScriptDatabaseScopedConfigurations(t *testing.T) {
+	typ := func(v string) string {
+		switch v {
+		case "":
+			return ""
+		case "0", "1":
+			return "bit"
+		case "WHEN_SUPPORTED", "PRIMARY", "https://x/y":
+			return "nvarchar"
+		}
+		return "int"
+	}
 	cfg := func(name, v, sec string, def bool) *DatabaseScopedConfig {
-		return &DatabaseScopedConfig{Name: name, Value: v, ValueForSecondary: sec, IsValueDefault: def}
+		return &DatabaseScopedConfig{Name: name, Value: v, ValueForSecondary: sec, IsValueDefault: def,
+			ValueType: typ(v), ValueForSecondaryType: typ(sec)}
+	}
+	num := func(c *DatabaseScopedConfig) *DatabaseScopedConfig {
+		c.ValueType = "int"
+		if c.ValueForSecondary != "" {
+			c.ValueForSecondaryType = "int"
+		}
+		return c
 	}
 	scoped := []*DatabaseScopedConfig{
 		cfg("ELEVATE_ONLINE", "WHEN_SUPPORTED", "", false),
+		cfg("FULLTEXT_INDEX_VERSION", "1", "", false),
 		cfg("IDENTITY_CACHE", "1", "", true),
 		cfg("LEGACY_CARDINALITY_ESTIMATION", "1", "PRIMARY", false),
-		cfg("MAXDOP", "4", "1", false),
+		num(cfg("MAXDOP", "1", "0", false)),
+		num(cfg("NEW_NUMERIC", "1", "", false)),
 		cfg("OPTIMIZE_FOR_AD_HOC_WORKLOADS", "1", "", false),
 		cfg("PARAMETER_SNIFFING", "1", "", true),
-		cfg("PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES", "0", "", false),
+		num(cfg("PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES", "0", "", false)),
 		cfg("LEDGER_DIGEST_STORAGE_ENDPOINT", "https://x/y", "", false),
+		{Name: "UNTYPED", Value: "1"},
 	}
+	scoped[1].ValueType = "smallint"
 	got := render(t, scripterOverDatabase("Sales"), &databaseLayout{opts: shippedDefaults(), scoped: scoped, major: 17})
 	stmt := func(s string) string { return "ALTER DATABASE SCOPED CONFIGURATION " + s + ";\nGO\n" }
 	want := "USE [Sales];\nGO\n" +
 		stmt("SET ELEVATE_ONLINE = WHEN_SUPPORTED") +
+		stmt("SET FULLTEXT_INDEX_VERSION = 1") +
 		stmt("SET LEGACY_CARDINALITY_ESTIMATION = ON") +
 		stmt("FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION = PRIMARY") +
-		stmt("SET MAXDOP = 4") +
-		stmt("FOR SECONDARY SET MAXDOP = 1") +
+		stmt("SET MAXDOP = 1") +
+		stmt("FOR SECONDARY SET MAXDOP = 0") +
+		stmt("SET NEW_NUMERIC = 1") +
 		stmt("SET OPTIMIZE_FOR_AD_HOC_WORKLOADS = ON") +
 		stmt("SET PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES = 0") +
 		"-- Database scoped configuration LEDGER_DIGEST_STORAGE_ENDPOINT reports a value with no SET form: not scripted.\n" +
+		"-- Database scoped configuration UNTYPED reports a value with no SET form: not scripted.\n" +
 		"USE [master];\nGO\n" +
 		"ALTER AUTHORIZATION ON DATABASE::[Sales]"
 	if !strings.Contains(got, want) {
@@ -506,7 +534,7 @@ func TestScriptDatabaseScopedConfigurations(t *testing.T) {
 	// documented defaults decide.
 	scoped16 := []*DatabaseScopedConfig{
 		cfg("LEGACY_CARDINALITY_ESTIMATION", "0", "", false),
-		cfg("MAXDOP", "2", "", false),
+		num(cfg("MAXDOP", "2", "", false)),
 		cfg("PARAMETER_SNIFFING", "0", "", false),
 		cfg("QUERY_OPTIMIZER_HOTFIXES", "0", "", false),
 		cfg("SOMETHING_NEWER", "1", "", false),

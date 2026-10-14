@@ -109,7 +109,7 @@ func TestLiveSingleUserForcedDropThatFailsLeavesTheDatabaseUsable(t *testing.T) 
 }
 
 // TestLiveSingleUserRepairSurvivesAnExpiredContext is the reason
-// restoreMultiUser derives its context with context.WithoutCancel.
+// restoreAccessMode derives its context with context.WithoutCancel.
 //
 // The statement it repairs after — SET SINGLE_USER WITH ROLLBACK IMMEDIATE —
 // waits out the rollback of every transaction it killed, so it is precisely the
@@ -152,11 +152,11 @@ func TestLiveSingleUserRepairSurvivesAnExpiredContext(t *testing.T) {
 	}
 
 	// Now the repair, on the same dead context.
-	if err := srv.restoreMultiUser(dead, name); err != nil {
-		t.Fatalf("restoreMultiUser on an expired context: %v", err)
+	if err := srv.restoreAccessMode(dead, name, UserAccessMulti); err != nil {
+		t.Fatalf("restoreAccessMode on an expired context: %v", err)
 	}
 	if got := userAccess(t, srv, ctx, name); got != "MULTI_USER" {
-		t.Errorf("after restoreMultiUser the database is %s, want MULTI_USER", got)
+		t.Errorf("after restoreAccessMode the database is %s, want MULTI_USER", got)
 	}
 }
 

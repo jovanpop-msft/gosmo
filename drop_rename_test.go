@@ -585,7 +585,7 @@ func TestDropColumnRefusesAnEmptyName(t *testing.T) {
 // Every write below opens by taking exclusive access with SET SINGLE_USER WITH
 // ROLLBACK IMMEDIATE, which locks the database to one login. If the write that
 // follows fails, nothing else puts it back — so the repair is part of the
-// method's contract, and these pin it. See Server.restoreMultiUser.
+// method's contract, and these pin it. See Server.restoreAccessMode.
 
 // TestAFailedForcedDropIsPutBackToMultiUser. A DROP can genuinely fail after
 // the alter succeeded — another session takes the single-user slot, the

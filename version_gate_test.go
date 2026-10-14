@@ -315,8 +315,8 @@ func TestScopedConfigSelectGatesTheIsValueDefaultColumn(t *testing.T) {
 		if got := strings.Contains(q, "is_value_default"); got != c.wantNamed {
 			t.Errorf("major %d names is_value_default = %v, want %v", c.major, got, c.wantNamed)
 		}
-		if got := len(selectExprs(t, selectList(t, q))); got != 5 {
-			t.Errorf("major %d selects %d expressions, want 5 — DatabaseScopedConfigs scans 5 destinations", c.major, got)
+		if got := len(selectExprs(t, selectList(t, q))); got != 7 {
+			t.Errorf("major %d selects %d expressions, want 7 — DatabaseScopedConfigs scans 7 destinations", c.major, got)
 		}
 	}
 }

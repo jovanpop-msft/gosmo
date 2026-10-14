@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -237,14 +238,16 @@ func TestLiveScriptDatabaseFileLayoutRoundTrips(t *testing.T) {
 	// Each database's layout as text, its own name taken out of every
 	// logical name, path and filegroup.
 	layout := func(n string) []string {
-		q := `
+		// Under USE, never [n].sys… from master: see the scoped
+		// configurations read in the in-database round trip.
+		q := `USE [` + n + `];
 SELECT CONCAT(mf.type_desc COLLATE DATABASE_DEFAULT, '|', mf.name COLLATE DATABASE_DEFAULT, '|',
               mf.physical_name COLLATE DATABASE_DEFAULT, '|', mf.size, '|',
               mf.max_size, '|', mf.growth, '|', mf.is_percent_growth)
 FROM   sys.master_files mf WHERE mf.database_id = DB_ID(@p1)
 UNION ALL
 SELECT CONCAT('FG|', fg.name COLLATE DATABASE_DEFAULT, '|', fg.type_desc COLLATE DATABASE_DEFAULT, '|', fg.is_default, '|', fg.is_read_only)
-FROM   [` + n + `].sys.filegroups fg`
+FROM   sys.filegroups fg`
 		rows, err := db.QueryContext(ctx, q, n)
 		if err != nil {
 			t.Fatalf("layout of %s: %v", n, err)
@@ -387,6 +390,21 @@ func TestLiveScriptDatabaseOptionsRoundTrip(t *testing.T) {
 		t.Fatalf("ScriptDatabase: %v", err)
 	}
 	t.Logf("script:\n%s", script)
+	// Once in 30 runs on 14 the script lacked CHANGE_TRACKING although the
+	// source had it on (OPEN-THREADS.md). Re-read it at once, so the next
+	// miss shows whether the read was momentary or the scripter dropped it.
+	if !strings.Contains(script, "SET CHANGE_TRACKING") {
+		for i := range 5 {
+			ct, err := srv.DatabaseRef(name).ChangeTracking(ctx)
+			var st string
+			db.QueryRowContext(ctx, `SELECT CONCAT(state_desc, ' collation=', ISNULL(collation_name, 'NULL'),
+       ' ct_rows=', (SELECT COUNT(*) FROM sys.change_tracking_databases WHERE database_id = DB_ID(@p1)),
+       ' sessions=', (SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(@p1)))
+FROM sys.databases WHERE name = @p1`, name).Scan(&st)
+			t.Errorf("script has no SET CHANGE_TRACKING; re-read %d: %+v, err %v, %s", i, ct, err, st)
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	replayScript(t, ctx, db, strings.ReplaceAll(script, name, copyName))
 
 	// Read from inside the database: AUTO_CLOSE is on, and a closed
@@ -425,7 +443,7 @@ WHERE  d.name = @p1`
 	want, got := settings(name), settings(copyName)
 	t.Logf("source settings: %s", want)
 	if got != want {
-		t.Errorf("replayed settings differ:\n replay %s\n source %s", got, want)
+		t.Errorf("replayed settings differ:\n%s replay %s\n source %s", settingsFieldDiff(got, want), got, want)
 	}
 
 	// Once AUTO_CLOSE has closed the copy, sys.databases reports NULL for
@@ -462,6 +480,45 @@ WHERE  d.name = @p1`
 	if _, err := srv.DatabaseRef(copyName).Options(ctx); err != nil {
 		t.Errorf("Options on an auto-closed database: %v", err)
 	}
+}
+
+// optionsSettingsFields names the '|'-separated fields of the options round
+// trip's settings line, in order; a run of digits is one field per flag.
+var optionsSettingsFields = []string{
+	"owner", "PAGE_VERIFY", "containment", "ALLOW_SNAPSHOT_ISOLATION", "READ_COMMITTED_SNAPSHOT",
+	"AUTO_CLOSE/SHRINK/CREATE_STATS/UPDATE_STATS/UPDATE_STATS_ASYNC", "TRUSTWORTHY",
+	"recovery model", "compatibility level", "collation", "change tracking",
+	"FILESTREAM access", "FILESTREAM directory", "Query Store",
+	"ANSI_NULL_DEFAULT/ANSI_NULLS/ANSI_PADDING/ANSI_WARNINGS/ARITHABORT/CONCAT_NULL_YIELDS_NULL/" +
+		"NUMERIC_ROUNDABORT/QUOTED_IDENTIFIER/RECURSIVE_TRIGGERS/CURSOR_CLOSE_ON_COMMIT/" +
+		"CURSOR_DEFAULT LOCAL/broker/DATE_CORRELATION/HONOR_BROKER_PRIORITY/DB_CHAINING/PARAMETERIZATION FORCED",
+	"TARGET_RECOVERY_TIME", "DELAYED_DURABILITY", "ADR", "user access", "READ_ONLY",
+}
+
+// settingsFieldDiff lists, one per line, each field of the options round
+// trip's settings line that differs — a whole-line diff of ~200 characters
+// is where the one flake on 14 went unread.
+func settingsFieldDiff(got, want string) string {
+	g, w := strings.Split(got, "|"), strings.Split(want, "|")
+	var sb strings.Builder
+	for i := range max(len(g), len(w)) {
+		var gv, wv, label string
+		if i < len(g) {
+			gv = g[i]
+		}
+		if i < len(w) {
+			wv = w[i]
+		}
+		if i < len(optionsSettingsFields) {
+			label = optionsSettingsFields[i]
+		} else {
+			label = fmt.Sprintf("field %d", i)
+		}
+		if gv != wv {
+			fmt.Fprintf(&sb, " %s: replay %q, source %q\n", label, gv, wv)
+		}
+	}
+	return sb.String()
 }
 
 // A snapshot scripts as CREATE … AS SNAPSHOT OF and replays as one: the
@@ -692,8 +749,13 @@ LEFT   JOIN master.sys.certificates c ON c.thumbprint = k.encryptor_thumbprint
 WHERE  d.name = @p1`, n).Scan(&head); err != nil {
 			t.Fatalf("settings of %s: %v", n, err)
 		}
-		rows, err := db.QueryContext(ctx, `SELECT CONCAT(name, '=', CAST(value AS nvarchar(256)), '/', CAST(value_for_secondary AS nvarchar(256)))
-FROM [`+n+`].sys.database_scoped_configurations ORDER BY name`)
+		// Under USE, never [n].sys… from master: an ad-hoc plan keeps the
+		// database id it was compiled against, so once a rerun's drops and
+		// creates reassign the ids, the same text reads the other database
+		// — source and replay swapped, the reported failure on 17.
+		rows, err := db.QueryContext(ctx, `USE [`+n+`];
+SELECT CONCAT(name, '=', CAST(value AS nvarchar(256)), '/', CAST(value_for_secondary AS nvarchar(256)))
+FROM sys.database_scoped_configurations ORDER BY name`)
 		if err != nil {
 			t.Fatalf("scoped configurations of %s: %v", n, err)
 		}
