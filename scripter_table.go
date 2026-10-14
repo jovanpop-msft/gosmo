@@ -380,11 +380,11 @@ func buildTableScript(schema, name, dbName string, p tableScriptParts, opts Scri
 			}
 			elems = append(elems, fmt.Sprintf("CONSTRAINT %s PRIMARY KEY %s (%s)%s%s",
 				quoteIdent(pkIdx.Name), clust, indexColumnList(pkIdx.KeyColumns),
-				indexWithClause(pkIdx, " "), dataSpaceClause(pkIdx.DataSpace)))
+				indexWithClause(pkIdx, " "), indexDataSpaceClause(pkIdx.DataSpace, p.ds)))
 		}
 		for _, idx := range indexes {
 			if inline[idx.Name] {
-				elems = append(elems, inlineIndexDefinition(idx, p.table))
+				elems = append(elems, inlineIndexDefinition(idx, p.table, p.ds))
 			}
 		}
 		for i, e := range elems {
@@ -418,6 +418,7 @@ func buildTableScript(schema, name, dbName string, p tableScriptParts, opts Scri
 		fmt.Fprintf(sb, ")%s%s%s%s;\nGO\n\n", graphTableClause(p.table),
 			dataSpaceClause(p.ds), tableStorageClauses(p), with)
 		sb.WriteString(lockEscalationStatement(p.table, fullName))
+		sb.WriteString(columnBindings(p.cols, fullName))
 
 		writeTableDependents(sb, indexes, inline, p, fullName, opts)
 	})
@@ -645,6 +646,30 @@ func lockEscalationStatement(o tableScriptOptions, fullName string) string {
 	return fmt.Sprintf("ALTER TABLE %s SET (LOCK_ESCALATION = %s);\nGO\n\n", fullName, o.LockEscalation)
 }
 
+// columnBindings renders the sp_bindrule and sp_bindefault that bind a legacy
+// rule or default to a column, as buildUserDefinedDataTypeScript does for a
+// type's. Without them the replayed column accepts values the original
+// rejects and fills in no default. A binding the column inherits from its
+// alias type is not on the Column (columnSelect) and is bound with the type.
+func columnBindings(cols []*Column, fullName string) string {
+	var sb strings.Builder
+	for _, col := range cols {
+		column := fullName + "." + quoteIdent(col.Name)
+		if col.BoundRule != "" {
+			fmt.Fprintf(&sb, "EXEC sp_bindrule N'%s', N'%s';\nGO\n",
+				escapeSingle(qualifiedName(col.BoundRuleSchema, col.BoundRule)), escapeSingle(column))
+		}
+		if col.BoundDefault != "" {
+			fmt.Fprintf(&sb, "EXEC sp_bindefault N'%s', N'%s';\nGO\n",
+				escapeSingle(qualifiedName(col.BoundDefaultSchema, col.BoundDefault)), escapeSingle(column))
+		}
+	}
+	if sb.Len() > 0 {
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 // writeTableDependents writes the statements that follow a CREATE TABLE:
 // the indexes and unique constraints not declared inside it (inline, by
 // name, and the primary key), the foreign keys, check constraints and edge
@@ -671,10 +696,10 @@ func writeTableDependents(sb *strings.Builder, indexes []*Index, inline map[stri
 			continue
 		}
 		if idx.IsUniqueConstraint {
-			sb.WriteString(scriptUniqueConstraint(idx, fullName, opts))
+			sb.WriteString(scriptUniqueConstraint(idx, fullName, p.ds, opts))
 			continue
 		}
-		sb.WriteString(scriptIndex(idx, fullName, opts))
+		sb.WriteString(scriptIndex(idx, fullName, p.ds, opts))
 	}
 
 	for _, fk := range p.fks {
@@ -779,7 +804,7 @@ var generatedAlwaysClauses = map[int]string{
 
 // scriptUniqueConstraint renders a unique constraint backed by idx as the
 // ALTER TABLE ... ADD CONSTRAINT it really is.
-func scriptUniqueConstraint(idx *Index, tableName string, opts ScriptOptions) string {
+func scriptUniqueConstraint(idx *Index, tableName string, tableDS DataSpace, opts ScriptOptions) string {
 	var sb strings.Builder
 	if opts.IncludeIfNotExists {
 		sb.WriteString(constraintExistenceGuard(idx.Name, tableName))
@@ -790,7 +815,7 @@ func scriptUniqueConstraint(idx *Index, tableName string, opts ScriptOptions) st
 	}
 	fmt.Fprintf(&sb, "ALTER TABLE %s\n    ADD CONSTRAINT %s UNIQUE %s (%s)%s%s;\nGO\n\n",
 		tableName, quoteIdent(idx.Name), clust, indexColumnList(idx.KeyColumns),
-		indexWithClause(idx, " "), dataSpaceClause(idx.DataSpace))
+		indexWithClause(idx, " "), indexDataSpaceClause(idx.DataSpace, tableDS))
 	return sb.String()
 }
 

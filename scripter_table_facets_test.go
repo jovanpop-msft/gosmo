@@ -56,14 +56,14 @@ func TestOrderedColumnstoreKeepsItsOrder(t *testing.T) {
 	cci := &Index{Name: "cci", Type: IndexTypeClusteredColumnStore, IsClustered: true,
 		IncludedColumns:  []IndexColumn{{Name: "a", IsIncluded: true}, {Name: "b", IsIncluded: true}, {Name: "c", IsIncluded: true}},
 		ColumnstoreOrder: []string{"c", "a"}}
-	if got, want := scriptIndex(cci, "[dbo].[T]", ScriptOptions{}),
+	if got, want := scriptIndex(cci, "[dbo].[T]", DataSpace{}, ScriptOptions{}),
 		"CREATE CLUSTERED COLUMNSTORE INDEX [cci] ON [dbo].[T] ORDER ([c], [a]);"; !strings.Contains(got, want) {
 		t.Errorf("clustered:\n%s\nwant %q", got, want)
 	}
 	ncci := &Index{Name: "ncci", Type: IndexTypeColumnStore,
 		IncludedColumns:  []IndexColumn{{Name: "a", IsIncluded: true}, {Name: "b", IsIncluded: true}},
 		ColumnstoreOrder: []string{"b"}, FilterDefinition: "([a]>(0))"}
-	if got, want := scriptIndex(ncci, "[dbo].[T]", ScriptOptions{}),
+	if got, want := scriptIndex(ncci, "[dbo].[T]", DataSpace{}, ScriptOptions{}),
 		"CREATE NONCLUSTERED COLUMNSTORE INDEX [ncci]\n    ON [dbo].[T] ([a], [b]) ORDER ([b])\n    WHERE ([a]>(0));"; !strings.Contains(got, want) {
 		t.Errorf("nonclustered:\n%s\nwant %q", got, want)
 	}

@@ -60,11 +60,11 @@ func buildUserDefinedDataTypeScript(t *UserDefinedDataType, opts ScriptOptions) 
 			fullName, t.BaseTypeString(), nullClause(t.IsNullable))
 		if t.Rule != "" {
 			fmt.Fprintf(sb, "\nEXEC sp_bindrule N'%s', N'%s';\nGO\n",
-				escapeSingle(quoteIdent(t.Rule)), escapeSingle(fullName))
+				escapeSingle(qualifiedName(t.RuleSchema, t.Rule)), escapeSingle(fullName))
 		}
 		if t.Default != "" {
 			fmt.Fprintf(sb, "\nEXEC sp_bindefault N'%s', N'%s';\nGO\n",
-				escapeSingle(quoteIdent(t.Default)), escapeSingle(fullName))
+				escapeSingle(qualifiedName(t.DefaultSchema, t.Default)), escapeSingle(fullName))
 		}
 	})
 }

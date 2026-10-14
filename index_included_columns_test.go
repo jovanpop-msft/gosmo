@@ -170,7 +170,7 @@ func TestSetIncludedColumnsAndScriptAgree(t *testing.T) {
 		t.Fatalf("SetIncludedColumns: %v", err)
 	}
 	sent := captured.find("DROP_EXISTING")
-	script := scriptIndex(idx, tbl.FullName(), ScriptOptions{})
+	script := scriptIndex(idx, tbl.FullName(), DataSpace{}, ScriptOptions{})
 	head := script[:strings.Index(script, "WITH (")]
 	if !strings.HasPrefix(sent, head) {
 		t.Errorf("the rebuild and the script differ before WITH:\nsent:   %s\nscript: %s", sent, head)

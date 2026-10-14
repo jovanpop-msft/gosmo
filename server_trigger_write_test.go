@@ -117,8 +117,27 @@ func TestBuildServerTriggerScript(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildServerTriggerScript: %v", err)
 		}
-		if !strings.HasPrefix(got, "ALTER TRIGGER [ddl_audit] ON ALL SERVER") {
+		if !strings.Contains(got, "GO\n"+"ALTER TRIGGER [ddl_audit] ON ALL SERVER") {
 			t.Errorf("CREATE was not rewritten to ALTER:\n%s", got)
+		}
+	})
+
+	// H4: the SET options the trigger was created under precede it, as for
+	// every other module; a CLR trigger has none.
+	t.Run("set options precede the definition", func(t *testing.T) {
+		got, err := buildServerTriggerScript(&ServerTrigger{Name: "ddl_audit", IsEnabled: true, Definition: def, UsesANSINulls: true}, ScriptOptions{})
+		if err != nil {
+			t.Fatalf("buildServerTriggerScript: %v", err)
+		}
+		if want := "SET ANSI_NULLS ON;\nGO\nSET QUOTED_IDENTIFIER OFF;\nGO\n" + def; !strings.Contains(got, want) {
+			t.Errorf("want %q in:\n%s", want, got)
+		}
+		got, err = buildServerTriggerScript(&ServerTrigger{Name: "clr_trig", IsEnabled: true, Definition: def, IsCLR: true}, ScriptOptions{})
+		if err != nil {
+			t.Fatalf("buildServerTriggerScript: %v", err)
+		}
+		if strings.Contains(got, "SET ") {
+			t.Errorf("a CLR trigger carried SET options:\n%s", got)
 		}
 	})
 

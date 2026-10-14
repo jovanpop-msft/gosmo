@@ -39,6 +39,17 @@ type DatabaseTrigger struct {
 	// encrypted trigger (the catalog reports NULL) and for a CLR trigger,
 	// which has no row there at all.
 	Definition string
+
+	// UsesANSINulls and UsesQuotedIdentifier are the SET ANSI_NULLS and
+	// QUOTED_IDENTIFIER the trigger was created under, from sys.sql_modules, which
+	// govern its body as they do any module's (moduleSetOptions). Both are
+	// false for a CLR trigger.
+	UsesANSINulls        bool
+	UsesQuotedIdentifier bool
+
+	// IsCLR is a CLR trigger (type TA): AS EXTERNAL NAME, with no stored
+	// definition.
+	IsCLR bool
 }
 
 // databaseTriggerSelect reads the parent_class = 0 rows of sys.triggers.
@@ -53,7 +64,8 @@ SELECT tr.name, tr.is_disabled, tr.create_date, tr.modify_date,
        ` + jsonList("te.type_desc", `
         FROM   sys.trigger_events te
         WHERE  te.object_id = tr.object_id`, "") + ` AS events,
-       m.definition
+       m.definition, ISNULL(m.uses_ansi_nulls, 0), ISNULL(m.uses_quoted_identifier, 0),
+       CAST(CASE WHEN tr.type = 'TA' THEN 1 ELSE 0 END AS bit)
 FROM   sys.triggers tr
 LEFT   JOIN sys.sql_modules m ON m.object_id = tr.object_id
 WHERE  tr.is_ms_shipped = 0 AND tr.parent_class = 0`
@@ -108,7 +120,8 @@ func scanDatabaseTrigger(d *Database, scan func(...any) error) (*DatabaseTrigger
 	t := &DatabaseTrigger{db: d}
 	var isDisabled bool
 	var events, definition sql.NullString
-	if err := scan(&t.Name, &isDisabled, &t.CreateDate, &t.ModifyDate, &events, &definition); err != nil {
+	if err := scan(&t.Name, &isDisabled, &t.CreateDate, &t.ModifyDate, &events, &definition,
+		&t.UsesANSINulls, &t.UsesQuotedIdentifier, &t.IsCLR); err != nil {
 		return nil, err
 	}
 	t.IsEnabled = !isDisabled

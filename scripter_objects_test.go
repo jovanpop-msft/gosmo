@@ -11,7 +11,7 @@ func TestBuildIndexScriptConstraintBackedIndexIsAConstraint(t *testing.T) {
 	pk := &Index{AllowRowLocks: true, AllowPageLocks: true, Name: "PK_T", IsPrimaryKey: true, IsUnique: true, IsClustered: true,
 		KeyColumns: []IndexColumn{{Name: "id"}}}
 
-	got := buildIndexScript(pk, "[dbo].[T]", opts)
+	got := buildIndexScript(pk, "[dbo].[T]", DataSpace{}, opts)
 	if !strings.Contains(got, "ADD CONSTRAINT [PK_T] PRIMARY KEY CLUSTERED ([id] ASC)") {
 		t.Errorf("primary key not scripted as a constraint — CREATE INDEX cannot recreate one:\n%s", got)
 	}
@@ -20,7 +20,7 @@ func TestBuildIndexScriptConstraintBackedIndexIsAConstraint(t *testing.T) {
 	}
 
 	opts.Verb = ScriptDrop
-	if got := buildIndexScript(pk, "[dbo].[T]", opts); !strings.Contains(got, "ALTER TABLE [dbo].[T] DROP CONSTRAINT IF EXISTS [PK_T]") {
+	if got := buildIndexScript(pk, "[dbo].[T]", DataSpace{}, opts); !strings.Contains(got, "ALTER TABLE [dbo].[T] DROP CONSTRAINT IF EXISTS [PK_T]") {
 		t.Errorf("dropping a key-backed index must drop the constraint:\n%s", got)
 	}
 }
@@ -29,18 +29,18 @@ func TestBuildIndexScriptOrdinaryIndex(t *testing.T) {
 	idx := &Index{AllowRowLocks: true, AllowPageLocks: true, Name: "IX_T_a", KeyColumns: []IndexColumn{{Name: "a"}}}
 	opts := DefaultScriptOptions()
 
-	got := buildIndexScript(idx, "[dbo].[T]", opts)
+	got := buildIndexScript(idx, "[dbo].[T]", DataSpace{}, opts)
 	if !strings.Contains(got, "CREATE NONCLUSTERED INDEX [IX_T_a]") {
 		t.Errorf("index not scripted as CREATE INDEX:\n%s", got)
 	}
 
 	opts.Verb = ScriptDrop
-	if got := buildIndexScript(idx, "[dbo].[T]", opts); !strings.Contains(got, "DROP INDEX IF EXISTS [IX_T_a] ON [dbo].[T]") {
+	if got := buildIndexScript(idx, "[dbo].[T]", DataSpace{}, opts); !strings.Contains(got, "DROP INDEX IF EXISTS [IX_T_a] ON [dbo].[T]") {
 		t.Errorf("index drop wrong:\n%s", got)
 	}
 
 	opts.Verb = ScriptDropAndCreate
-	got = buildIndexScript(idx, "[dbo].[T]", opts)
+	got = buildIndexScript(idx, "[dbo].[T]", DataSpace{}, opts)
 	if drop, create := strings.Index(got, "DROP INDEX"), strings.Index(got, "CREATE NONCLUSTERED"); drop < 0 || create < 0 || drop > create {
 		t.Errorf("DROP-and-CREATE out of order or incomplete:\n%s", got)
 	}

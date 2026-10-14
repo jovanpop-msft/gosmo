@@ -130,7 +130,7 @@ func TestLiveSetIncludedColumnsKeepsEveryOption(t *testing.T) {
 
 	t.Run("script as create round-trips the options", func(t *testing.T) {
 		src := read()
-		script := strings.TrimSuffix(scriptIndex(src, tbl.FullName(), ScriptOptions{}), ";\nGO\n\n")
+		script := strings.TrimSuffix(scriptIndex(src, tbl.FullName(), DataSpace{}, ScriptOptions{}), ";\nGO\n\n")
 		liveExecIn(t, d, ctx, `DROP INDEX IX_probe ON dbo.T`, script)
 		if got := read(); optionsOf(got) != optionsOf(src) {
 			t.Errorf("replayed script changed the index:\nscript %s\nbefore %+v\nafter  %+v", script, optionsOf(src), optionsOf(got))
@@ -171,7 +171,7 @@ func TestLiveScriptFilteredColumnstoreKeepsItsFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IndexByName: %v", err)
 	}
-	script := strings.TrimSuffix(scriptIndex(idx, tbl.FullName(), ScriptOptions{}), ";\nGO\n\n")
+	script := strings.TrimSuffix(scriptIndex(idx, tbl.FullName(), DataSpace{}, ScriptOptions{}), ";\nGO\n\n")
 	if !strings.Contains(script, "WHERE") {
 		t.Fatalf("script has no filter:\n%s", script)
 	}

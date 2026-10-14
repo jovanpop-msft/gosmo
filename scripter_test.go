@@ -220,7 +220,7 @@ func TestScriptIndexByType(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := scriptIndex(c.idx, "[dbo].[T]", plain)
+			got := scriptIndex(c.idx, "[dbo].[T]", DataSpace{}, plain)
 			if !strings.Contains(got, c.want) {
 				t.Errorf("scriptIndex() = %q, want it to contain %q", got, c.want)
 			}
@@ -607,7 +607,7 @@ func TestScriptXMLAndSpatialIndexes(t *testing.T) {
 	odd := &Index{Name: "SP", Type: IndexTypeSpatial, KeyColumns: []IndexColumn{{Name: "G"}},
 		Tessellation: SpatialGeometryAutoGrid, BoundingBox: &SpatialBoundingBox{XMax: 1, YMax: 1},
 		GridLevels: SpatialGridLevels{Level1: SpatialGridLow}, AllowRowLocks: false, AllowPageLocks: true}
-	if got, want := xmlOrSpatialIndexCreate(odd, "[t]"),
+	if got, want := xmlOrSpatialIndexCreate(odd, "[t]", DataSpace{}),
 		"CREATE SPATIAL INDEX [SP]\n    ON [t] ([G])\n    USING GEOMETRY_AUTO_GRID\n    WITH (BOUNDING_BOX = (0, 0, 1, 1), ALLOW_ROW_LOCKS = OFF)"; got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}

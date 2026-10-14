@@ -66,3 +66,76 @@ func TestBuildTableScriptDropAndCreateEmitsBoth(t *testing.T) {
 		t.Errorf("CREATE TABLE came before DROP TABLE; the script is not re-runnable:\n%s", got)
 	}
 }
+
+// TestRenameModuleHeader pins H1: sp_rename and ALTER SCHEMA … TRANSFER leave
+// sys.sql_modules' text naming the old object, so the header is rewritten to
+// the current name — and only the header, and only when it does not match.
+func TestRenameModuleHeader(t *testing.T) {
+	cases := []struct {
+		name                          string
+		def, keyword, schema, objName string
+		want                          string
+	}{
+		{"renamed", "CREATE PROCEDURE dbo.oldp AS SELECT 1", "PROCEDURE", "dbo", "newp",
+			"CREATE PROCEDURE [dbo].[newp] AS SELECT 1"},
+		{"transferred", "CREATE VIEW dbo.v AS SELECT 1 AS x", "VIEW", "hist", "v",
+			"CREATE VIEW [hist].[v] AS SELECT 1 AS x"},
+		{"unchanged two-part kept as written", "create view DBO_x.v as select 1", "VIEW", "DBO_x", "v",
+			"create view DBO_x.v as select 1"},
+		{"unchanged bracketed kept", "CREATE PROC [dbo].[p q] AS SELECT 1", "PROCEDURE", "dbo", "p q",
+			"CREATE PROC [dbo].[p q] AS SELECT 1"},
+		{"PROC abbreviation renamed", "CREATE PROC [dbo].[p] AS SELECT 1", "PROCEDURE", "dbo", "p2",
+			"CREATE PROC [dbo].[p2] AS SELECT 1"},
+		{"bracket escape compared unescaped", "CREATE VIEW [dbo].[a]]b] AS SELECT 1", "VIEW", "dbo", "a]b",
+			"CREATE VIEW [dbo].[a]]b] AS SELECT 1"},
+		{"quoted identifier", `CREATE FUNCTION "dbo"."f"() RETURNS int AS BEGIN RETURN 1 END`, "FUNCTION", "dbo", "g",
+			`CREATE FUNCTION [dbo].[g]() RETURNS int AS BEGIN RETURN 1 END`},
+		{"comment between keyword and name", "CREATE PROCEDURE /* x */ -- y\n dbo.oldp AS SELECT 1", "PROCEDURE", "dbo", "newp",
+			"CREATE PROCEDURE /* x */ -- y\n [dbo].[newp] AS SELECT 1"},
+		{"comments inside the name", "CREATE VIEW dbo /* a */ . /* b */ oldv AS SELECT 1", "VIEW", "dbo", "v",
+			"CREATE VIEW [dbo].[v] AS SELECT 1"},
+		{"create or alter", "CREATE OR ALTER VIEW dbo.oldv AS SELECT 1", "VIEW", "dbo", "v",
+			"CREATE OR ALTER VIEW [dbo].[v] AS SELECT 1"},
+		{"leading comment kept", "/* hdr /* nested */ */\nCREATE VIEW dbo.oldv AS SELECT 1", "VIEW", "dbo", "v",
+			"/* hdr /* nested */ */\nCREATE VIEW [dbo].[v] AS SELECT 1"},
+		{"one-part dbo unchanged", "CREATE PROCEDURE p AS SELECT 1", "PROCEDURE", "dbo", "p",
+			"CREATE PROCEDURE p AS SELECT 1"},
+		{"one-part renamed", "CREATE PROCEDURE oldp AS SELECT 1", "PROCEDURE", "dbo", "newp",
+			"CREATE PROCEDURE [dbo].[newp] AS SELECT 1"},
+		{"one-part transferred", "CREATE PROCEDURE p AS SELECT 1", "PROCEDURE", "hist", "p",
+			"CREATE PROCEDURE [hist].[p] AS SELECT 1"},
+		// A trigger lives in its table's schema; its one-part name resolves there.
+		{"one-part trigger in its table's schema", "CREATE TRIGGER tr ON hist.t AFTER INSERT AS SELECT 1", "TRIGGER", "hist", "tr",
+			"CREATE TRIGGER tr ON hist.t AFTER INSERT AS SELECT 1"},
+		{"trigger renamed, ON untouched", "CREATE TRIGGER dbo.oldtr ON dbo.oldtr AFTER INSERT AS SELECT 1", "TRIGGER", "dbo", "tr",
+			"CREATE TRIGGER [dbo].[tr] ON dbo.oldtr AFTER INSERT AS SELECT 1"},
+		{"three-part", "CREATE VIEW db.dbo.oldv AS SELECT 1", "VIEW", "dbo", "v",
+			"CREATE VIEW [dbo].[v] AS SELECT 1"},
+		{"empty schema part", "CREATE VIEW db..oldv AS SELECT 1", "VIEW", "dbo", "v",
+			"CREATE VIEW [dbo].[v] AS SELECT 1"},
+		{"numbered procedure keeps its number", "CREATE PROCEDURE dbo.oldp;2 AS SELECT 1", "PROCEDURE", "dbo", "newp",
+			"CREATE PROCEDURE [dbo].[newp];2 AS SELECT 1"},
+		{"name in body untouched", "CREATE PROCEDURE dbo.p AS EXEC dbo.oldp", "PROCEDURE", "dbo", "p",
+			"CREATE PROCEDURE dbo.p AS EXEC dbo.oldp"},
+		{"wrong keyword left alone", "CREATE VIEW dbo.v AS SELECT 1", "PROCEDURE", "dbo", "p",
+			"CREATE VIEW dbo.v AS SELECT 1"},
+		{"unterminated comment left alone", "CREATE VIEW /* dbo.v AS SELECT 1", "VIEW", "dbo", "w",
+			"CREATE VIEW /* dbo.v AS SELECT 1"},
+		{"unterminated bracket left alone", "CREATE VIEW [dbo.v AS SELECT 1", "VIEW", "dbo", "w",
+			"CREATE VIEW [dbo.v AS SELECT 1"},
+		{"four parts left alone", "CREATE VIEW a.b.c.d AS SELECT 1", "VIEW", "dbo", "w",
+			"CREATE VIEW a.b.c.d AS SELECT 1"},
+		{"not a header left alone", "SELECT 1", "VIEW", "dbo", "w", "SELECT 1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := renameModuleHeader(c.def, c.keyword, c.schema, c.objName); got != c.want {
+				t.Errorf("renameModuleHeader(%q, %s, %s, %s) =\n%q\nwant\n%q", c.def, c.keyword, c.schema, c.objName, got, c.want)
+			}
+		})
+	}
+	// Composed with the ALTER rewrite, as writeModuleDefinition does.
+	if got := alterModuleDefinition(renameModuleHeader("CREATE PROCEDURE dbo.oldp AS SELECT 1", "PROCEDURE", "dbo", "newp")); got != "ALTER PROCEDURE [dbo].[newp] AS SELECT 1" {
+		t.Errorf("rename then ALTER = %q", got)
+	}
+}

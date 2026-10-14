@@ -171,3 +171,67 @@ func TestUnwrapPredicate(t *testing.T) {
 		}
 	}
 }
+
+// TestIndexOnClauseIsRelativeToTheTable pins H2: an index's or key
+// constraint's omitted ON means its table's data space, not the default
+// filegroup, so an index on the default filegroup of a table that is
+// elsewhere carries ON [PRIMARY].
+func TestIndexOnClauseIsRelativeToTheTable(t *testing.T) {
+	primary := DataSpace{Name: "PRIMARY", IsDefaultFileGroup: true}
+	fg2 := DataSpace{Name: "fg 2"}
+	ps := DataSpace{Name: "ps_s", IsPartitionScheme: true, PartitionColumn: "id"}
+	cols := []IndexColumn{{Name: "id"}}
+	nc := func(ds DataSpace) *Index {
+		return &Index{Name: "nx", Type: IndexTypeNonClustered, KeyColumns: cols, DataSpace: ds}
+	}
+	plain := ScriptOptions{}
+	for _, c := range []struct {
+		name        string
+		got         string
+		want, wantN string
+	}{
+		{"non-aligned on a partitioned table", scriptIndex(nc(primary), "[dbo].[t]", ps, plain), " ON [PRIMARY]", ""},
+		{"on PRIMARY, table on fg 2", scriptIndex(nc(primary), "[dbo].[t]", fg2, plain), " ON [PRIMARY]", ""},
+		{"aligned", scriptIndex(nc(ps), "[dbo].[t]", ps, plain), " ON [ps_s]([id])", ""},
+		{"everything on PRIMARY", scriptIndex(nc(primary), "[dbo].[t]", primary, plain), "", ") ON "},
+		{"table unknown keeps the default rule", scriptIndex(nc(primary), "[dbo].[t]", DataSpace{}, plain), "", ") ON "},
+		{"on fg 2 beside its table", scriptIndex(nc(fg2), "[dbo].[t]", fg2, plain), " ON [fg 2]", ""},
+		{"unique constraint", scriptUniqueConstraint(&Index{Name: "uq", IsUniqueConstraint: true, KeyColumns: cols, DataSpace: primary},
+			"[dbo].[t]", fg2, plain), " ON [PRIMARY]", ""},
+		{"primary key", scriptKeyConstraint(&Index{Name: "pk", IsPrimaryKey: true, KeyColumns: cols, DataSpace: primary},
+			"[dbo].[t]", ps, plain), " ON [PRIMARY]", ""},
+		{"inline index", inlineIndexDefinition(nc(primary), tableScriptOptions{}, fg2), " ON [PRIMARY]", ""},
+		{"columnstore", scriptIndex(&Index{Name: "cs", Type: IndexTypeColumnStore, IncludedColumns: cols, DataSpace: primary},
+			"[dbo].[t]", ps, plain), " ON [PRIMARY]", ""},
+	} {
+		if c.want != "" && !strings.Contains(c.got, c.want) {
+			t.Errorf("%s: want %q in\n%s", c.name, c.want, c.got)
+		}
+		if c.wantN != "" && strings.Contains(c.got, c.wantN) {
+			t.Errorf("%s: want no %q in\n%s", c.name, c.wantN, c.got)
+		}
+	}
+
+	// Through buildTableScript: a nonclustered PK declared inside CREATE
+	// TABLE on a partitioned table, and an index after it.
+	tbl := buildTableScript("dbo", "t", "db", tableScriptParts{
+		cols: []*Column{{Name: "id", DataType: DataTypeInt, OrdinalPosition: 1}},
+		indexes: []*Index{
+			{Name: "pk", IsPrimaryKey: true, IsUnique: true, KeyColumns: cols, DataSpace: primary},
+			nc(primary),
+		},
+		ds: ps,
+	}, plain)
+	if !strings.Contains(tbl, "CONSTRAINT [pk] PRIMARY KEY NONCLUSTERED ([id] ASC)") || strings.Count(tbl, ") ON [PRIMARY]") != 2 {
+		t.Errorf("table script lost an ON [PRIMARY]:\n%s", tbl)
+	}
+
+	// A view's nonclustered index is placed against the clustered one's.
+	view := viewIndexes([]*Index{
+		{Name: "cx", Type: IndexTypeClustered, IsClustered: true, IsUnique: true, KeyColumns: cols, DataSpace: fg2},
+		nc(primary),
+	}, "[dbo].[v]", plain)
+	if !strings.Contains(view, "ON [PRIMARY]") {
+		t.Errorf("view index lost its ON [PRIMARY]:\n%s", view)
+	}
+}

@@ -160,6 +160,23 @@ func TestDMLTemplatesSkipServerFilledColumns(t *testing.T) {
 	if !strings.Contains(upd, "SET    [w] = <w, int,>\nWHERE") {
 		t.Errorf("UPDATE template:\n%s", upd)
 	}
+
+	// H9: SELECT reads the computed faces but never the internal columns,
+	// which fail the whole statement with Msg 13908.
+	edge := append(cols, &Column{Name: "from_obj_id_X", DataType: DataTypeInt, IsHidden: true, GraphType: GraphColumnFromObjID},
+		&Column{Name: "to_id_X", DataType: DataTypeBigInt, IsHidden: true, GraphType: GraphColumnToID},
+		&Column{Name: "to_obj_id_X", DataType: DataTypeInt, IsHidden: true, GraphType: GraphColumnToObjID})
+	sel := buildSelectScript("dbo", "E", edge)
+	for _, bad := range []string{"[graph_id_X]", "[from_id_X]", "[from_obj_id_X]", "[to_id_X]", "[to_obj_id_X]"} {
+		if strings.Contains(sel, bad) {
+			t.Errorf("SELECT names internal graph column %s:\n%s", bad, sel)
+		}
+	}
+	for _, good := range []string{"[$edge_id_X]", "[$from_id_X]", "[$to_id_X]", "[w]"} {
+		if !strings.Contains(sel, good) {
+			t.Errorf("SELECT lost %s:\n%s", good, sel)
+		}
+	}
 }
 
 // TestDMLTemplatesWriteSparseColumnsThroughTheColumnSet pins Msg 360: a

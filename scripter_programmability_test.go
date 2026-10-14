@@ -7,7 +7,7 @@ import (
 
 func TestBuildUserDefinedDataTypeScriptCarriesLengthNullabilityAndBindings(t *testing.T) {
 	typ := &UserDefinedDataType{Schema: "dbo", Name: "Phone", BaseType: "nvarchar",
-		MaxLength: 40, IsNullable: false, Rule: "PhoneRule", Default: "PhoneDefault"}
+		MaxLength: 40, IsNullable: false, RuleSchema: "hist", Rule: "PhoneRule", DefaultSchema: "dbo", Default: "PhoneDefault"}
 
 	got := buildUserDefinedDataTypeScript(typ, DefaultScriptOptions())
 	// max_length is bytes: 40 there is nvarchar(20), and emitting 40 would
@@ -15,10 +15,12 @@ func TestBuildUserDefinedDataTypeScriptCarriesLengthNullabilityAndBindings(t *te
 	if !strings.Contains(got, "CREATE TYPE [dbo].[Phone] FROM nvarchar(20) NOT NULL;") {
 		t.Errorf("alias type not scripted from its base type:\n%s", got)
 	}
-	if !strings.Contains(got, "EXEC sp_bindrule N'[PhoneRule]', N'[dbo].[Phone]';") {
-		t.Errorf("bound rule missing — the type would accept values the original refuses:\n%s", got)
+	if !strings.Contains(got, "EXEC sp_bindrule N'[hist].[PhoneRule]', N'[dbo].[Phone]';") {
+		// H6: in its own schema, not the type's — unqualified, the bind
+		// fails Msg 15017 or binds a same-named dbo rule.
+		t.Errorf("bound rule missing or unqualified — the type would accept values the original refuses:\n%s", got)
 	}
-	if !strings.Contains(got, "EXEC sp_bindefault N'[PhoneDefault]', N'[dbo].[Phone]';") {
+	if !strings.Contains(got, "EXEC sp_bindefault N'[dbo].[PhoneDefault]', N'[dbo].[Phone]';") {
 		t.Errorf("bound default missing:\n%s", got)
 	}
 
@@ -274,5 +276,31 @@ func TestBuildPlanGuideScriptEscapesTheQueryText(t *testing.T) {
 	}
 	if !strings.Contains(got, "@module_or_batch = N'SELECT * FROM t'") {
 		t.Errorf("SQL scope must pass its batch text:\n%s", got)
+	}
+}
+
+// TestBuildTableScriptBindsColumnRulesAndDefaults pins H5: a rule or default
+// bound to a column with sp_bindrule / sp_bindefault is part of the table's
+// script, schema-qualified on both sides.
+func TestBuildTableScriptBindsColumnRulesAndDefaults(t *testing.T) {
+	cols := []*Column{
+		{Name: "id", DataType: DataTypeInt, OrdinalPosition: 1},
+		{Name: "a'b", DataType: DataTypeInt, OrdinalPosition: 2, IsNullable: true,
+			BoundRuleSchema: "hist", BoundRule: "r_pos", BoundDefaultSchema: "dbo", BoundDefault: "d_zero"},
+	}
+	got := buildTableScript("dbo", "t", "db", tableScriptParts{cols: cols}, DefaultScriptOptions())
+	for _, want := range []string{
+		"EXEC sp_bindrule N'[hist].[r_pos]', N'[dbo].[t].[a''b]';\nGO\n",
+		"EXEC sp_bindefault N'[dbo].[d_zero]', N'[dbo].[t].[a''b]';\nGO\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in:\n%s", want, got)
+		}
+	}
+	if create, bind := strings.Index(got, "CREATE TABLE"), strings.Index(got, "sp_bindrule"); bind < create {
+		t.Errorf("binding precedes the CREATE TABLE:\n%s", got)
+	}
+	if strings.Count(got, "sp_bind") != 2 {
+		t.Errorf("an unbound column was bound:\n%s", got)
 	}
 }

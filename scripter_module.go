@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ============================================================
@@ -116,7 +117,7 @@ func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Build
 		if err != nil {
 			return fmt.Errorf("gosmo: script %s %s: %w", k.noun, qualifiedName(schema, name), err)
 		}
-		text := renderCLRModule(m)
+		text := renameModuleHeader(renderCLRModule(m), k.keyword, schema, name)
 		if sc.opts.verb() == ScriptAlter {
 			text = alterModuleDefinition(text)
 		}
@@ -127,7 +128,7 @@ func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Build
 	if !def.Valid {
 		return fmt.Errorf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
 	}
-	text := def.String
+	text := renameModuleHeader(def.String, k.keyword, schema, name)
 	if sc.opts.verb() == ScriptAlter {
 		text = alterModuleDefinition(text)
 	}
@@ -330,6 +331,172 @@ func leadingTriviaEnd(def string) int {
 	return -1
 }
 
+// renameModuleHeader replaces the name in a module definition's header —
+// CREATE [OR ALTER] <keyword> <name> — with [schema].[name] when it does not
+// already name that object, and returns def unchanged when it does or when
+// the header cannot be read.
+//
+// sys.sql_modules keeps the text the module was created with, and neither
+// sp_rename nor ALTER SCHEMA … TRANSFER touches it: a renamed procedure's
+// stored definition still says CREATE PROCEDURE dbo.oldp. Replayed verbatim,
+// the CREATE recreates the old name, a DROP AND CREATE drops the new one and
+// creates the old, and the ALTER fails — or, once something else has taken
+// the old name, alters that instead. SMO rewrites the header for the same
+// reason.
+//
+// Only the header name is touched: a trigger's ON <table> and the body are
+// left as written. A one-part name resolves to the creating session's default
+// schema, taken here as dbo; a trigger's resolves to its table's schema,
+// which is the trigger's own. A name that matches is left as written, so an
+// unrenamed module scripts byte for byte as it is stored.
+func renameModuleHeader(def, keyword, schema, name string) string {
+	at := leadingTriviaEnd(def)
+	if at < 0 {
+		return def
+	}
+	tok, ok := nextHeaderToken(def, at)
+	if !ok || !tok.isWord("CREATE") && !tok.isWord("ALTER") {
+		return def
+	}
+	if tok.isWord("CREATE") {
+		if tok, ok = nextHeaderToken(def, tok.end); ok && tok.isWord("OR") {
+			if tok, ok = nextHeaderToken(def, tok.end); !ok || !tok.isWord("ALTER") {
+				return def
+			}
+			tok, ok = nextHeaderToken(def, tok.end)
+		}
+	} else {
+		tok, ok = nextHeaderToken(def, tok.end)
+	}
+	if !ok || !tok.isWord(keyword) && !(keyword == "PROCEDURE" && tok.isWord("PROC")) {
+		return def
+	}
+
+	// The name: one to three identifiers joined by dots, a part between two
+	// dots allowed to be empty (db..name).
+	if tok, ok = nextHeaderToken(def, tok.end); !ok || !tok.ident {
+		return def
+	}
+	parts := []string{tok.text}
+	start, end := tok.start, tok.end
+	for {
+		dot, ok := nextHeaderToken(def, end)
+		if !ok || dot.ident || dot.text != "." {
+			break
+		}
+		tok, ok = nextHeaderToken(def, dot.end)
+		for ok && !tok.ident && tok.text == "." {
+			parts = append(parts, "")
+			tok, ok = nextHeaderToken(def, tok.end)
+		}
+		if !ok || !tok.ident {
+			return def
+		}
+		parts = append(parts, tok.text)
+		end = tok.end
+	}
+	if len(parts) > 3 {
+		return def
+	}
+	resolves := parts[len(parts)-1] == name
+	switch {
+	case len(parts) >= 2:
+		resolves = resolves && parts[len(parts)-2] == schema
+	case keyword != "TRIGGER":
+		resolves = resolves && schema == "dbo"
+	}
+	if resolves {
+		return def
+	}
+	return def[:start] + qualifiedName(schema, name) + def[end:]
+}
+
+// headerToken is one token of a module header: an identifier — a word, or a
+// [bracketed] or "quoted" one with its value unescaped — or a single other
+// character.
+type headerToken struct {
+	start, end int
+	text       string
+	ident      bool
+	quoted     bool
+}
+
+// isWord reports whether t is the unquoted keyword kw, in any case.
+func (t headerToken) isWord(kw string) bool {
+	return t.ident && !t.quoted && strings.EqualFold(t.text, kw)
+}
+
+// nextHeaderToken returns the first token of def at or after i, skipping
+// whitespace and comments (block comments nest, as in scriptCodeSpans). ok is
+// false at the end of def and in an unterminated comment or quoted
+// identifier, where nothing after can be trusted.
+func nextHeaderToken(def string, i int) (headerToken, bool) {
+	isWordRune := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '@' || r == '#' || r == '$'
+	}
+	for i < len(def) {
+		r, size := utf8.DecodeRuneInString(def[i:])
+		switch {
+		case unicode.IsSpace(r):
+			i += size
+		case strings.HasPrefix(def[i:], "--"):
+			j := strings.IndexByte(def[i:], '\n')
+			if j < 0 {
+				return headerToken{}, false
+			}
+			i += j + 1
+		case strings.HasPrefix(def[i:], "/*"):
+			depth, j := 1, i+2
+			for j < len(def) && depth > 0 {
+				switch {
+				case strings.HasPrefix(def[j:], "/*"):
+					depth, j = depth+1, j+2
+				case strings.HasPrefix(def[j:], "*/"):
+					depth, j = depth-1, j+2
+				default:
+					j++
+				}
+			}
+			if depth > 0 {
+				return headerToken{}, false
+			}
+			i = j
+		case r == '[' || r == '"':
+			closer := byte(']')
+			if r == '"' {
+				closer = '"'
+			}
+			var val strings.Builder
+			for j := i + 1; j < len(def); j++ {
+				if def[j] != closer {
+					val.WriteByte(def[j])
+					continue
+				}
+				if j+1 < len(def) && def[j+1] == closer {
+					val.WriteByte(closer)
+					j++
+					continue
+				}
+				return headerToken{start: i, end: j + 1, text: val.String(), ident: true, quoted: true}, true
+			}
+			return headerToken{}, false
+		case isWordRune(r):
+			j := i + size
+			for j < len(def) {
+				r, size := utf8.DecodeRuneInString(def[j:])
+				if !isWordRune(r) {
+					break
+				}
+				j += size
+			}
+			return headerToken{start: i, end: j, text: def[i:j], ident: true}, true
+		default:
+			return headerToken{start: i, end: i + size, text: def[i : i+size]}, true
+		}
+	}
+	return headerToken{}, false
+}
+
 // ============================================================
 // View
 // ============================================================
@@ -380,7 +547,13 @@ func viewIndexes(indexes []*Index, fullName string, opts ScriptOptions) string {
 	if opts.verb() == ScriptAlter {
 		sb.WriteString("-- ALTER VIEW drops every index on the view; these recreate them.\n")
 	}
-	writeTableDependents(&sb, ordered, nil, tableScriptParts{}, fullName, opts)
+	// The view's data space is its clustered index's: a nonclustered index
+	// with no ON clause lands there (indexDataSpaceClause).
+	var p tableScriptParts
+	if ordered[0].IsClustered {
+		p.ds = ordered[0].DataSpace
+	}
+	writeTableDependents(&sb, ordered, nil, p, fullName, opts)
 	return sb.String()
 }
 
@@ -525,6 +698,10 @@ func (sc *Scripter) ScriptDatabaseTrigger(ctx context.Context, name string) (str
 // statement in its batch, the same reason scriptModule ignores it. Both are
 // buildServerTriggerScript's reasoning, unchanged; only the scope clause
 // differs.
+//
+// The definition is preceded by the SET options it was created under, as
+// every module's is (moduleSetOptions) — except a CLR trigger's, which has
+// no T-SQL to compile.
 func buildDatabaseTriggerScript(t *DatabaseTrigger, opts ScriptOptions) (string, error) {
 	drop := fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON DATABASE;\nGO\n", quoteIdent(t.Name))
 	return opts.envelopeErr(drop, "", func(sb *strings.Builder) error {
@@ -534,6 +711,9 @@ func buildDatabaseTriggerScript(t *DatabaseTrigger, opts ScriptOptions) (string,
 		def := t.Definition
 		if opts.verb() == ScriptAlter {
 			def = alterModuleDefinition(def)
+		}
+		if !t.IsCLR {
+			sb.WriteString(moduleSetOptions(t.UsesANSINulls, t.UsesQuotedIdentifier))
 		}
 		sb.WriteString(def)
 		sb.WriteString("\nGO\n")

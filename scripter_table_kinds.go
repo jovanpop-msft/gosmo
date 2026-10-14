@@ -170,7 +170,7 @@ func inlineIndexes(indexes []*Index, cols []*Column, o tableScriptOptions) map[s
 
 // inlineIndexDefinition renders an index declared inside CREATE TABLE: a
 // unique constraint as `CONSTRAINT … UNIQUE`, anything else as `INDEX …`.
-func inlineIndexDefinition(idx *Index, o tableScriptOptions) string {
+func inlineIndexDefinition(idx *Index, o tableScriptOptions, tableDS DataSpace) string {
 	head := "INDEX " + quoteIdent(idx.Name) + " "
 	if idx.IsUniqueConstraint {
 		head = "CONSTRAINT " + quoteIdent(idx.Name) + " UNIQUE "
@@ -185,7 +185,7 @@ func inlineIndexDefinition(idx *Index, o tableScriptOptions) string {
 		clust = "CLUSTERED"
 	}
 	return fmt.Sprintf("%s%s (%s)%s%s", head, clust, indexColumnList(idx.KeyColumns),
-		indexWithClause(idx, " "), dataSpaceClause(idx.DataSpace))
+		indexWithClause(idx, " "), indexDataSpaceClause(idx.DataSpace, tableDS))
 }
 
 // memoryOptimizedIndexSpec renders a memory-optimized table's index from its

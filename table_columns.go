@@ -47,8 +47,12 @@ type Column struct {
 	IsSparse                  bool
 	// IsColumnSet is an XML column set FOR ALL_SPARSE_COLUMNS.
 	IsColumnSet bool
-	// MaskingFunction is the dynamic data masking function, e.g. "default()"
-	// or `partial(1,"XXX",0)`; "" when the column is not masked.
+	// MaskingFunction is the dynamic data masking function as written in
+	// MASKED WITH (FUNCTION = '…'), unescaped — e.g. "default()" or
+	// `partial(1,"X'X",0)`; "" when the column is not masked.
+	// sys.masked_columns stores it with each quote already doubled
+	// (`partial(1,"X''X",0)`); the read undoes that, so a scripter escaping
+	// it into the literal does not double it again on every round trip.
 	MaskingFunction string
 	// GeneratedAlwaysType is sys.columns.generated_always_type: 0 for an
 	// ordinary column, 1 for a system-versioned table's AS ROW START
@@ -92,6 +96,15 @@ type Column struct {
 	// default. Zero and "" for every other type and before 2025.
 	VectorDimensions int
 	VectorBaseType   string
+
+	// BoundRule and BoundDefault name a legacy rule and default bound to
+	// the column itself with sp_bindrule / sp_bindefault, in the schemas
+	// BoundRuleSchema and BoundDefaultSchema; all "" when none is. A
+	// default constraint is DefaultValue, not this, and a binding the column
+	// inherits from its alias type (the same object as the type's) is the
+	// type's — UserDefinedDataType.Rule and .Default — and is left out here.
+	BoundRuleSchema, BoundRule       string
+	BoundDefaultSchema, BoundDefault string
 }
 
 // The sys.columns.graph_type values for a graph table's internal columns.
@@ -111,6 +124,11 @@ const (
 // columnSelect is the SELECT and joins every column listing shares; each
 // caller appends its own WHERE, because a Table already holds an object_id
 // while Database.ObjectColumns has only a name to resolve.
+//
+// A bound rule or default is matched NULLIF the type's own: a column of an
+// alias type carries the type's binding in sys.columns too, and scripting it
+// on the column as well would bind it twice. A default constraint is also a
+// 'D' object in default_object_id, told apart by having a parent.
 //
 // graph_type is SQL Server 2017's, with graph tables themselves,
 // is_dropped_ledger_column 2022's, with ledger tables, and the vector_*
@@ -139,9 +157,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        ` + colSince(major, SQLServer2025, "ISNULL(c.vector_dimensions, 0)", "CAST(0 AS int)") + `,
-       ` + colSince(major, SQLServer2025, "ISNULL(c.vector_base_type_desc, '')", "CAST('' AS nvarchar(60))") + `
+       ` + colSince(major, SQLServer2025, "ISNULL(c.vector_base_type_desc, '')", "CAST('' AS nvarchar(60))") + `,
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek
@@ -246,9 +270,11 @@ func scanColumns(rows *sql.Rows) ([]*Column, error) {
 			&col.ColumnEncryptionKey, &col.EncryptionType, &col.EncryptionAlgorithm,
 			&col.XMLSchemaCollectionSchema, &col.XMLSchemaCollection, &col.IsXMLDocument,
 			&col.VectorDimensions, &col.VectorBaseType,
+			&col.BoundRuleSchema, &col.BoundRule, &col.BoundDefaultSchema, &col.BoundDefault,
 		); err != nil {
 			return nil, err
 		}
+		col.MaskingFunction = strings.ReplaceAll(col.MaskingFunction, "''", "'")
 		col.ComputedText = compText.String
 		col.Collation = collation.String
 		col.TypeSchema = typeSchema.String

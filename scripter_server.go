@@ -294,7 +294,8 @@ func (sc *ServerScripter) ScriptServerTrigger(ctx context.Context, name string) 
 // ScriptServerTrigger — is an error rather than an empty CREATE half: emitting
 // nothing produces a script that drops the trigger and does not put it back.
 // IncludeIfNotExists is not honoured because CREATE TRIGGER must be the first
-// statement in its batch, the same reason scriptModule ignores it.
+// statement in its batch, the same reason scriptModule ignores it. The SET
+// options precede the definition as in buildDatabaseTriggerScript.
 func buildServerTriggerScript(t *ServerTrigger, opts ScriptOptions) (string, error) {
 	drop := fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON ALL SERVER;\nGO\n", quoteIdent(t.Name))
 	return opts.envelopeErr(drop, "", func(sb *strings.Builder) error {
@@ -304,6 +305,9 @@ func buildServerTriggerScript(t *ServerTrigger, opts ScriptOptions) (string, err
 		def := t.Definition
 		if opts.verb() == ScriptAlter {
 			def = alterModuleDefinition(def)
+		}
+		if !t.IsCLR {
+			sb.WriteString(moduleSetOptions(t.UsesANSINulls, t.UsesQuotedIdentifier))
 		}
 		sb.WriteString(def)
 		sb.WriteString("\nGO\n")

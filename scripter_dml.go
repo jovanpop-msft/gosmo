@@ -154,9 +154,16 @@ func buildSelectScript(schema, name string, cols []*Column) string {
 	if len(cols) == 0 {
 		return fmt.Sprintf("SELECT *\nFROM   %s;\nGO\n", full)
 	}
-	names := make([]string, len(cols))
-	for i, c := range cols {
-		names[i] = quoteIdent(c.Name)
+	var names []string
+	for _, c := range cols {
+		// A graph table's internal columns (graph_id_…, from_obj_id_… and the
+		// like) cannot be selected at all — Msg 13908 for the whole SELECT.
+		// Their computed $node_id / $edge_id / $from_id / $to_id faces can.
+		switch c.GraphType {
+		case GraphColumnID, GraphColumnFromID, GraphColumnFromObjID, GraphColumnToID, GraphColumnToObjID:
+			continue
+		}
+		names = append(names, quoteIdent(c.Name))
 	}
 	return fmt.Sprintf("SELECT %s\nFROM   %s;\nGO\n", strings.Join(names, "\n     , "), full)
 }

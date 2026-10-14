@@ -33,7 +33,13 @@ func (sc *Scripter) ScriptIndex(ctx context.Context, schema, table, name string)
 	if err != nil {
 		return "", err
 	}
-	return buildIndexScript(idx, qualifiedName(schema, table), sc.opts), nil
+	// The table's own data space decides whether the index needs its ON
+	// clause (indexDataSpaceClause).
+	tableDS, err := t.DataSpace(ctx)
+	if err != nil {
+		return "", err
+	}
+	return buildIndexScript(idx, qualifiedName(schema, table), tableDS, sc.opts), nil
 }
 
 // tableChild picks the table child the Scripter was asked for by matchName:
@@ -52,7 +58,7 @@ func tableChild[T any](kind string, items []T, schema, table, name string, key f
 }
 
 // buildIndexScript assembles one index's script from metadata already read.
-func buildIndexScript(idx *Index, tableName string, opts ScriptOptions) string {
+func buildIndexScript(idx *Index, tableName string, tableDS DataSpace, opts ScriptOptions) string {
 	isConstraint := idx.IsPrimaryKey || idx.IsUniqueConstraint
 	drop := fmt.Sprintf("DROP INDEX IF EXISTS %s ON %s;\nGO\n", quoteIdent(idx.Name), tableName)
 	if isConstraint {
@@ -60,9 +66,9 @@ func buildIndexScript(idx *Index, tableName string, opts ScriptOptions) string {
 	}
 	return opts.envelope(drop, "", func(sb *strings.Builder) {
 		if isConstraint {
-			sb.WriteString(scriptKeyConstraint(idx, tableName, opts))
+			sb.WriteString(scriptKeyConstraint(idx, tableName, tableDS, opts))
 		} else {
-			sb.WriteString(scriptIndex(idx, tableName, opts))
+			sb.WriteString(scriptIndex(idx, tableName, tableDS, opts))
 		}
 		sb.WriteString(indexDisableStatement(idx, tableName))
 	})
@@ -70,9 +76,9 @@ func buildIndexScript(idx *Index, tableName string, opts ScriptOptions) string {
 
 // scriptKeyConstraint renders the primary key or unique constraint idx backs
 // as the ALTER TABLE ... ADD CONSTRAINT that creates it.
-func scriptKeyConstraint(idx *Index, tableName string, opts ScriptOptions) string {
+func scriptKeyConstraint(idx *Index, tableName string, tableDS DataSpace, opts ScriptOptions) string {
 	if !idx.IsPrimaryKey {
-		return scriptUniqueConstraint(idx, tableName, opts)
+		return scriptUniqueConstraint(idx, tableName, tableDS, opts)
 	}
 	var sb strings.Builder
 	if opts.IncludeIfNotExists {
@@ -84,7 +90,7 @@ func scriptKeyConstraint(idx *Index, tableName string, opts ScriptOptions) strin
 	}
 	fmt.Fprintf(&sb, "ALTER TABLE %s\n    ADD CONSTRAINT %s PRIMARY KEY %s (%s)%s%s;\nGO\n\n",
 		tableName, quoteIdent(idx.Name), clust, indexColumnList(idx.KeyColumns),
-		indexWithClause(idx, " "), dataSpaceClause(idx.DataSpace))
+		indexWithClause(idx, " "), indexDataSpaceClause(idx.DataSpace, tableDS))
 	return sb.String()
 }
 

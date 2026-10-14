@@ -53,10 +53,12 @@ type UserDefinedDataType struct {
 	IsNullable bool
 
 	// Rule and Default name the objects bound to the type with sp_bindrule
-	// and sp_bindefault, empty when nothing is bound. Both mechanisms are
+	// and sp_bindefault, in the schemas RuleSchema and DefaultSchema; all
+	// empty when nothing is bound. The schema is its own, not the type's: a
+	// rule in [hist] can be bound to a [dbo] type. Both mechanisms are
 	// deprecated by Microsoft; a type carrying one is legacy, not a defect.
-	Rule    string
-	Default string
+	RuleSchema, Rule       string
+	DefaultSchema, Default string
 }
 
 // FullName returns the schema-qualified, bracket-quoted name.
@@ -68,17 +70,18 @@ func (t *UserDefinedDataType) Database() *Database { return t.db }
 // userDefinedDataTypeSelect is the SELECT the listing and the by-name finder
 // share; each appends its own trailing clause.
 //
-// The rule and default are resolved through OBJECT_NAME rather than a join to
-// sys.objects: rule_object_id and default_object_id are 0 rather than NULL
-// when nothing is bound, and OBJECT_NAME(0) is NULL, which ISNULL turns into
-// the empty string a caller can test.
+// The rule and default are resolved through OBJECT_SCHEMA_NAME and
+// OBJECT_NAME rather than a join to sys.objects: rule_object_id and
+// default_object_id are 0 rather than NULL when nothing is bound, and
+// OBJECT_NAME(0) is NULL, which ISNULL turns into the empty string a caller
+// can test.
 const userDefinedDataTypeSelect = `
 SELECT t.name, SCHEMA_NAME(t.schema_id), t.user_type_id,
        ISNULL(TYPE_NAME(t.system_type_id), ''),
        t.max_length, t.precision, t.scale,
        ISNULL(t.collation_name, ''), ISNULL(t.is_nullable, 0),
-       ISNULL(OBJECT_NAME(t.rule_object_id), ''),
-       ISNULL(OBJECT_NAME(t.default_object_id), '')
+       ISNULL(OBJECT_SCHEMA_NAME(t.rule_object_id), ''), ISNULL(OBJECT_NAME(t.rule_object_id), ''),
+       ISNULL(OBJECT_SCHEMA_NAME(t.default_object_id), ''), ISNULL(OBJECT_NAME(t.default_object_id), '')
 FROM   sys.types t
 WHERE  t.is_user_defined = 1 AND t.is_table_type = 0 AND t.is_assembly_type = 0`
 
@@ -89,7 +92,7 @@ func scanUserDefinedDataType(d *Database, scan func(...any) error) (*UserDefined
 		&t.BaseType,
 		&t.MaxLength, &t.Precision, &t.Scale,
 		&t.Collation, &t.IsNullable,
-		&t.Rule, &t.Default,
+		&t.RuleSchema, &t.Rule, &t.DefaultSchema, &t.Default,
 	); err != nil {
 		return nil, err
 	}

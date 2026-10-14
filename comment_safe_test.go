@@ -64,7 +64,7 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 		},
 		"unscriptable index": func(n string) string {
 			return scriptIndex(&Index{Name: n, Type: IndexTypeXML, KeyColumns: []IndexColumn{{Name: "doc"}}},
-				qualifiedName(n, n), DefaultScriptOptions())
+				qualifiedName(n, n), DataSpace{}, DefaultScriptOptions())
 		},
 		"built-in resource pool": func(n string) string {
 			var sb strings.Builder

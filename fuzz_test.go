@@ -72,6 +72,10 @@ func FuzzNames(f *testing.F) {
 			}
 		}
 
+		if got := renameModuleHeader(s, "VIEW", "dbo", "v"); got != s && !strings.Contains(got, "[dbo].[v]") {
+			t.Fatalf("renameModuleHeader(%q) = %q: changed, but not to the name", s, got)
+		}
+
 		host, instance, _ := ParseServerAddress(s)
 		if host == "localhost" { // "." and "(local)" are spelt out
 			host, _, _ = splitServerAddress(s)

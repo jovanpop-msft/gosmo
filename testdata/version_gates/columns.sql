@@ -19,9 +19,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        CAST(0 AS int),
-       CAST('' AS nvarchar(60))
+       CAST('' AS nvarchar(60)),
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek
@@ -61,9 +67,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        CAST(0 AS int),
-       CAST('' AS nvarchar(60))
+       CAST('' AS nvarchar(60)),
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek
@@ -103,9 +115,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        CAST(0 AS int),
-       CAST('' AS nvarchar(60))
+       CAST('' AS nvarchar(60)),
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek
@@ -145,9 +163,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        CAST(0 AS int),
-       CAST('' AS nvarchar(60))
+       CAST('' AS nvarchar(60)),
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek
@@ -187,9 +211,15 @@ SELECT c.name, c.column_id,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        ISNULL(c.vector_dimensions, 0),
-       ISNULL(c.vector_base_type_desc, '')
+       ISNULL(c.vector_base_type_desc, ''),
+       ISNULL(SCHEMA_NAME(br.schema_id), ''), ISNULL(br.name, ''),
+       ISNULL(SCHEMA_NAME(bd.schema_id), ''), ISNULL(bd.name, '')
 FROM   sys.columns c
 JOIN   sys.types tp ON tp.user_type_id = c.user_type_id
+LEFT   JOIN sys.objects br
+       ON  br.object_id = NULLIF(c.rule_object_id, tp.rule_object_id)
+LEFT   JOIN sys.objects bd
+       ON  bd.object_id = NULLIF(c.default_object_id, tp.default_object_id) AND bd.parent_object_id = 0
 LEFT   JOIN sys.xml_schema_collections xsc
        ON  xsc.xml_collection_id = NULLIF(c.xml_collection_id, 0)
 LEFT   JOIN sys.column_encryption_keys cek

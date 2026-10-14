@@ -39,6 +39,17 @@ type ServerTrigger struct {
 	// for an encrypted trigger (the catalog reports NULL) and for a CLR
 	// trigger, which has no row there at all.
 	Definition string
+
+	// UsesANSINulls and UsesQuotedIdentifier are the SET ANSI_NULLS and
+	// QUOTED_IDENTIFIER the trigger was created under, from sys.server_sql_modules, which
+	// govern its body as they do any module's (moduleSetOptions). Both are
+	// false for a CLR trigger.
+	UsesANSINulls        bool
+	UsesQuotedIdentifier bool
+
+	// IsCLR is a CLR trigger (type TA): AS EXTERNAL NAME, with no stored
+	// definition.
+	IsCLR bool
 }
 
 // Server returns the server the trigger belongs to.
@@ -55,7 +66,8 @@ SELECT tr.name, tr.is_disabled, tr.create_date, tr.modify_date,
        ` + jsonList("te.type_desc", `
         FROM   sys.server_trigger_events te
         WHERE  te.object_id = tr.object_id`, "") + ` AS events,
-       m.definition
+       m.definition, ISNULL(m.uses_ansi_nulls, 0), ISNULL(m.uses_quoted_identifier, 0),
+       CAST(CASE WHEN tr.type = 'TA' THEN 1 ELSE 0 END AS bit)
 FROM   sys.server_triggers tr
 LEFT   JOIN sys.server_sql_modules m ON m.object_id = tr.object_id
 WHERE  tr.is_ms_shipped = 0`
@@ -107,7 +119,8 @@ func scanServerTrigger(s *Server, scan func(...any) error) (*ServerTrigger, erro
 	t := &ServerTrigger{server: s}
 	var isDisabled bool
 	var events, definition sql.NullString
-	if err := scan(&t.Name, &isDisabled, &t.CreateDate, &t.ModifyDate, &events, &definition); err != nil {
+	if err := scan(&t.Name, &isDisabled, &t.CreateDate, &t.ModifyDate, &events, &definition,
+		&t.UsesANSINulls, &t.UsesQuotedIdentifier, &t.IsCLR); err != nil {
 		return nil, err
 	}
 	t.IsEnabled = !isDisabled

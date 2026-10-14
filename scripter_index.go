@@ -34,7 +34,7 @@ func indexColumnList(cols []IndexColumn) string {
 // form — which is what this once did — emits DDL SQL Server rejects. An XML
 // or spatial index whose form was not read is emitted as a comment naming
 // what was skipped rather than as a statement that cannot run.
-func scriptIndex(idx *Index, tableName string, opts ScriptOptions) string {
+func scriptIndex(idx *Index, tableName string, tableDS DataSpace, opts ScriptOptions) string {
 	var sb strings.Builder
 	switch {
 	case idx.Type == IndexTypeClusteredColumnStore:
@@ -42,7 +42,7 @@ func scriptIndex(idx *Index, tableName string, opts ScriptOptions) string {
 			sb.WriteString(indexExistenceGuard(idx.Name, tableName))
 		}
 		fmt.Fprintf(&sb, "CREATE CLUSTERED COLUMNSTORE INDEX %s ON %s%s%s%s;\nGO\n\n",
-			quoteIdent(idx.Name), tableName, columnstoreOrderClause(idx), columnstoreWithClause(idx), dataSpaceClause(idx.DataSpace))
+			quoteIdent(idx.Name), tableName, columnstoreOrderClause(idx), columnstoreWithClause(idx), indexDataSpaceClause(idx.DataSpace, tableDS))
 		return sb.String()
 	case idx.Type == IndexTypeColumnStore:
 		// sys.index_columns marks every column of a nonclustered columnstore
@@ -63,7 +63,7 @@ func scriptIndex(idx *Index, tableName string, opts ScriptOptions) string {
 		if idx.FilterDefinition != "" {
 			fmt.Fprintf(&sb, "\n    WHERE %s", idx.FilterDefinition)
 		}
-		fmt.Fprintf(&sb, "%s%s;\nGO\n\n", columnstoreWithClause(idx), dataSpaceClause(idx.DataSpace))
+		fmt.Fprintf(&sb, "%s%s;\nGO\n\n", columnstoreWithClause(idx), indexDataSpaceClause(idx.DataSpace, tableDS))
 		return sb.String()
 	case idx.Type == IndexTypeXML && (idx.IsSelectiveXML || idx.SelectiveXMLPath != ""):
 		if opts.IncludeIfNotExists {
@@ -77,7 +77,7 @@ func scriptIndex(idx *Index, tableName string, opts ScriptOptions) string {
 		if opts.IncludeIfNotExists {
 			sb.WriteString(indexExistenceGuard(idx.Name, tableName))
 		}
-		sb.WriteString(xmlOrSpatialIndexCreate(idx, tableName))
+		sb.WriteString(xmlOrSpatialIndexCreate(idx, tableName, tableDS))
 		sb.WriteString(";\nGO\n\n")
 		return sb.String()
 	case idx.Type == IndexTypeXML || idx.Type == IndexTypeSpatial:
@@ -89,7 +89,7 @@ func scriptIndex(idx *Index, tableName string, opts ScriptOptions) string {
 	if opts.IncludeIfNotExists {
 		sb.WriteString(indexExistenceGuard(idx.Name, tableName))
 	}
-	sb.WriteString(rowstoreIndexCreate(idx, tableName, indexWithClause(idx, "\n    "), dataSpaceClause(idx.DataSpace)))
+	sb.WriteString(rowstoreIndexCreate(idx, tableName, indexWithClause(idx, "\n    "), indexDataSpaceClause(idx.DataSpace, tableDS)))
 	sb.WriteString(";\nGO\n\n")
 	return sb.String()
 }
@@ -116,7 +116,7 @@ func columnstoreOrderClause(idx *Index) string {
 // before 2022, and no ON clause at all — it lives with the table. A spatial
 // index's ON is a filegroup only; on a partitioned table it is aligned with
 // the table by the server, and naming the scheme is refused.
-func xmlOrSpatialIndexCreate(idx *Index, tableName string) string {
+func xmlOrSpatialIndexCreate(idx *Index, tableName string, tableDS DataSpace) string {
 	var sb strings.Builder
 	col := ""
 	if len(idx.KeyColumns) > 0 {
@@ -146,7 +146,7 @@ func xmlOrSpatialIndexCreate(idx *Index, tableName string) string {
 	}
 	sb.WriteString(withList(append(o, xmlOrSpatialOptions(idx)...)))
 	if ds := idx.DataSpace; idx.Type == IndexTypeSpatial && !ds.IsPartitionScheme {
-		sb.WriteString(dataSpaceClause(ds))
+		sb.WriteString(indexDataSpaceClause(ds, tableDS))
 	}
 	return sb.String()
 }
@@ -359,6 +359,26 @@ func dataSpaceClause(ds DataSpace) string {
 	default:
 		return fmt.Sprintf(" ON %s", quoteIdent(ds.Name))
 	}
+}
+
+// indexDataSpaceClause is dataSpaceClause for an index or a key constraint,
+// whose omitted ON means something else: not the default filegroup but the
+// data space of its table (tableDS), as for a constraint declared inside
+// CREATE TABLE. An index on the default filegroup of a table that is
+// elsewhere — a non-aligned index on a partitioned table, an index ON
+// [PRIMARY] of a table on [fg 2] — is therefore given its ON clause, or the
+// replay puts it beside the table. Where tableDS is not known (the zero
+// DataSpace) the default-filegroup rule stands.
+func indexDataSpaceClause(ds, tableDS DataSpace) string {
+	c := dataSpaceClause(ds)
+	if c != "" || tableDS.Name == "" || ds == tableDS {
+		return c
+	}
+	c, err := explicitDataSpaceClause(ds)
+	if err != nil {
+		return ""
+	}
+	return c
 }
 
 // explicitDataSpaceClause is dataSpaceClause without the default-filegroup
