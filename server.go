@@ -212,9 +212,10 @@ const databaseSessionPredicate = `s.is_user_process = 1 AND s.session_id <> @@SP
 // exclusiveBatch renders op — a statement needing the database name to
 // itself — as one batch that takes exclusive access with SET SINGLE_USER WITH
 // ROLLBACK IMMEDIATE, runs op only if that succeeded, and puts the database
-// back to MULTI_USER when op fails and the database still exists: the forced
-// Database.Drop and Database.Detach. (Database.Rename's is renameExclusiveBatch,
-// since which name to release depends on whether the rename happened.)
+// back to the access mode it had on entry when op fails and the database
+// still exists: the forced Database.Drop and Database.Detach.
+// (Database.Rename's is renameExclusiveBatch, since which name to release
+// depends on whether the rename happened.)
 //
 // One batch, not three execs, because the slot SINGLE_USER frees is taken
 // by whichever session asks first. As separate execs — possibly on different
@@ -237,7 +238,8 @@ const databaseSessionPredicate = `s.is_user_process = 1 AND s.session_id <> @@SP
 // error with THROW.
 func exclusiveBatch(name, op string) string {
 	db := quoteIdent(name)
-	return fmt.Sprintf(`DECLARE @closed bit = 0;
+	return fmt.Sprintf(`%[4]s
+DECLARE @closed bit = 0;
 ALTER DATABASE %[1]s SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
 IF @@ERROR = 0 SET @closed = 1;
 IF @closed = 1
@@ -245,9 +247,12 @@ BEGIN TRY
     %[2]s;
 END TRY
 BEGIN CATCH
-    IF DB_ID(%[3]s) IS NOT NULL ALTER DATABASE %[1]s SET MULTI_USER;
+    IF DB_ID(%[3]s) IS NOT NULL
+    BEGIN
+        %[5]s
+    END;
     THROW;
-END CATCH;`, db, op, QuoteLiteral(name))
+END CATCH;`, db, op, QuoteLiteral(name), captureAccessMode(name), releaseAccessMode(db, "        "))
 }
 
 // renameExclusiveBatch is exclusiveBatch for ALTER DATABASE … MODIFY NAME:
@@ -259,7 +264,8 @@ END CATCH;`, db, op, QuoteLiteral(name))
 // time (Msg 5058, MULTI_USER cannot be set on master) before anything runs,
 // which leaves nothing to repair.
 func renameExclusiveBatch(oldName, newName string) string {
-	return fmt.Sprintf(`DECLARE @closed bit = 0;
+	return fmt.Sprintf(`%[3]s
+DECLARE @closed bit = 0;
 ALTER DATABASE %[1]s SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
 IF @@ERROR = 0 SET @closed = 1;
 IF @closed = 1
@@ -268,11 +274,32 @@ BEGIN
         ALTER DATABASE %[1]s MODIFY NAME = %[2]s;
     END TRY
     BEGIN CATCH
-        ALTER DATABASE %[1]s SET MULTI_USER;
+        %[4]s
         THROW;
     END CATCH;
-    ALTER DATABASE %[2]s SET MULTI_USER;
-END;`, quoteIdent(oldName), quoteIdent(newName))
+    %[5]s
+END;`, quoteIdent(oldName), quoteIdent(newName), captureAccessMode(oldName),
+		releaseAccessMode(quoteIdent(oldName), "        "), releaseAccessMode(quoteIdent(newName), "    "))
+}
+
+// captureAccessMode declares @access, the database's user-access mode before
+// an exclusive batch takes it SINGLE_USER, for releaseAccessMode to put back.
+// A hard-coded MULTI_USER release opened a database the DBA had left
+// RESTRICTED_USER to everyone on every forced rename (gossms always renames
+// with force), and on every refused forced drop or detach.
+func captureAccessMode(name string) string {
+	return fmt.Sprintf("DECLARE @access nvarchar(60) = (SELECT user_access_desc FROM sys.databases WHERE name = %s);",
+		QuoteLiteral(name))
+}
+
+// releaseAccessMode renders, as one statement, the release of the database
+// named by the bracketed db to captureAccessMode's @access: RESTRICTED_USER
+// back to RESTRICTED_USER, SINGLE_USER left as it is, and anything else —
+// MULTI_USER, or no row read — to MULTI_USER. indent prefixes the ELSE line,
+// so the statement sits in whatever block it is placed in.
+func releaseAccessMode(db, indent string) string {
+	return fmt.Sprintf(`IF @access = N'RESTRICTED_USER' ALTER DATABASE %[1]s SET RESTRICTED_USER;
+%[2]sELSE IF ISNULL(@access, N'') <> N'SINGLE_USER' ALTER DATABASE %[1]s SET MULTI_USER;`, db, indent)
 }
 
 // batchCutShort reports whether err means an exclusiveBatch did not run to
@@ -338,14 +365,22 @@ func (s *Server) ReleaseIdleConnections(ctx context.Context) error {
 // moment later, reported there with what was being attempted.
 func (s *Server) releaseIdle(ctx context.Context) { _ = s.ReleaseIdleConnections(ctx) }
 
-// multiUserRepairTimeout bounds restoreMultiUser's statement. Short on
+// multiUserRepairTimeout bounds restoreAccessMode's statement. Short on
 // purpose: the caller still holds the single-user slot, so the ALTER has
 // nothing to wait for, and a repair that hangs is worse than one that gives up.
 const multiUserRepairTimeout = 10 * time.Second
 
 // restoreMultiUser puts a database this package set to SINGLE_USER back to
-// MULTI_USER — the release after a rename, and the repair after a detach or a
-// drop that failed with the database still there.
+// MULTI_USER — the repair after a restore cut short. restoreAccessMode is the
+// general form.
+func (s *Server) restoreMultiUser(ctx context.Context, name string) error {
+	return s.restoreAccessMode(ctx, name, UserAccessMulti)
+}
+
+// restoreAccessMode puts a database this package set to SINGLE_USER back to
+// mode, the access mode it had before (accessModeBefore) — the repair after a
+// forced detach or drop cut short with the database still there. A database
+// that was SINGLE_USER already is left as it is.
 //
 // The context is derived with context.WithoutCancel because the case this
 // exists for is the one where ctx is already dead. SET SINGLE_USER WITH
@@ -359,23 +394,58 @@ const multiUserRepairTimeout = 10 * time.Second
 // WithoutCancel keeps ctx's values, so a caller under WithScript still captures
 // the statement rather than running it. The repair is not reported to a
 // statement observer: it puts back what the failed write changed.
-func (s *Server) restoreMultiUser(ctx context.Context, name string) error {
+func (s *Server) restoreAccessMode(ctx context.Context, name string, mode UserAccess) error {
+	if mode == UserAccessSingle {
+		return nil
+	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
 	defer cancel()
-	return s.exec(rctx, fmt.Sprintf("ALTER DATABASE %s SET MULTI_USER", quoteIdent(name)))
+	return s.exec(rctx, fmt.Sprintf("ALTER DATABASE %s SET %s", quoteIdent(name), releaseMode(mode)))
 }
 
-// restoreMultiUserAfterRename is restoreMultiUser for a forced rename cut
+// restoreAccessModeAfterRename is restoreAccessMode for a forced rename cut
 // short, when nothing says whether the rename happened: the old name still
 // existing means it did not. A name taken by another database is the one
 // case where the new name exists and the rename did not happen — and there the
 // old name exists too, so the other database is never touched.
-func (s *Server) restoreMultiUserAfterRename(ctx context.Context, oldName, newName string) error {
+func (s *Server) restoreAccessModeAfterRename(ctx context.Context, oldName, newName string, mode UserAccess) error {
+	if mode == UserAccessSingle {
+		return nil
+	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
 	defer cancel()
-	return s.exec(rctx, fmt.Sprintf(`IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET MULTI_USER
-ELSE IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET MULTI_USER`,
-		QuoteLiteral(oldName), quoteIdent(oldName), QuoteLiteral(newName), quoteIdent(newName)))
+	m := releaseMode(mode)
+	return s.exec(rctx, fmt.Sprintf(`IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET %s
+ELSE IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET %s`,
+		QuoteLiteral(oldName), quoteIdent(oldName), m, QuoteLiteral(newName), quoteIdent(newName), m))
+}
+
+// releaseMode is the mode a repair releases to: RESTRICTED_USER kept, anything
+// else MULTI_USER — the same rule as the batches' releaseAccessMode, and never
+// a string spliced in unchecked.
+func releaseMode(mode UserAccess) UserAccess {
+	if mode == UserAccessRestricted {
+		return UserAccessRestricted
+	}
+	return UserAccessMulti
+}
+
+// accessModeBefore reads the database's user-access mode ahead of an
+// exclusive batch, for the client-side repair of a batch cut short: by then
+// the database is SINGLE_USER and what it was has gone with the batch's own
+// @access (captureAccessMode). Best effort, like the repair it serves — a
+// failed read, or no row, answers MULTI_USER, the release used before the
+// mode was kept. Nothing to repair under WithScript, so nothing is read.
+func (s *Server) accessModeBefore(ctx context.Context, name string) UserAccess {
+	if Scripting(ctx) {
+		return UserAccessMulti
+	}
+	var mode string
+	if err := s.queryRowScan(ctx, "SELECT user_access_desc FROM sys.databases WHERE name = @p1",
+		[]any{name}, &mode); err != nil {
+		return UserAccessMulti
+	}
+	return UserAccess(mode)
 }
 
 // query runs a server-scoped, rows-returning read against the pool,

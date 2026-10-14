@@ -696,7 +696,8 @@ WHERE  SCHEMA_NAME(t.schema_id) COLLATE DATABASE_DEFAULT = @p1
 // When force is true, active connections are terminated first — by SET
 // SINGLE_USER WITH ROLLBACK IMMEDIATE, or on a Managed Instance, which refuses
 // that statement, by killing the database's sessions (see killDatabaseSessions).
-// This Server's own idle sessions are released first either way (see
+// A forced drop that fails puts the database back to the user-access mode it
+// had — MULTI_USER, or RESTRICTED_USER left as it was. This Server's own idle sessions are released first either way (see
 // ReleaseIdleConnections).
 func (d *Database) Drop(ctx context.Context, force bool) error {
 	s, name := d.server, d.Name
@@ -720,14 +721,15 @@ func (d *Database) Drop(ctx context.Context, force bool) error {
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
 	default:
+		mode := s.accessModeBefore(ctx, name)
 		if err := s.exec(ctx, exclusiveBatch(name, drop)); err != nil {
 			// The drop can genuinely fail after the alter succeeded — the
 			// database belongs to an availability group, the login may set
-			// state but not drop — and the batch puts it back to MULTI_USER
-			// itself. Only a batch cut short needs the repair from here.
+			// state but not drop — and the batch puts it back to the access
+			// mode it had itself. Only a batch cut short needs the repair from here.
 			// Best effort: the drop's own error is what the caller is told.
 			if batchCutShort(err) {
-				_ = s.restoreMultiUser(ctx, name)
+				_ = s.restoreAccessMode(ctx, name, mode)
 			}
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
@@ -741,9 +743,10 @@ func (d *Database) Drop(ctx context.Context, force bool) error {
 //
 // When force is true the database is put into SINGLE_USER WITH ROLLBACK
 // IMMEDIATE first — terminating those connections and rolling back their
-// transactions — and back to MULTI_USER afterwards, including when the
-// rename itself fails, so a refused rename never leaves the database
-// single-user. A Managed Instance refuses SET SINGLE_USER, so there force
+// transactions — and back to the user-access mode it had afterwards,
+// including when the rename itself fails, so a refused rename never leaves
+// the database single-user and a RESTRICTED_USER one is not opened to
+// everyone. A Managed Instance refuses SET SINGLE_USER, so there force
 // kills the database's sessions instead and changes no access mode. This
 // Server's own idle sessions are released first either way (see
 // ReleaseIdleConnections).
@@ -772,9 +775,10 @@ func (d *Database) rename(ctx context.Context, newName string, force bool) error
 		// batch, as in Drop.
 		q = killDatabaseSessionsBatch(oldName) + ";\n" + q + ";"
 	default:
+		mode := s.accessModeBefore(ctx, oldName)
 		if err := s.exec(ctx, renameExclusiveBatch(oldName, newName)); err != nil {
 			if batchCutShort(err) {
-				_ = s.restoreMultiUserAfterRename(ctx, oldName, newName)
+				_ = s.restoreAccessModeAfterRename(ctx, oldName, newName, mode)
 			}
 			return fmt.Errorf("gosmo: rename database %q to %q: %w", oldName, newName, err)
 		}

@@ -207,3 +207,106 @@ func TestLiveSingleUserForcedRenameReleasesTheDatabase(t *testing.T) {
 		t.Errorf("the old name still resolves (%s)", got)
 	}
 }
+
+// TestLiveSingleUserForcedWritesKeepTheAccessMode: a forced rename, drop or
+// detach takes the database SINGLE_USER and releases it afterwards — to the
+// mode it had, not to a hard-coded MULTI_USER, which opened a database the
+// DBA had left RESTRICTED_USER to everyone (gossms renames with force
+// always). Each path is run from RESTRICTED_USER and from SINGLE_USER: a
+// successful rename, a rename refused because the name is taken, a forced
+// drop refused by a snapshot, and the client-side repair of a batch cut
+// short, on an expired context, under both names.
+func TestLiveSingleUserForcedWritesKeepTheAccessMode(t *testing.T) {
+	db, ctx, done := liveDBTimeout(t, 3*time.Minute)
+	defer done()
+	srv := &Server{db: db}
+
+	const name, renamed, taken, snap = "gossms_live_su_mode", "gossms_live_su_mode2",
+		"gossms_live_su_mode_taken", "gossms_live_su_mode_snap"
+	dropSnap := func() {
+		srv.exec(context.Background(), "IF DB_ID('"+snap+"') IS NOT NULL DROP DATABASE "+quoteIdent(snap))
+	}
+	dropRenamed := liveSingleUserDB(t, srv, ctx, renamed) // created only so the dropper exists
+	dropRenamed()
+	defer dropRenamed()
+	dropTaken := liveSingleUserDB(t, srv, ctx, taken)
+	defer dropTaken()
+
+	for _, mode := range []string{"RESTRICTED_USER", "SINGLE_USER"} {
+		dropSnap()
+		dropRenamed()
+		drop := liveSingleUserDB(t, srv, ctx, name)
+		set := func(db string) {
+			t.Helper()
+			if err := srv.exec(ctx, "ALTER DATABASE "+quoteIdent(db)+" SET "+mode+" WITH ROLLBACK IMMEDIATE"); err != nil {
+				t.Fatalf("set %s %s: %v", db, mode, err)
+			}
+		}
+		check := func(what, db string) {
+			t.Helper()
+			if got := userAccess(t, srv, ctx, db); got != mode {
+				t.Errorf("from %s, after %s the database is %s, want %s kept", mode, what, got, mode)
+			}
+		}
+		set(name)
+
+		if err := srv.DatabaseRef(name).Rename(ctx, taken, true); err == nil {
+			t.Fatalf("from %s: a rename onto a taken name succeeded", mode)
+		}
+		check("a refused forced rename", name)
+		if got := userAccess(t, srv, ctx, taken); got != "MULTI_USER" {
+			t.Errorf("from %s: a refused rename touched the database holding the name (%s)", mode, got)
+		}
+
+		if err := srv.DatabaseRef(name).Rename(ctx, renamed, true); err != nil {
+			t.Fatalf("from %s: forced rename: %v", mode, err)
+		}
+		check("a forced rename", renamed)
+		if err := srv.DatabaseRef(renamed).Rename(ctx, name, true); err != nil {
+			t.Fatalf("from %s: forced rename back: %v", mode, err)
+		}
+
+		var file string
+		if err := srv.db.QueryRowContext(ctx,
+			"SELECT REPLACE(physical_name, '.mdf', '_snap.ss') FROM sys.master_files "+
+				"WHERE database_id = DB_ID(@p1) AND type = 0", name).Scan(&file); err != nil {
+			t.Fatalf("locate the data file: %v", err)
+		}
+		if err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(snap)+
+			" ON (NAME = "+quoteIdent(name)+", FILENAME = '"+escapeSingle(file)+"') AS SNAPSHOT OF "+quoteIdent(name)); err != nil {
+			t.Fatalf("create snapshot: %v", err)
+		}
+		if err := srv.DatabaseRef(name).Drop(ctx, true); err == nil {
+			t.Fatalf("from %s: the drop succeeded; the snapshot was supposed to refuse it", mode)
+		}
+		check("a refused forced drop", name)
+		dropSnap()
+
+		// The client-side repair, as after a batch cut short: the database is
+		// SINGLE_USER by then, and the repair runs on a dead context.
+		dead, cancel := context.WithCancel(ctx)
+		cancel()
+		before := srv.accessModeBefore(ctx, name)
+		if string(before) != mode {
+			t.Errorf("accessModeBefore read %s, want %s", before, mode)
+		}
+		if err := srv.exec(ctx, "ALTER DATABASE "+quoteIdent(name)+" SET SINGLE_USER WITH ROLLBACK IMMEDIATE"); err != nil {
+			t.Fatalf("set single user: %v", err)
+		}
+		if err := srv.restoreAccessMode(dead, name, before); err != nil {
+			t.Fatalf("restoreAccessMode: %v", err)
+		}
+		check("the repair of a cut-short drop", name)
+		if err := srv.exec(ctx, "ALTER DATABASE "+quoteIdent(name)+" SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "+
+			"ALTER DATABASE "+quoteIdent(name)+" MODIFY NAME = "+quoteIdent(renamed)); err != nil {
+			t.Fatalf("stage a rename that happened: %v", err)
+		}
+		if err := srv.restoreAccessModeAfterRename(dead, name, renamed, before); err != nil {
+			t.Fatalf("restoreAccessModeAfterRename: %v", err)
+		}
+		check("the repair of a cut-short rename that happened", renamed)
+
+		dropRenamed()
+		drop()
+	}
+}

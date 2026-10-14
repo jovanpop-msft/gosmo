@@ -704,9 +704,83 @@ func TestAForcedRenameIsOneBatchThatReleasesWhicheverNameTheDatabaseHas(t *testi
 		if single < 0 || rename < single || !strings.Contains(b, "IF @closed = 1\nBEGIN\n    BEGIN TRY\n        ALTER DATABASE [AppDB] MODIFY NAME") {
 			t.Errorf("fail=%v: batch does not gate MODIFY NAME on SINGLE_USER:\n%s", fail, b)
 		}
-		if !strings.Contains(b, "BEGIN CATCH\n        ALTER DATABASE [AppDB] SET MULTI_USER;\n        THROW;\n    END CATCH;\n    ALTER DATABASE [AppDB2] SET MULTI_USER;\nEND;") {
+		if !strings.HasPrefix(b, "DECLARE @access nvarchar(60) = (SELECT user_access_desc FROM sys.databases WHERE name = N'AppDB');\n") {
+			t.Errorf("fail=%v: batch does not capture the access mode under the old name first:\n%s", fail, b)
+		}
+		if !strings.Contains(b, "BEGIN CATCH\n        "+releaseWant("[AppDB]", "        ")+"\n        THROW;\n    END CATCH;\n    "+releaseWant("[AppDB2]", "    ")+"\nEND;") {
 			t.Errorf("fail=%v: batch does not release under whichever name the database has:\n%s", fail, b)
 		}
+	}
+}
+
+// TestAForcedWriteCutShortRepairsToTheModeTheDatabaseHad. A batch cut short
+// has lost its own @access, so the client-side repair releases to the mode
+// read before the batch: RESTRICTED_USER stays restricted (a hard-coded
+// MULTI_USER opened it to everyone), SINGLE_USER is left alone, MULTI_USER
+// is MULTI_USER as before.
+func TestAForcedWriteCutShortRepairsToTheModeTheDatabaseHad(t *testing.T) {
+	writes := map[string]struct {
+		cancelOn string
+		write    func(context.Context, *Server) error
+		repair   func(mode string) string
+	}{
+		"drop": {"DROP DATABASE",
+			func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Drop(ctx, true) },
+			func(m string) string { return "ALTER DATABASE [appdb] SET " + m }},
+		"detach": {"sp_detach_db",
+			func(ctx context.Context, s *Server) error {
+				return s.DatabaseRef("appdb").Detach(ctx, DetachOptions{DropConnections: true})
+			},
+			func(m string) string { return "ALTER DATABASE [appdb] SET " + m }},
+		"rename": {"MODIFY NAME",
+			func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Rename(ctx, "appdb2", true) },
+			func(m string) string {
+				return "IF DB_ID(N'appdb') IS NOT NULL ALTER DATABASE [appdb] SET " + m +
+					"\nELSE IF DB_ID(N'appdb2') IS NOT NULL ALTER DATABASE [appdb2] SET " + m
+			}},
+	}
+	for name, w := range writes {
+		for before, want := range map[string]string{
+			"RESTRICTED_USER": "RESTRICTED_USER",
+			"MULTI_USER":      "MULTI_USER",
+			"SINGLE_USER":     "", // no repair
+		} {
+			s := detServer(t)
+			detLog.mu.Lock()
+			detLog.access = before
+			detLog.mu.Unlock()
+			ctx := detCancelOn(t, w.cancelOn)
+			if err := w.write(ctx, s); err == nil {
+				t.Fatalf("%s from %s: a write whose context expired returned no error", name, before)
+			}
+			if detLog.accessReads != 1 {
+				t.Errorf("%s from %s: %d access-mode reads, want 1 before the batch", name, before, detLog.accessReads)
+			}
+			stmts := detLog.statements()
+			switch {
+			case want == "" && len(stmts) != 1:
+				t.Errorf("%s from SINGLE_USER: statements %v, want only the batch — the database was single-user already", name, stmts)
+			case want != "" && (len(stmts) != 2 || stmts[1] != w.repair(want)):
+				t.Errorf("%s from %s: statements %v, want the batch then %q", name, before, stmts, w.repair(want))
+			}
+		}
+	}
+}
+
+// TestAForcedWriteUnderWithScriptReadsNoAccessMode. The pre-read only serves
+// the repair of a batch cut short, which a captured script never is; the
+// captured batch carries its own capture (captureAccessMode).
+func TestAForcedWriteUnderWithScriptReadsNoAccessMode(t *testing.T) {
+	s := detServer(t)
+	ctx, script := WithScript(context.Background())
+	if err := s.DatabaseRef("appdb").Rename(ctx, "appdb2", true); err != nil {
+		t.Fatalf("Rename under WithScript: %v", err)
+	}
+	if detLog.accessReads != 0 || len(detLog.statements()) != 0 {
+		t.Errorf("a captured rename reached the server: %d access reads, statements %v", detLog.accessReads, detLog.statements())
+	}
+	if got := script.Statements(); len(got) != 1 || !strings.Contains(got[0], "DECLARE @access") {
+		t.Errorf("captured %v, want one batch carrying its own access-mode capture", got)
 	}
 }
 

@@ -18,8 +18,9 @@ type DetachOptions struct {
 	// DropConnections rolls back and disconnects everything using the
 	// database first (SET SINGLE_USER WITH ROLLBACK IMMEDIATE). Without it a
 	// database with any other connection open refuses to detach. A detach
-	// that then fails is put back to MULTI_USER, so a refusal never leaves
-	// the database single-user — same contract as Database.Rename.
+	// that then fails is put back to the user-access mode it had, so a
+	// refusal never leaves the database single-user — same contract as
+	// Database.Rename.
 	DropConnections bool
 
 	// UpdateStatistics runs UPDATE STATISTICS across the database before
@@ -70,11 +71,12 @@ func (d *Database) Detach(ctx context.Context, opts DetachOptions) error {
 		return nil
 	}
 	// One batch — see exclusiveBatch — which also puts a database whose
-	// detach failed back to MULTI_USER. A batch cut short may not have got
-	// that far.
+	// detach failed back to the access mode it had. A batch cut short may
+	// not have got that far.
+	mode := s.accessModeBefore(ctx, name)
 	if err := s.exec(ctx, exclusiveBatch(name, detach)); err != nil {
 		if batchCutShort(err) {
-			_ = s.restoreMultiUser(ctx, name)
+			_ = s.restoreAccessMode(ctx, name, mode)
 		}
 		return fmt.Errorf("gosmo: detach database %q: %w", name, err)
 	}

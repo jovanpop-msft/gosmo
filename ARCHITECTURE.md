@@ -318,7 +318,7 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Drop a server role      | `srv.ServerRoleRef(name).Drop(ctx)` / `role.Drop(ctx)`  |
 | Drop a database         | `srv.DatabaseRef(name).Drop(ctx, force)` / `db.Drop(ctx, force)` — `force` closes other connections first |
 | Rename a database       | `srv.DatabaseRef(old).Rename(ctx, new, force)` / `db.Rename(ctx, new, force)` — `force` puts it in single-user mode first |
-| Detach a database       | `srv.DatabaseRef(name).Detach(ctx, gosmo.DetachOptions{...})` — leaves the files on disk; a detach that fails after `DropConnections` is put back to MULTI_USER |
+| Detach a database       | `srv.DatabaseRef(name).Detach(ctx, gosmo.DetachOptions{...})` — leaves the files on disk; a detach that fails after `DropConnections` is put back to the access mode it had |
 | Free the pool's own sessions from a database | `srv.ReleaseIdleConnections(ctx)` — closes idle pooled connections, which otherwise sit inside the last database they read and block an exclusive-access statement (detach, rename, drop, `SET READ_ONLY`, RCSI, filegroup read-only — each of which calls it itself) |
 | Attach a database       | `srv.AttachDatabase(ctx, gosmo.AttachSpec{Name, Files, Owner, RebuildLog})` — the name need not be the one it was detached under |
 | Read a detached file    | `srv.DetachedDatabaseInfo(ctx, primaryFilePath)` → `*DetachedDatabase` (`.Name`, `.Files`, `.DataFiles()`, `.LogFiles()`) — the only way to learn a detached database's other files |
@@ -759,7 +759,7 @@ an unescaped filter for `pct_1` also matches `pct1100`.
 
 | SMO / SSMS equivalent      | gosmo                                                     |
 | --------------------------- | ---------------------------------------------------------- |
-| Object dependencies (uses)  | `db.Dependencies(ctx, schema, name)`                            |
+| Object dependencies (uses)  | `db.Dependencies(ctx, schema, name)` — an unqualified (caller-dependent) reference is resolved by name and flagged `IsCallerDependent` |
 | Object dependencies (used by) | `db.Dependents(ctx, schema, name)`                            |
 | Object search                | `db.Search(ctx, pattern)`                                      |
 | Securable search (for a permissions picker) | `db.FindSecurables(ctx, gosmo.SecurableSearch{Name: ..., Limit: ...})` → `[]SecurableRef` (schemas, tables, views) |
@@ -879,8 +879,10 @@ rows.
 skips the statistics update and keeps the full-text index files, which is
 both what SSMS offers unchecked and what a large database wants.
 `DropConnections` rolls back and disconnects everything using the database
-first; a detach that then fails puts it back to `MULTI_USER`, so a refusal
-never leaves the database single-user.
+first; a detach that then fails puts it back to the access mode it had
+(`MULTI_USER`, or `RESTRICTED_USER` kept), so a refusal never leaves the
+database single-user nor opens a restricted one. A forced `Rename` and `Drop`
+release the same way.
 
 `DetachedDatabaseInfo` reads the file list held *inside* a detached primary
 data file (the undocumented `DBCC CHECKPRIMARYFILE` that SMO — and so SSMS —
@@ -907,7 +909,9 @@ the snapshot appears once, in its own folder beside System Databases rather
 than under its source.
 
 Leave `Files` nil and one sparse file is placed beside each of the source's
-`ROWS` files, named `<stem>_<snapshot>.ss`. Only `ROWS` files are ever named:
+`ROWS` files, named `<stem>_<snapshot>.ss` — with the extension kept in the
+stem (`<stem>_ndf_<snapshot>.ss`) for a file that would otherwise collide with
+an earlier one, as `db.mdf` and `db.ndf` in one folder do. Only `ROWS` files are ever named:
 a snapshot has no log and no FILESTREAM container, and naming either is the
 usual way a hand-built `CREATE DATABASE ... AS SNAPSHOT OF` fails. The paths
 belong to the *server's* filesystem and are split on both separators, so a

@@ -46,9 +46,17 @@ func (c *detConn) ExecContext(ctx context.Context, q string, _ []driver.NamedVal
 }
 
 func (c *detConn) QueryContext(_ context.Context, q string, _ []driver.NamedValue) (driver.Rows, error) {
+	if q == accessModeRead {
+		return detLog.accessReply(), nil
+	}
 	detLog.add(q)
 	return detLog.reply(q), nil
 }
+
+// accessModeRead is accessModeBefore's query. The recorder answers it from
+// access and counts it in accessReads rather than in calls, so a test of the
+// batch a forced write sends still sees that batch as the one statement.
+const accessModeRead = "SELECT user_access_desc FROM sys.databases WHERE name = @p1"
 
 type detRecorder struct {
 	mu     sync.Mutex
@@ -70,6 +78,21 @@ type detRecorder struct {
 	// props and files answer DBCC CHECKPRIMARYFILE's option 2 and option 3.
 	props [][]driver.Value
 	files [][]driver.Value
+	// access answers accessModeRead ("" reads as MULTI_USER); accessReads
+	// counts the reads.
+	access      string
+	accessReads int
+}
+
+func (l *detRecorder) accessReply() *detRows {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.accessReads++
+	mode := l.access
+	if mode == "" {
+		mode = "MULTI_USER"
+	}
+	return &detRows{cols: []string{"user_access_desc"}, rows: [][]driver.Value{{mode}}}
 }
 
 func (l *detRecorder) add(q string) {
@@ -158,6 +181,7 @@ func detServer(t *testing.T) *Server {
 	detLog.calls, detLog.failOn, detLog.props, detLog.files = nil, "", nil, nil
 	detLog.failErr = nil
 	detLog.cancelOn, detLog.cancel = "", nil
+	detLog.access, detLog.accessReads = "", 0
 	detLog.mu.Unlock()
 	return &Server{db: pool}
 }
@@ -171,23 +195,32 @@ func detFailOn(needle string) {
 	detLog.mu.Unlock()
 }
 
-// assertExclusiveBatch checks stmt is exclusiveBatch's shape around op:
-// SINGLE_USER first, op gated on it having succeeded and inside TRY, and a
-// CATCH that repairs a database still there before re-raising. A trailing
-// repair after op does not run — a failed DROP DATABASE or sp_detach_db
-// aborts the batch (probed) — so the repair must be in the CATCH.
+// assertExclusiveBatch checks stmt is exclusiveBatch's shape around op: the
+// access mode captured, SINGLE_USER, op gated on it having succeeded and
+// inside TRY, and a CATCH that releases a database still there to the
+// captured mode before re-raising. A trailing repair after op does not run —
+// a failed DROP DATABASE or sp_detach_db aborts the batch (probed) — so the
+// repair must be in the CATCH.
 func assertExclusiveBatch(t *testing.T, stmt, db, op string) {
 	t.Helper()
+	capture := strings.Index(stmt, "DECLARE @access nvarchar(60) = (SELECT user_access_desc FROM sys.databases WHERE name = N'")
 	single := strings.Index(stmt, "ALTER DATABASE "+db+" SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
 	gate := strings.Index(stmt, "IF @@ERROR = 0 SET @closed = 1;\nIF @closed = 1\nBEGIN TRY\n    "+op)
 	catch := strings.Index(stmt, "BEGIN CATCH\n    IF DB_ID(")
-	multi := strings.Index(stmt, "IS NOT NULL ALTER DATABASE "+db+" SET MULTI_USER;\n    THROW;\nEND CATCH;")
-	if single < 0 || gate < 0 || catch < 0 || multi < 0 || !(single < gate && gate < catch && catch < multi) {
-		t.Errorf("batch is not SINGLE_USER, then %q gated on it in TRY, then a CATCH repairing with a DB_ID-guarded MULTI_USER and THROW:\n%s", op, stmt)
+	release := strings.Index(stmt, "IS NOT NULL\n    BEGIN\n        "+releaseWant(db, "        ")+"\n    END;\n    THROW;\nEND CATCH;")
+	if capture != 0 || single < 0 || gate < 0 || catch < 0 || release < 0 || !(single < gate && gate < catch && catch < release) {
+		t.Errorf("batch is not the mode captured, SINGLE_USER, then %q gated on it in TRY, then a CATCH releasing a DB_ID-guarded database to the captured mode and THROW:\n%s", op, stmt)
 	}
 	if !strings.HasSuffix(stmt, "END CATCH;") {
 		t.Errorf("something follows the CATCH, which a failed op never reaches:\n%s", stmt)
 	}
+}
+
+// releaseWant is releaseAccessMode's text for db, written out rather than
+// built with it so a change to the release rule fails here.
+func releaseWant(db, indent string) string {
+	return "IF @access = N'RESTRICTED_USER' ALTER DATABASE " + db + " SET RESTRICTED_USER;\n" +
+		indent + "ELSE IF ISNULL(@access, N'') <> N'SINGLE_USER' ALTER DATABASE " + db + " SET MULTI_USER;"
 }
 
 // detCancelOn arms the recorder to cancel ctx when the statement containing

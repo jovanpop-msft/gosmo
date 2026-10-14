@@ -13,6 +13,7 @@ package gosmo
 
 import (
 	"database/sql"
+	"maps"
 	"slices"
 	"testing"
 )
@@ -125,6 +126,58 @@ func TestLiveKReads(t *testing.T) {
 		}
 		if deps, err := d.Dependents(ctx, "dbo", "nosuch"); err != nil || len(deps) != 0 {
 			t.Errorf("Dependents(dbo.nosuch) = %v, %v; want none, no error", deps, err)
+		}
+	})
+
+	// Dependencies is the other direction: an unqualified EXEC is stored with
+	// referenced_id NULL, and joining on it dropped the edge. It resolves by
+	// name — the referencing object's schema first, then dbo — and says so.
+	t.Run("caller-dependent dependencies", func(t *testing.T) {
+		in(`EXEC('CREATE SCHEMA s3')`)
+		in(`EXEC('CREATE PROCEDURE dbo.dep_b AS SELECT 1')`)
+		in(`EXEC('CREATE PROCEDURE dbo.dep_c AS SELECT 1')`)
+		in(`EXEC('CREATE PROCEDURE s3.dep_c AS SELECT 2')`)
+		in(`CREATE TABLE dbo.parent (a int)`)
+		in(`EXEC('CREATE PROCEDURE dbo.dep_a AS EXEC dep_b; SELECT * FROM dbo.parent')`)
+		in(`EXEC('CREATE PROCEDURE s3.dep_a AS EXEC dep_b; EXEC dep_c; EXEC dep_missing')`)
+		in(`EXEC('CREATE PROCEDURE dbo.dep_both AS EXEC dep_b; EXEC dbo.dep_b')`)
+
+		edges := func(schema, name string) map[string]bool {
+			t.Helper()
+			deps, err := d.Dependencies(ctx, schema, name)
+			if err != nil {
+				t.Fatalf("Dependencies(%s.%s): %v", schema, name, err)
+			}
+			out := map[string]bool{}
+			for _, dep := range deps {
+				out[dep.Schema+"."+dep.Name] = dep.IsCallerDependent
+			}
+			return out
+		}
+		if got, want := edges("dbo", "dep_a"), map[string]bool{"dbo.dep_b": true, "dbo.parent": false}; !maps.Equal(got, want) {
+			t.Errorf("Dependencies(dbo.dep_a) caller-dependent = %v, want %v", got, want)
+		}
+		// s3.dep_c exists, so its own schema wins; dep_b only in dbo; a
+		// missing object is no edge and no error.
+		if got, want := edges("s3", "dep_a"), map[string]bool{"dbo.dep_b": true, "s3.dep_c": true}; !maps.Equal(got, want) {
+			t.Errorf("Dependencies(s3.dep_a) caller-dependent = %v, want %v", got, want)
+		}
+		// One edge, not caller-dependent: one of its references is exact.
+		if got, want := edges("dbo", "dep_both"), map[string]bool{"dbo.dep_b": false}; !maps.Equal(got, want) {
+			t.Errorf("Dependencies(dbo.dep_both) caller-dependent = %v, want %v", got, want)
+		}
+		deps, err := d.Dependents(ctx, "dbo", "dep_b")
+		if err != nil {
+			t.Fatalf("Dependents(dbo.dep_b): %v", err)
+		}
+		callerDep := map[string]bool{}
+		for _, dep := range deps {
+			callerDep[dep.Schema+"."+dep.Name] = dep.IsCallerDependent
+		}
+		// The same rule both ways: dep_both names dbo.dep_b exactly once,
+		// though the server's own is_caller_dependent says 1 for it.
+		if want := map[string]bool{"dbo.dep_a": true, "s3.dep_a": true, "dbo.dep_both": false}; !maps.Equal(callerDep, want) {
+			t.Errorf("Dependents(dbo.dep_b) caller-dependent = %v, want %v", callerDep, want)
 		}
 	})
 

@@ -157,13 +157,14 @@ func (s *Server) SnapshotFileDefaults(ctx context.Context, source, snapshotName 
 		return nil, err
 	}
 	var specs []SnapshotFileSpec
+	taken := map[string]bool{}
 	for _, f := range files {
 		if f.Type != "ROWS" {
 			continue
 		}
 		specs = append(specs, SnapshotFileSpec{
 			LogicalName: f.Name,
-			FileName:    snapshotFilePath(f.PhysicalName, snapshotName),
+			FileName:    snapshotFilePath(f.PhysicalName, f.Name, snapshotName, taken),
 		})
 	}
 	if len(specs) == 0 {
@@ -176,19 +177,48 @@ func (s *Server) SnapshotFileDefaults(ctx context.Context, source, snapshotName 
 // the same directory and stem with "_<snapshot>.ss" in place of the
 // extension, which is the convention Microsoft's own examples use.
 //
+// Stripping the extension maps two files in one folder that differ only by
+// it (db.mdf and db.ndf) onto one path, and the CREATE DATABASE then failed
+// "Cannot create file … because it already exists". taken holds the paths
+// already handed out, keyed case-insensitively (a Windows server's paths
+// are, as in RestoreRelocation.Moves). A path in it falls back to keeping
+// the extension in the stem (db_ndf_<snapshot>.ss), then to adding the
+// logical name, which is unique in the database, made filename-safe
+// (db_ndf_<logical>_<snapshot>.ss), then to a number — so the first file
+// keeps the conventional name and every later one still gets a distinct one.
+// The chosen path is added to taken.
+//
 // The split is done on both separators regardless of the client's OS: the
 // path belongs to the *server's* filesystem, and gosmo runs on Linux against
 // Windows instances routinely, so filepath.Dir on the client would mangle a
 // Windows path into one string.
-func snapshotFilePath(physical, snapshotName string) string {
+func snapshotFilePath(physical, logical, snapshotName string, taken map[string]bool) string {
 	dir := ""
 	if i := strings.LastIndexAny(physical, `\/`); i >= 0 {
 		dir, physical = physical[:i+1], physical[i+1:]
 	}
+	stem, ext := physical, ""
 	if i := strings.LastIndex(physical, "."); i > 0 {
-		physical = physical[:i]
+		stem, ext = physical[:i], physical[i+1:]
 	}
-	return dir + physical + "_" + snapshotName + ".ss"
+	withExt := stem
+	if ext != "" {
+		withExt += "_" + ext
+	}
+	candidates := []string{stem, withExt, withExt + "_" + fileNameSafe(logical)}
+	for i := 0; ; i++ {
+		var c string
+		if i < len(candidates) {
+			c = dir + candidates[i] + "_" + snapshotName + ".ss"
+		} else {
+			c = fmt.Sprintf("%s%s_%d_%s.ss", dir, candidates[len(candidates)-1], i-len(candidates)+2, snapshotName)
+		}
+		// NameKey under the empty (case-insensitive) collation folds case.
+		if key := NameKey("", c); !taken[key] {
+			taken[key] = true
+			return c
+		}
+	}
 }
 
 // CreateDatabaseSnapshot creates a database snapshot.
