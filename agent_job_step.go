@@ -373,6 +373,12 @@ const goToNextStepAction = 3
 // back afterwards from the pre-move reading, mapped through the move. A
 // reference that pointed at the moved step still points at it; one that
 // pointed at a step the move shifted follows that step.
+//
+// The job's start step follows the step it names too. sysjobs.start_step_id
+// is a step number, and neither procedure touches it — not on delete, not on
+// an insert that renumbers the steps after it (run on SQL Server 2025,
+// 2026-10-15) — so moving step 1 to the end would otherwise leave the job
+// starting at whatever step now holds number 1.
 func (j *Job) MoveStep(ctx context.Context, stepID, newStepID int) error {
 	return j.ReorderSteps(ctx, moveOrder(stepID, newStepID))
 }
@@ -399,8 +405,8 @@ func moveOrder(stepID, newStepID int) func(n int) []int {
 //
 // The reorder is realised as delete-and-insert per step that has to move,
 // fewest first, and every "go to step N" reference is rewritten afterwards
-// through the composed mapping. See MoveStep for why both halves are
-// necessary.
+// through the composed mapping, as is the job's start step. See MoveStep for
+// why each is necessary.
 //
 // All of it goes to the server as a single transactional batch, so the job is
 // either in the requested order or in the order it started in, and never in
@@ -481,10 +487,39 @@ func (j *Job) ReorderSteps(ctx context.Context, order func(n int) []int) error {
 	if len(stmts) == 0 {
 		return nil
 	}
+	// The start step is repaired in the same batch, for the reason the
+	// references are. It is read only once something moves, so a no-op
+	// reorder stays a single read.
+	start, err := j.startStepID(ctx)
+	if err != nil {
+		return err
+	}
+	if to, ok := position[start]; ok && to != start {
+		stmts = append(stmts, setStartStepStmt(j.Name, to))
+	}
 	if err := j.server.execAtomic(ctx, stmts); err != nil {
 		return fmt.Errorf("gosmo: reorder steps of job %q: %w", j.Name, err)
 	}
 	return nil
+}
+
+// startStepID reads the job's start step from msdb rather than trusting
+// Job.StartStepID, which a Server.JobRef handle leaves zero and a loaded Job
+// may hold stale. The job is matched by name, as stepByName does.
+func (j *Job) startStepID(ctx context.Context) (int, error) {
+	const q = `SELECT start_step_id FROM msdb.dbo.sysjobs WHERE name = @p1`
+	var start int
+	err := j.server.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&start) }, q, j.Name)
+	return foundRow(start, err, notFoundf("gosmo: job %q not found", j.Name),
+		fmt.Sprintf("read start step of job %q", j.Name))
+}
+
+// setStartStepStmt renders the sp_update_job call that points the job's
+// start at stepID. See addStepStmt for why it is separable from the method
+// that issues it.
+func setStartStepStmt(jobName string, stepID int) string {
+	return fmt.Sprintf("EXEC msdb.dbo.sp_update_job @job_name = N'%s', @start_step_id = %d",
+		escapeSingle(jobName), stepID)
 }
 
 // checkReorder insists the requested order is a permutation of 1..n. A

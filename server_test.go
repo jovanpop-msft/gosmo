@@ -2,6 +2,7 @@ package gosmo
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -748,6 +749,62 @@ func TestCreateDatabaseWithOnlyALogFileNamesTheDefaultDataFile(t *testing.T) {
 	_, err := srv.CreateDatabase(ctx, CreateDatabaseRequest{Name: "x", LogFile: &DatabaseFileSpec{Name: "x_log", Path: "/l/x_log.ldf"}})
 	if err == nil || len(col.Statements()) != 0 {
 		t.Errorf("no default data path: err=%v statements=%q, want an error and nothing sent", err, col.Statements())
+	}
+}
+
+// A file spec with no Path is placed in the default data/log directory:
+// CREATE DATABASE requires FILENAME (Msg 1036) and refuses a bare file name
+// (Msg 5105) rather than resolving it, so the path has to be spelled out —
+// or, with no default directory known, the request refused before sending.
+func TestCreateDatabasePlacesAFileWithNoPath(t *testing.T) {
+	for _, tc := range []struct {
+		dataDir, logDir, wantData, wantLog string
+	}{
+		{`C:\MSSQL\DATA\`, `L:\LOG`, `C:\MSSQL\DATA\Sales'DW.mdf`, `L:\LOG\Sales'DW_log.ldf`},
+		{`/var/opt/mssql/data`, `/var/opt/mssql/log/`, `/var/opt/mssql/data/Sales'DW.mdf`, `/var/opt/mssql/log/Sales'DW_log.ldf`},
+	} {
+		srv := &Server{info: &ServerInfo{DefaultDataPath: tc.dataDir, DefaultLogPath: tc.logDir}}
+		ctx, col := WithScript(context.Background())
+		req := CreateDatabaseRequest{
+			Name:        "Sales'DW",
+			PrimaryFile: &DatabaseFileSpec{Name: "Sales'DW", SizeKB: 8192},
+			LogFile:     &DatabaseFileSpec{Name: "Sales'DW_log"},
+		}
+		if _, err := srv.CreateDatabase(ctx, req); err != nil {
+			t.Fatalf("%s: CreateDatabase: %v", tc.dataDir, err)
+		}
+		want := "CREATE DATABASE [Sales'DW] ON PRIMARY \n" +
+			"( NAME = [Sales'DW], FILENAME = " + QuoteLiteral(tc.wantData) + ", SIZE = 8192KB ) \n" +
+			"LOG ON \n( NAME = [Sales'DW_log], FILENAME = " + QuoteLiteral(tc.wantLog) + " )"
+		if len(col.Statements()) != 1 || col.Statements()[0] != want {
+			t.Errorf("%s: statements =\n%q\nwant\n%q", tc.dataDir, col.Statements(), want)
+		}
+		if req.PrimaryFile.Path != "" || req.LogFile.Path != "" {
+			t.Errorf("%s: the caller's file specs were modified", tc.dataDir)
+		}
+	}
+
+	// A path given is kept as it is, even with no default directory.
+	srv := &Server{info: &ServerInfo{}}
+	ctx, col := WithScript(context.Background())
+	if _, err := srv.CreateDatabase(ctx, CreateDatabaseRequest{Name: "x",
+		PrimaryFile: &DatabaseFileSpec{Name: "x", Path: "/d/x.mdf"}}); err != nil {
+		t.Fatalf("explicit path, no default directory: %v", err)
+	}
+	if want := "CREATE DATABASE [x] ON PRIMARY \n( NAME = [x], FILENAME = N'/d/x.mdf' )"; len(col.Statements()) != 1 || col.Statements()[0] != want {
+		t.Errorf("statements = %q, want %q", col.Statements(), want)
+	}
+
+	for _, req := range []CreateDatabaseRequest{
+		{Name: "x", PrimaryFile: &DatabaseFileSpec{Name: "x"}},
+		{Name: "x", PrimaryFile: &DatabaseFileSpec{Name: "x", Path: "/d/x.mdf"}, LogFile: &DatabaseFileSpec{Name: "x_log"}},
+	} {
+		srv := &Server{info: &ServerInfo{}}
+		ctx, col := WithScript(context.Background())
+		_, err := srv.CreateDatabase(ctx, req)
+		if !errors.Is(err, ErrInvalidRequest) || len(col.Statements()) != 0 {
+			t.Errorf("no default directory: err=%v statements=%q, want ErrInvalidRequest and nothing sent", err, col.Statements())
+		}
 	}
 }
 

@@ -778,6 +778,23 @@ func (s *Server) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) 
 		withPrimary.PrimaryFile = primary
 		opts = &withPrimary
 	}
+	var dataDir, logDir string
+	if s.info != nil {
+		dataDir, logDir = s.info.DefaultDataPath, s.info.DefaultLogPath
+	}
+	primary, err := placeUnpathedFile(opts.PrimaryFile, dataDir, ".mdf", "data")
+	if err != nil {
+		return nil, fmt.Errorf("gosmo: create database %q: %w", name, err)
+	}
+	logFile, err := placeUnpathedFile(opts.LogFile, logDir, ".ldf", "log")
+	if err != nil {
+		return nil, fmt.Errorf("gosmo: create database %q: %w", name, err)
+	}
+	if primary != opts.PrimaryFile || logFile != opts.LogFile {
+		placed := *opts
+		placed.PrimaryFile, placed.LogFile = primary, logFile
+		opts = &placed
+	}
 
 	if err := s.exec(ctx, buildCreateDatabaseStatement(name, opts)); err != nil {
 		return nil, fmt.Errorf("gosmo: create database %q: %w", name, err)
@@ -819,6 +836,26 @@ func defaultPrimaryFile(name string, info *ServerInfo) (*DatabaseFileSpec, error
 	return &DatabaseFileSpec{Name: name, Path: JoinServerPath(info.DefaultDataPath, name+".mdf")}, nil
 }
 
+// placeUnpathedFile returns spec, or for a spec with no Path a copy placed in
+// dir, the instance's default directory for the kind, as spec.Name + ext —
+// the file CREATE DATABASE would have made there itself.
+//
+// CREATE DATABASE has no way to leave a named file's location to the server:
+// FILENAME is required beside NAME (Msg 1036, verified live), and a bare file
+// name is not resolved against the default directory but refused (Msg 5105).
+// So an empty Path is either placed here or refused before anything is sent.
+func placeUnpathedFile(spec *DatabaseFileSpec, dir, ext, kind string) (*DatabaseFileSpec, error) {
+	if spec == nil || spec.Path != "" {
+		return spec, nil
+	}
+	if dir == "" {
+		return nil, invalidf("%s file %q has no path, and the instance reports no default %s directory to place it in", kind, spec.Name, kind)
+	}
+	placed := *spec
+	placed.Path = JoinServerPath(dir, spec.Name+ext)
+	return &placed, nil
+}
+
 // buildCreateDatabaseStatement builds the CREATE DATABASE statement for
 // name/opts. Unexported and side-effect-free so it's unit-testable without
 // a server, mirroring buildAddFileStatement.
@@ -847,7 +884,10 @@ type CreateDatabaseRequest struct {
 
 	// PrimaryFile and LogFile customize the database's initial data and
 	// log file (name, path, size, growth, max size) via CREATE DATABASE's
-	// ON PRIMARY/LOG ON clauses. Leaving either nil lets the server place
+	// ON PRIMARY/LOG ON clauses. A spec with an empty Path is placed in the
+	// instance's default data or log directory as Name + ".mdf"/".ldf",
+	// and refused if the instance reports none (see placeUnpathedFile).
+	// Leaving either nil lets the server place
 	// that file at its own default path/size, exactly like CreateDatabase
 	// with only a Name always has — for a nil
 	// PrimaryFile beside a LogFile, by naming that default file explicitly,

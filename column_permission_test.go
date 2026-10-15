@@ -1,6 +1,10 @@
 package gosmo
 
-import "testing"
+import (
+	"errors"
+	"slices"
+	"testing"
+)
 
 func TestGrantColumnPermissionRendersOneStatementForAllColumns(t *testing.T) {
 	d, ctx, script := scriptedDB(t)
@@ -104,5 +108,51 @@ func TestObjectPermissionHasNoColumnList(t *testing.T) {
 	want := "GRANT SELECT ON [dbo].[Employees] TO [app_reader]"
 	if got := onlyStatement(t, script); got != want {
 		t.Errorf("statement =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A table-valued function's columns carry permissions like a table's
+// (confirmed live on 17, 2026-10-15), but only the names its own class
+// accepts: a multi-statement one refuses UPDATE (col) as it refuses UPDATE,
+// with Msg 4606.
+func TestColumnPermissionOnTableValuedFunctions(t *testing.T) {
+	cases := []struct {
+		class SecurableClass
+		want  []string
+	}{
+		{SecurableTable, []string{"REFERENCES", "SELECT", "UPDATE"}},
+		{SecurableView, []string{"REFERENCES", "SELECT", "UPDATE"}},
+		{SecurableInlineFunction, []string{"REFERENCES", "SELECT", "UPDATE"}},
+		{SecurableTableFunction, []string{"REFERENCES", "SELECT"}},
+		{SecurableProcedure, nil},
+		{SecurableSchema, nil},
+	}
+	for _, c := range cases {
+		t.Run(string(c.class), func(t *testing.T) {
+			if got := c.class.ColumnPermissionNames(); !slices.Equal(got, c.want) {
+				t.Errorf("ColumnPermissionNames() = %v, want %v", got, c.want)
+			}
+			if got := c.class.HasColumns(); got != (c.want != nil) {
+				t.Errorf("HasColumns() = %v", got)
+			}
+		})
+	}
+
+	d, ctx, script := scriptedDB(t)
+	sec := Securable{Class: SecurableInlineFunction, Schema: "dbo", Name: "f", Columns: []string{"x"}}
+	if err := d.ApplyPermission(ctx, VerbDeny, sec, PermUpdate, "app_reader", PermissionOptions{}); err != nil {
+		t.Fatalf("deny on an inline function's column: %v", err)
+	}
+	if got, want := onlyStatement(t, script), "DENY UPDATE ([x]) ON [dbo].[f] TO [app_reader]"; got != want {
+		t.Errorf("statement =\n%q\nwant\n%q", got, want)
+	}
+
+	d, ctx, script = scriptedDB(t)
+	sec.Class = SecurableTableFunction
+	if err := d.ApplyPermission(ctx, VerbGrant, sec, PermUpdate, "app_reader", PermissionOptions{}); !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("UPDATE (x) on a table function: err = %v, want ErrInvalidRequest", err)
+	}
+	if n := len(script.Statements()); n != 0 {
+		t.Errorf("a refused call still issued %v", script.Statements())
 	}
 }

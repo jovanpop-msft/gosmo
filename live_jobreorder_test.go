@@ -210,6 +210,54 @@ func TestLiveJobReorderMovesAStepOntoItsOwnTarget(t *testing.T) {
 	}
 }
 
+// TestLiveJobReorderKeepsTheStartStep. msdb leaves sysjobs.start_step_id at
+// its number through a step's delete and re-insert (run 2026-10-15, SQL
+// Server 2025), so without the repair a job whose first step moves starts at
+// the step that took its place.
+func TestLiveJobReorderKeepsTheStartStep(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	srv := &Server{db: db}
+	j, drop := liveReorderJob(t, srv, ctx)
+	defer drop()
+
+	startsAt := func() string {
+		t.Helper()
+		fresh, err := srv.JobByName(ctx, reorderJobName)
+		if err != nil {
+			t.Fatalf("job by name: %v", err)
+		}
+		steps, err := fresh.Steps(ctx)
+		if err != nil {
+			t.Fatalf("steps: %v", err)
+		}
+		for _, s := range steps {
+			if s.StepID == fresh.StartStepID {
+				return s.Name
+			}
+		}
+		t.Fatalf("start step %d names no step of %v", fresh.StartStepID, stepNames(steps))
+		return ""
+	}
+
+	// The start step itself moves: one, two, three, four -> two, three, one, four.
+	if err := j.MoveStep(ctx, 1, 3); err != nil {
+		t.Fatalf("move step 1 to 3: %v", err)
+	}
+	if got := startsAt(); got != "one" {
+		t.Errorf("after moving the start step, the job starts at %q, want %q", got, "one")
+	}
+
+	// Another step moves in front of it, through a JobRef handle whose
+	// StartStepID is zero: two, three, one, four -> four, two, three, one.
+	if err := srv.JobRef(reorderJobName).MoveStep(ctx, 4, 1); err != nil {
+		t.Fatalf("move step 4 to 1: %v", err)
+	}
+	if got := startsAt(); got != "one" {
+		t.Errorf("after moving a step in front of it, the job starts at %q, want %q", got, "one")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

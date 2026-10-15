@@ -12,6 +12,13 @@ import (
 // sysjobsteps guarantees and what ReorderSteps's ORDER BY relies on.
 func captureJob(t *testing.T, steps ...*JobStep) *Job {
 	t.Helper()
+	return captureJobStartingAt(t, 1, steps...)
+}
+
+// captureJobStartingAt is captureJob with sysjobs.start_step_id canned to
+// start.
+func captureJobStartingAt(t *testing.T, start int, steps ...*JobStep) *Job {
+	t.Helper()
 	db, err := sql.Open("capture", "")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
@@ -36,7 +43,10 @@ func captureJob(t *testing.T, steps ...*JobStep) *Job {
 	for i := range cols {
 		cols[i] = "c" + string(rune('a'+i))
 	}
-	captured.reset(cannedRow{match: "FROM   msdb.dbo.sysjobsteps s", cols: cols, rows: rows})
+	captured.reset(
+		cannedRow{match: "FROM   msdb.dbo.sysjobsteps s", cols: cols, rows: rows},
+		cannedRow{match: "SELECT start_step_id FROM msdb.dbo.sysjobs", cols: []string{"start_step_id"}, row: []driver.Value{int64(start)}},
+	)
 	return &Job{server: &Server{db: db}, JobID: "job-id", Name: "nightly"}
 }
 
@@ -175,6 +185,50 @@ func TestReorderStepsReAddsWithoutGoToStep(t *testing.T) {
 	want := "@step_id = 1, @on_success_action = 4, @on_success_step_id = 2, @on_fail_action = 4, @on_fail_step_id = 3"
 	if !strings.Contains(batch, want) {
 		t.Errorf("the repair does not restore the moved step's flow (%q):\n%s", want, batch)
+	}
+}
+
+// TestReorderStepsKeepsTheStartStep. sysjobs.start_step_id is a step number
+// that neither sp_delete_jobstep nor sp_add_jobstep repairs (run on SQL
+// Server 2025), so moving the start step away from it, or another step onto
+// it, changes which step the job begins at unless the batch says otherwise.
+// Asserted inside the transaction, for the reason the reference repair is.
+func TestReorderStepsKeepsTheStartStep(t *testing.T) {
+	cases := []struct {
+		name     string
+		start    int
+		from, to int
+		want     string // "" means no sp_update_job at all
+	}{
+		{"the start step moves", 1, 1, 3, "@start_step_id = 3"},
+		{"a step moves over it", 2, 1, 3, "@start_step_id = 1"},
+		{"a step moves in front of it", 3, 3, 1, "@start_step_id = 1"},
+		{"a move past it leaves it alone", 1, 2, 3, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			j := captureJobStartingAt(t, c.start, plainSteps(3)...)
+			if err := j.MoveStep(t.Context(), c.from, c.to); err != nil {
+				t.Fatalf("MoveStep: %v", err)
+			}
+			batch := captured.find("sp_delete_jobstep")
+			if c.want == "" {
+				if strings.Contains(batch, "sp_update_job ") {
+					t.Errorf("the start step did not move, yet the batch rewrites it:\n%s", batch)
+				}
+				return
+			}
+			update := strings.Index(batch, "sp_update_job @job_name = N'nightly', "+c.want)
+			if update < 0 {
+				t.Fatalf("the batch does not set %s:\n%s", c.want, batch)
+			}
+			if commit := strings.Index(batch, "COMMIT TRANSACTION"); update > commit {
+				t.Errorf("the start step is repaired after the COMMIT:\n%s", batch)
+			}
+			if n := captured.count("sp_update_job "); n != 1 {
+				t.Errorf("%d statements mention sp_update_job, want 1 (inside the batch)", n)
+			}
+		})
 	}
 }
 

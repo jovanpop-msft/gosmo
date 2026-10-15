@@ -12,7 +12,7 @@ import (
 // ============================================================
 
 // ColumnPermissionEntry is one GRANT/DENY entry recorded on a single column
-// of a table or view — what sys.database_permissions stores as an
+// of a table, view or table-valued function — what sys.database_permissions stores as an
 // OBJECT_OR_COLUMN row with a non-zero minor_id. Object-level entries
 // (minor_id 0) are reported by Permissions instead, and the two are
 // genuinely separate grants: a column DENY overrides an object GRANT.
@@ -23,12 +23,13 @@ type ColumnPermissionEntry struct {
 	Schema        string
 	Object        string
 
-	// ObjectType is what the column's parent is — "TABLE" or "VIEW", the
-	// same values PrincipalSecurable.SecurableType uses, so a caller can key
-	// both against one securable identity. Both types carry column
-	// permissions and sys.database_permissions records them identically, so
-	// without this a view's grants get mistaken for a table's.
-	ObjectType string
+	// ObjectType is what the column's parent is — one of the classes whose
+	// HasColumns is true, as PrincipalSecurable.SecurableType reports it, so
+	// a caller can key both against one securable identity. Every such class
+	// carries column permissions and sys.database_permissions records them
+	// identically, so without this a view's grants get mistaken for a
+	// table's.
+	ObjectType SecurableClass
 
 	Column     string
 	Permission ObjectPermission
@@ -39,15 +40,17 @@ type ColumnPermissionEntry struct {
 // column. It is much shorter than objectPermissionNames because most
 // permissions have no column-level form — GRANT DELETE (col) fails with
 // "Incorrect syntax near '('". See serverPermissionNames (server_security.go)
-// for why an allowlist rather than quoting.
+// for why an allowlist rather than quoting. A class accepts the names in
+// both this and its own list (SecurableClass.ColumnPermissionNames): a
+// multi-statement table function refuses UPDATE (col) as it refuses UPDATE.
 var columnPermissionNames = map[ObjectPermission]bool{
 	PermSelect: true, PermUpdate: true, PermReferences: true,
 }
 
 // ColumnPermissionNames returns every permission name GRANT/DENY/REVOKE
-// accepts on a column, sorted — the catalog a column-permissions grid
-// enumerates, the way ObjectPermissionNames is the catalog for the whole
-// object.
+// accepts on a column of a table, sorted — the catalog a column-permissions
+// grid enumerates, the way ObjectPermissionNames is the catalog for the whole
+// object. SecurableClass.ColumnPermissionNames is the same for any class.
 func ColumnPermissionNames() []string {
 	names := make([]string, 0, len(columnPermissionNames))
 	for name := range columnPermissionNames {
@@ -62,7 +65,7 @@ func ColumnPermissionNames() []string {
 // appends its own AND plus ORDER BY. A column entry is an OBJECT_OR_COLUMN
 // row with a non-zero minor_id, which is the part neither caller varies.
 const columnPermissionSelect = `
-SELECT pr.name, pr.type_desc, grantor.name, sch.name, obj.name, obj.type_desc,
+SELECT pr.name, pr.type_desc, grantor.name, sch.name, obj.name, RTRIM(obj.type),
        col.name, dp.permission_name, dp.state_desc
 FROM   sys.database_permissions dp
 JOIN   sys.objects obj                 ON obj.object_id = dp.major_id
@@ -113,7 +116,7 @@ func (d *Database) scanColumnPermissions(ctx context.Context, q, what string, ar
 			&e.Schema, &e.Object, &objType, &e.Column, &perm, &state); err != nil {
 			return nil, err
 		}
-		e.ObjectType = securableObjectTypeNames[objType]
+		e.ObjectType = objectSecurableClasses[objType]
 		e.Permission = ObjectPermission(perm)
 		e.State = PermissionState(state)
 		return e, nil

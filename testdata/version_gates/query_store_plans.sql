@@ -14,11 +14,11 @@ SELECT p.plan_id,
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        CAST(0 AS float) AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > @p1 AND rsi.start_time < @p2)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= @p1 AND rsi.start_time < @p2
 WHERE  p.query_id = @p3
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan,
          p.force_failure_count, p.last_force_failure_reason_desc,
@@ -41,11 +41,11 @@ SELECT p.plan_id,
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        CAST(0 AS float) AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > @p1 AND rsi.start_time < @p2)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= @p1 AND rsi.start_time < @p2
 WHERE  p.query_id = @p3
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan, p.plan_forcing_type_desc,
          p.force_failure_count, p.last_force_failure_reason_desc,
@@ -68,11 +68,11 @@ SELECT p.plan_id,
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        CAST(0 AS float) AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > @p1 AND rsi.start_time < @p2)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= @p1 AND rsi.start_time < @p2
 WHERE  p.query_id = @p3
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan, p.plan_forcing_type_desc,
          p.force_failure_count, p.last_force_failure_reason_desc,
@@ -95,11 +95,11 @@ SELECT p.plan_id,
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        CAST(0 AS float) AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > @p1 AND rsi.start_time < @p2)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= @p1 AND rsi.start_time < @p2
 WHERE  p.query_id = @p3
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan, p.plan_forcing_type_desc,
          p.force_failure_count, p.last_force_failure_reason_desc,
@@ -122,11 +122,11 @@ SELECT p.plan_id,
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        CAST(0 AS float) AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > @p1 AND rsi.start_time < @p2)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= @p1 AND rsi.start_time < @p2
 WHERE  p.query_id = @p3
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan, p.plan_forcing_type_desc,
          p.force_failure_count, p.last_force_failure_reason_desc,

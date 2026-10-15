@@ -507,7 +507,7 @@ func TestQueryStoreTopResourceQueriesBindsItsParametersInOrder(t *testing.T) {
 	}
 	for _, frag := range []string{
 		"TOP (@p1)",
-		"rsi.start_time >= @p2 AND rsi.start_time < @p3",
+		"rsi.end_time > @p2 AND rsi.start_time < @p3",
 		"HAVING SUM(rs.count_executions) >= @p4",
 		"q.is_internal_query = 0",
 	} {
@@ -535,7 +535,7 @@ func TestQueryStoreRegressedQueriesBindsBothWindowsSeparately(t *testing.T) {
 		t.Fatalf("regressed queries: %v", err)
 	}
 	call := qsRec.last(t)
-	want := []any{int64(10), qsFrom, qsTo, baseFrom, baseTo}
+	want := []any{int64(10), qsFrom, qsTo, baseFrom, baseTo, qsFrom, qsTo}
 	if len(call.args) != len(want) {
 		t.Fatalf("bound %d parameters (%v), want %d", len(call.args), call.args, len(want))
 	}
@@ -544,11 +544,17 @@ func TestQueryStoreRegressedQueriesBindsBothWindowsSeparately(t *testing.T) {
 			t.Errorf("@p%d = %v, want %v", i+1, call.args[i], want[i])
 		}
 	}
-	if !strings.Contains(call.sql, "rsi.start_time >= @p2 AND rsi.start_time < @p3") {
+	if !strings.Contains(call.sql, "rsi.end_time > @p2 AND rsi.start_time < @p3") {
 		t.Errorf("the reported window is not bound to @p2/@p3:\n%s", call.sql)
 	}
-	if !strings.Contains(call.sql, "rsi.start_time >= @p4 AND rsi.start_time < @p5") {
+	if !strings.Contains(call.sql, "rsi.end_time > @p4 AND rsi.start_time < @p5") {
 		t.Errorf("the baseline window is not bound to @p4/@p5:\n%s", call.sql)
+	}
+	// The interval straddling From overlaps both windows; it counts in the
+	// reported one only, so the baseline excludes whatever the reported
+	// window takes.
+	if !strings.Contains(call.sql, "AND NOT (rsi.end_time > @p6 AND rsi.start_time < @p7)") {
+		t.Errorf("the baseline does not exclude intervals overlapping the reported window:\n%s", call.sql)
 	}
 	if !strings.Contains(call.sql, "r.value - b.value") {
 		t.Errorf("regression is not the reported value less the baseline:\n%s", call.sql)
@@ -568,11 +574,17 @@ func TestQueryStorePlansFiltersTheWindowInTheJoinNotTheWhere(t *testing.T) {
 		t.Fatalf("query store plans: %v", err)
 	}
 	call := qsRec.last(t)
-	if !strings.Contains(call.sql, "LEFT JOIN sys.query_store_runtime_stats ") {
+	if !strings.Contains(call.sql, "LEFT JOIN (sys.query_store_runtime_stats AS rs") {
 		t.Errorf("runtime stats are not left-joined:\n%s", call.sql)
 	}
+	// The window belongs on the inner join nested in the LEFT one. On a LEFT
+	// JOIN of the interval alone it only blanks the interval, and every stats
+	// row still counts toward the plan whatever its time.
+	if !strings.Contains(call.sql, "AND rsi.end_time > @p1 AND rsi.start_time < @p2)\n       ON rs.plan_id = p.plan_id") {
+		t.Errorf("the interval window does not filter the nested runtime-stats join:\n%s", call.sql)
+	}
 	where := call.sql[strings.Index(call.sql, "\nWHERE "):]
-	if strings.Contains(where, "rsi.start_time") {
+	if strings.Contains(where, "rsi.") {
 		t.Errorf("the interval window is in the WHERE clause, which undoes the LEFT JOIN:\n%s", where)
 	}
 	if !strings.Contains(call.sql, "WHERE  p.query_id = @p3") {
@@ -908,7 +920,7 @@ func TestQueryStoreRegressionThresholdIsBoundAndOnlyAppliedWhenAsked(t *testing.
 		t.Fatalf("regressed queries: %v", err)
 	}
 	call := qsRec.last(t)
-	want := []any{int64(10), qsFrom, qsTo, baseFrom, baseTo, float64(25)}
+	want := []any{int64(10), qsFrom, qsTo, baseFrom, baseTo, qsFrom, qsTo, float64(25)}
 	if len(call.args) != len(want) {
 		t.Fatalf("bound %d parameters (%v), want %d", len(call.args), call.args, len(want))
 	}
@@ -919,7 +931,7 @@ func TestQueryStoreRegressionThresholdIsBoundAndOnlyAppliedWhenAsked(t *testing.
 	}
 	// The threshold multiplies rather than divides: a baseline of zero is
 	// excluded by the first predicate, but nothing orders the two.
-	if frag := "WHERE  b.value > 0 AND (r.value - b.value) >= b.value * @p6 / 100"; !strings.Contains(call.sql, frag) {
+	if frag := "WHERE  b.value > 0 AND (r.value - b.value) >= b.value * @p8 / 100"; !strings.Contains(call.sql, frag) {
 		t.Errorf("statement is missing %q:\n%s", frag, call.sql)
 	}
 	// After the JOIN and before the ORDER BY — anywhere else is a syntax error
@@ -1011,7 +1023,7 @@ func TestQueryStoreRegressedQueriesBindsTheIDListPerWindow(t *testing.T) {
 		t.Fatalf("regressed queries: %v", err)
 	}
 	call := qsRec.last(t)
-	want := []any{int64(10), qsFrom, qsTo, int64(7), baseFrom, baseTo, int64(7)}
+	want := []any{int64(10), qsFrom, qsTo, int64(7), baseFrom, baseTo, qsFrom, qsTo, int64(7)}
 	if len(call.args) != len(want) {
 		t.Fatalf("bound %d parameters (%v), want %d", len(call.args), call.args, len(want))
 	}
@@ -1020,7 +1032,7 @@ func TestQueryStoreRegressedQueriesBindsTheIDListPerWindow(t *testing.T) {
 			t.Errorf("@p%d = %v, want %v", i+1, call.args[i], want[i])
 		}
 	}
-	for _, frag := range []string{"q.query_id IN (@p4)", "q.query_id IN (@p7)"} {
+	for _, frag := range []string{"q.query_id IN (@p4)", "q.query_id IN (@p9)"} {
 		if !strings.Contains(call.sql, frag) {
 			t.Errorf("statement is missing %q:\n%s", frag, call.sql)
 		}

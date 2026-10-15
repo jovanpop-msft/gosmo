@@ -762,7 +762,7 @@ an unescaped filter for `pct_1` also matches `pct1100`.
 | Object dependencies (uses)  | `db.Dependencies(ctx, schema, name)` — an unqualified (caller-dependent) reference is resolved by name and flagged `IsCallerDependent` |
 | Object dependencies (used by) | `db.Dependents(ctx, schema, name)`                            |
 | Object search                | `db.Search(ctx, pattern)`                                      |
-| Securable search (for a permissions picker) | `db.FindSecurables(ctx, gosmo.SecurableSearch{Name: ..., Limit: ...})` → `[]SecurableRef` (schemas, tables, views) |
+| Securable search (for a permissions picker) | `db.FindSecurables(ctx, gosmo.SecurableSearch{Name: ..., Limit: ...})` → `[]SecurableRef` (schemas, objects, types, certificates) |
 | Object permissions           | `db.Permissions(ctx, schema, name)`                            |
 | Grant / deny / revoke (any securable in a database) | `db.ApplyPermission(ctx, gosmo.VerbGrant\|VerbDeny\|VerbRevoke, gosmo.Securable{Class, Schema, Name, Columns}, perm, principal, opts)` — tables, views, schemas, procedures, scalar / inline / multi-statement functions, sequences, synonyms, types, certificates |
 | Schema permissions            | `db.SchemaPermissions(ctx, schema)`                            |

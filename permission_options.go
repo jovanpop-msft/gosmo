@@ -71,8 +71,8 @@ const (
 	SecurableServer   SecurableClass = "SERVER"
 	SecurableDatabase SecurableClass = "DATABASE"
 	SecurableSchema   SecurableClass = "SCHEMA"
-	// SecurableTable and SecurableView are the two classes that carry
-	// column permissions (Securable.Columns).
+	// SecurableTable, SecurableView and the two table-valued function
+	// classes carry column permissions (Securable.Columns, HasColumns).
 	SecurableTable          SecurableClass = "TABLE"
 	SecurableView           SecurableClass = "VIEW"
 	SecurableProcedure      SecurableClass = "PROCEDURE"
@@ -100,10 +100,10 @@ type Securable struct {
 	// Name is empty for SecurableServer and SecurableDatabase and required
 	// for every other class.
 	Name string
-	// Columns narrows a SecurableTable or SecurableView permission to these
-	// columns, rendered as the one statement SQL Server accepts for them —
-	// GRANT SELECT (a, b) ON ... Nil means the whole object; any other class
-	// refuses a column list.
+	// Columns narrows the permission to these columns of a class whose
+	// HasColumns is true, rendered as the one statement SQL Server accepts
+	// for them — GRANT SELECT (a, b) ON ... Nil means the whole object; any
+	// other class refuses a column list.
 	Columns []string
 }
 
@@ -170,10 +170,10 @@ var (
 )
 
 // allows reports whether name is a permission the class accepts; columns
-// selects the column-level list of a table or view.
+// selects its column-level list.
 func (c SecurableClass) allows(name string, columns bool) bool {
 	if columns {
-		return columnPermissionNames[ObjectPermission(name)]
+		return c.HasColumns() && columnPermissionNames[ObjectPermission(name)] && c.objectNames()[ObjectPermission(name)]
 	}
 	switch c {
 	case SecurableServer:
@@ -234,6 +234,30 @@ func (c SecurableClass) PermissionNames() []string {
 	return names
 }
 
+// HasColumns reports whether a securable of the class has columns that carry
+// permissions of their own: a table, a view, or a table-valued function of
+// either kind (confirmed live on 17, 2026-10-15).
+func (c SecurableClass) HasColumns() bool {
+	switch c {
+	case SecurableTable, SecurableView, SecurableInlineFunction, SecurableTableFunction:
+		return true
+	}
+	return false
+}
+
+// ColumnPermissionNames returns every permission name GRANT/DENY/REVOKE
+// accepts on a column of a securable of the class, sorted; none for a class
+// whose HasColumns is false.
+func (c SecurableClass) ColumnPermissionNames() []string {
+	var names []string
+	for _, name := range ColumnPermissionNames() {
+		if c.allows(name, true) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // schemaScoped reports whether the class's securables live in a schema.
 func (c SecurableClass) schemaScoped() bool {
 	switch c {
@@ -288,7 +312,7 @@ func (s Securable) check(verb PermissionVerb, perm string) error {
 		}
 	}
 	if s.Columns != nil {
-		if s.Class != SecurableTable && s.Class != SecurableView {
+		if !s.Class.HasColumns() {
 			return invalidf("gosmo: %s permission: a %s has no column permissions", lower, strings.ToLower(string(s.Class)))
 		}
 		if len(s.Columns) == 0 {
@@ -298,7 +322,7 @@ func (s Securable) check(verb PermissionVerb, perm string) error {
 			return invalidf("gosmo: %s column permission: no columns named", lower)
 		}
 		if !s.Class.allows(perm, true) {
-			return invalidf("gosmo: %s column permission: %q cannot be granted on a column", lower, perm)
+			return invalidf("gosmo: %s column permission: %q cannot be granted on a column of a %s", lower, perm, strings.ToLower(string(s.Class)))
 		}
 		return nil
 	}

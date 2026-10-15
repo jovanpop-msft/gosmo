@@ -247,6 +247,15 @@ func (d *Database) QueryStoreHighVariationQueries(ctx context.Context, opts Quer
 // It compares [From, To) against [BaselineFrom, BaselineTo), which default to
 // the equally long window immediately before From.
 //
+// An interval overlapping both windows counts in the reported one only. With
+// the default baseline every report has one — the interval in progress at
+// From — and SSMS counts it in both, which puts the same executions on both
+// sides of the subtraction and pulls the two values together: with 60-minute
+// intervals and a one-hour window, half of each window's data is shared and
+// a real regression reads as half its size. The reported window keeps it
+// because it is the one the report is about, and so that its values match
+// Top Resource Consuming Queries' over the same From and To.
+//
 // The join between the two windows is an inner one on purpose: a query with
 // no executions in the baseline window has not regressed, it is new, and
 // ranking it by "growth from zero" would fill the report with first-time
@@ -259,8 +268,8 @@ func (d *Database) QueryStoreRegressedQueries(ctx context.Context, opts QuerySto
 	var a qsArgs
 	top := a.add(sp.opts.Top)
 
-	// Both windows aggregate identically; only the interval predicate differs.
-	windowCTE := func(name string, from, to time.Time) string {
+	// Both windows aggregate identically; only the interval predicates differ.
+	windowCTE := func(name string, from, to time.Time, exclude func() string) string {
 		return fmt.Sprintf(`%s AS (
     SELECT q.query_id,
            qt.query_sql_text                                       AS query_sql_text,
@@ -274,13 +283,17 @@ func (d *Database) QueryStoreRegressedQueries(ctx context.Context, opts QuerySto
     %s
     %s%s
 )`, name, qsObjectName, sp.value("rs"), strings.TrimPrefix(qsRuntimeFrom, "\n"),
-			sp.window(&a, from, to)+sp.queryFilter(&a), qsQueryGroupBy, sp.having(&a))
+			sp.window(&a, from, to)+exclude()+sp.queryFilter(&a), qsQueryGroupBy, sp.having(&a))
 	}
 
 	// The CTEs are rendered in parameter order — recent first, then baseline —
-	// because qsArgs numbers each parameter as it is appended.
-	recent := windowCTE("recent", sp.opts.From, sp.opts.To)
-	baseline := windowCTE("baseline", sp.opts.BaselineFrom, sp.opts.BaselineTo)
+	// because qsArgs numbers each parameter as it is appended. The baseline's
+	// exclusion is a callback for the same reason: its parameters must follow
+	// the baseline window's, so it is rendered after them, not before the call.
+	recent := windowCTE("recent", sp.opts.From, sp.opts.To, func() string { return "" })
+	baseline := windowCTE("baseline", sp.opts.BaselineFrom, sp.opts.BaselineTo, func() string {
+		return "\n  AND NOT (" + qsOverlap(&a, sp.opts.From, sp.opts.To) + ")"
+	})
 
 	q := fmt.Sprintf(`WITH %s,
 %s
@@ -413,11 +426,11 @@ func (d *Database) queryStorePlansQuery(valueExpr, from, to, id string) string {
        COALESCE(SUM(rs.count_executions), 0) AS exec_count,
        %s AS value
 FROM   sys.query_store_plan AS p
-LEFT JOIN sys.query_store_runtime_stats AS rs
+LEFT JOIN (sys.query_store_runtime_stats AS rs
+           JOIN sys.query_store_runtime_stats_interval AS rsi
+             ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
+            AND rsi.end_time > %s AND rsi.start_time < %s)
        ON rs.plan_id = p.plan_id
-LEFT JOIN sys.query_store_runtime_stats_interval AS rsi
-       ON rsi.runtime_stats_interval_id = rs.runtime_stats_interval_id
-      AND rsi.start_time >= %s AND rsi.start_time < %s
 WHERE  p.query_id = %s
 GROUP BY p.plan_id, p.query_id, p.is_forced_plan,%s
          p.force_failure_count, p.last_force_failure_reason_desc,
@@ -435,6 +448,12 @@ ORDER BY p.plan_id`,
 // window still exists, is still forceable, and still has plan XML worth
 // showing — dropping it would hide the very plan a user opened the report to
 // force back.
+//
+// The window sits on the inner join between runtime stats and their interval,
+// nested inside the LEFT one, so it filters the stats rows themselves. On a
+// LEFT JOIN of the interval alone it only blanked the interval, every stats
+// row still joined its plan, and the plan's ExecCount and Value covered its
+// whole history whatever window was asked for.
 func (d *Database) QueryStorePlans(ctx context.Context, queryID int64, opts QueryStoreReportOptions) ([]*QSPlan, error) {
 	sp, err := opts.resolve()
 	if err != nil {

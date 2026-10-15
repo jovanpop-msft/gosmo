@@ -234,14 +234,21 @@ type QueryStoreReportOptions struct {
 	Metric    QSMetric
 	Statistic QSStatistic
 
-	// From and To bound the report by runtime-stats interval, half-open
-	// [From, To). A zero To means now; a zero From means an hour before To.
+	// From and To bound the report by runtime-stats interval: every interval
+	// that overlaps [From, To) counts, whole — an interval that started
+	// before From but ends after it included, as SSMS includes it. Query
+	// Store keeps no finer grain than the interval, so the report covers
+	// From rounded down and To rounded up to interval boundaries; with the
+	// default 60-minute interval, a "last hour" window at 14:20 reads
+	// 13:00–15:00. A zero To means now; a zero From means an hour before To.
 	From, To time.Time
 
 	// BaselineFrom and BaselineTo bound the comparison window
 	// QueryStoreRegressedQueries measures regression against, and are
 	// ignored by every other report. Zero means the window of the same length
-	// immediately before From.
+	// immediately before From. Intervals overlapping it count as for From and
+	// To, except that one overlapping [From, To) as well counts in the
+	// reported window only — see QueryStoreRegressedQueries.
 	BaselineFrom, BaselineTo time.Time
 
 	// Top caps how many rows come back. Zero means QSDefaultTop.
@@ -358,10 +365,18 @@ const qsObjectName = `COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + '.' + OBJECT_NA
 // qsQueryGroupBy groups a runtime-stats report to one row per query.
 const qsQueryGroupBy = `GROUP BY q.query_id, qt.query_sql_text, q.object_id`
 
+// qsOverlap renders the predicate an interval meets when it overlaps the
+// half-open range [from, to), over the interval alias rsi. An overlap test,
+// not start_time >= from: the interval in progress at from started before
+// it, and with a 60-minute interval that one is most of a "last hour" report.
+func qsOverlap(a *qsArgs, from, to time.Time) string {
+	return fmt.Sprintf("rsi.end_time > %s AND rsi.start_time < %s", a.add(from), a.add(to))
+}
+
 // window renders the interval-range and internal-query predicates over the
 // half-open range [from, to), as a WHERE clause.
 func (sp qsReportSpec) window(a *qsArgs, from, to time.Time) string {
-	w := fmt.Sprintf("WHERE rsi.start_time >= %s AND rsi.start_time < %s", a.add(from), a.add(to))
+	w := "WHERE " + qsOverlap(a, from, to)
 	if !sp.opts.IncludeInternal {
 		w += "\n  AND q.is_internal_query = 0"
 	}

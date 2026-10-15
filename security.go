@@ -10,7 +10,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 )
 
 // ============================================================
@@ -89,47 +91,73 @@ ORDER  BY pr.name, dp.permission_name`
 // principal (typically a database role) has an explicit permission on —
 // the inverse of Permissions, which is "one securable, every principal."
 // This is "one principal, every securable" — SSMS's Database Role
-// Properties > Securables page. SecurableType is "TABLE", "VIEW",
-// "SCHEMA", or "DATABASE"; Schema and Name are empty for "DATABASE".
+// Properties > Securables page. SecurableType is the class ApplyPermission
+// takes for the same securable; Schema is empty for a class that is not
+// schema-scoped, and Schema and Name are both empty for SecurableDatabase.
 type PrincipalSecurable struct {
-	SecurableType string
+	SecurableType SecurableClass
 	Schema        string
 	Name          string
 	Permission    string
 	State         string
 }
 
-// securableObjectTypeNames maps sys.objects.type_desc to the SecurableType
-// string PrincipalSecurable reports.
-var securableObjectTypeNames = map[string]string{
-	"USER_TABLE": "TABLE",
-	"VIEW":       "VIEW",
+// objectSecurableClasses maps sys.objects.type to the SecurableClass of
+// every object kind ApplyPermission can grant on: a procedure is P or PC
+// (CLR), a scalar function FN or FS (CLR), a table-valued function TF or FT
+// (CLR). An object of any other type — a CLR aggregate, an extended stored
+// procedure, a queue — has no class here, so the reads below leave it out
+// rather than report a securable no caller can address.
+var objectSecurableClasses = map[string]SecurableClass{
+	"U": SecurableTable, "V": SecurableView,
+	"P": SecurableProcedure, "PC": SecurableProcedure,
+	"FN": SecurableScalarFunction, "FS": SecurableScalarFunction,
+	"IF": SecurableInlineFunction,
+	"TF": SecurableTableFunction, "FT": SecurableTableFunction,
+	"SO": SecurableSequence, "SN": SecurableSynonym,
 }
 
-// PermissionsForPrincipal returns every explicit GRANT/DENY entry recorded
-// for principal across database-, schema-, and table/view-scoped
-// securables. Stored procedure and function securables are deliberately
-// excluded — they need their own permission catalog (EXECUTE-centric,
-// distinct from the table/view one) not built yet; see SchemaPermissionNames/
-// ObjectPermissionNames for the catalogs this DOES cover.
-func (d *Database) PermissionsForPrincipal(ctx context.Context, principal string) ([]*PrincipalSecurable, error) {
-	const q = `
+// objectSecurableTypes is objectSecurableClasses' keys as a T-SQL IN list,
+// sorted so the statement text is the same on every run (one cached plan).
+var objectSecurableTypes = func() string {
+	types := slices.Sorted(maps.Keys(objectSecurableClasses))
+	for i, t := range types {
+		types[i] = "'" + t + "'"
+	}
+	return strings.Join(types, ",")
+}()
+
+// permissionsForPrincipalQuery reads every explicit entry of one principal.
+// A column entry (minor_id > 0) finds no obj row and so drops out with the
+// unknown object types: ColumnPermissionsForPrincipal reports those.
+var permissionsForPrincipalQuery = `
 SELECT dp.class_desc, dp.permission_name, dp.state_desc,
-       COALESCE(objSchema.name, sch.name, N'') AS schema_name,
-       COALESCE(obj.name, N'') AS object_name,
-       COALESCE(obj.type_desc, N'') AS object_type
+       COALESCE(objSchema.name, typSchema.name, sch.name, N'') AS schema_name,
+       COALESCE(obj.name, typ.name, cert.name, N'') AS object_name,
+       COALESCE(RTRIM(obj.type), N'') AS object_type
 FROM   sys.database_permissions dp
 JOIN   sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
 LEFT   JOIN sys.schemas sch ON dp.class_desc = 'SCHEMA' AND sch.schema_id = dp.major_id
 LEFT   JOIN sys.objects obj ON dp.class_desc = 'OBJECT_OR_COLUMN' AND obj.object_id = dp.major_id
-                            AND dp.minor_id = 0 AND obj.type IN ('U','V')
+                            AND dp.minor_id = 0 AND obj.type IN (` + objectSecurableTypes + `)
 LEFT   JOIN sys.schemas objSchema ON objSchema.schema_id = obj.schema_id
+LEFT   JOIN sys.types typ ON dp.class_desc = 'TYPE' AND typ.user_type_id = dp.major_id
+LEFT   JOIN sys.schemas typSchema ON typSchema.schema_id = typ.schema_id
+LEFT   JOIN sys.certificates cert ON dp.class_desc = 'CERTIFICATE' AND cert.certificate_id = dp.major_id
 WHERE  pr.name = @p1
-AND    dp.class_desc IN ('DATABASE','SCHEMA','OBJECT_OR_COLUMN')
+AND    dp.class_desc IN ('DATABASE','SCHEMA','OBJECT_OR_COLUMN','TYPE','CERTIFICATE')
 AND    (dp.class_desc <> 'OBJECT_OR_COLUMN' OR obj.object_id IS NOT NULL)
 ORDER  BY dp.class_desc, schema_name, object_name, dp.permission_name`
 
-	rows, err := d.query(ctx, q, principal)
+// PermissionsForPrincipal returns every explicit GRANT/DENY entry recorded
+// for principal on a securable of any class Database.ApplyPermission takes:
+// the database, a schema, an object (table, view, procedure, function,
+// sequence, synonym), a user type or a certificate. Column entries are
+// ColumnPermissionsForPrincipal's. Entries on a class gosmo has no
+// SecurableClass for — an assembly, an asymmetric key, an XML schema
+// collection, a Service Broker object — are left out.
+func (d *Database) PermissionsForPrincipal(ctx context.Context, principal string) ([]*PrincipalSecurable, error) {
+	rows, err := d.query(ctx, permissionsForPrincipalQuery, principal)
 	return scanRows(rows, err, fmt.Sprintf("permissions for principal %q in %q", principal, d.Name), func(scan func(...any) error) (*PrincipalSecurable, error) {
 		e := &PrincipalSecurable{}
 		var class, objType string
@@ -138,7 +166,7 @@ ORDER  BY dp.class_desc, schema_name, object_name, dp.permission_name`
 		}
 		switch class {
 		case "DATABASE":
-			e.SecurableType = "DATABASE"
+			e.SecurableType = SecurableDatabase
 		case "SCHEMA":
 			// The query's schema_name column lands in e.Schema for every
 			// class (it's what resolves an OBJECT_OR_COLUMN row's
@@ -148,11 +176,15 @@ ORDER  BY dp.class_desc, schema_name, object_name, dp.permission_name`
 			// Schema is always "containing schema, empty if none", matching
 			// every other securable-type row (and what callers building a
 			// display label/key from Type+Schema+Name expect).
-			e.SecurableType = "SCHEMA"
+			e.SecurableType = SecurableSchema
 			e.Name = e.Schema
 			e.Schema = ""
+		case "TYPE":
+			e.SecurableType = SecurableUserType
+		case "CERTIFICATE":
+			e.SecurableType = SecurableCertificate
 		default:
-			e.SecurableType = securableObjectTypeNames[objType]
+			e.SecurableType = objectSecurableClasses[objType]
 		}
 		return e, nil
 	})
