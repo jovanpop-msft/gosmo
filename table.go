@@ -547,9 +547,11 @@ GROUP  BY p.object_id`
 // predicate — used to estimate qualifying rows for a filtered index or
 // filtered statistic's predicate (SSMS's "Estimate Rows" action).
 //
-// predicate is interpolated as-is after WHERE; callers pass a filter
-// expression already captured from the server (e.g. an index or statistic's
-// own FilterDefinition), not raw user input.
+// predicate is raw T-SQL, interpolated as-is after WHERE and executed: text
+// after a ';' in it runs as further statements of the same batch. Callers pass
+// a filter expression already captured from the server (e.g. an index or
+// statistic's own FilterDefinition), never untrusted input; CheckWhereSyntax
+// is the form that only compiles one.
 func (t *Table) CountWhere(ctx context.Context, predicate string) (int64, error) {
 	q := fmt.Sprintf("SELECT COUNT_BIG(*) FROM %s WHERE %s", t.FullName(), predicate)
 	var n int64
@@ -560,12 +562,27 @@ func (t *Table) CountWhere(ctx context.Context, predicate string) (int64, error)
 }
 
 // CheckWhereSyntax validates a WHERE predicate against the table without
-// scanning any data (SSMS's "Check Syntax" action for a filtered index or
-// statistic's predicate).
+// running it (SSMS's "Check Syntax" action for a filtered index or
+// statistic's predicate): parse errors and unknown columns are reported, and
+// nothing in predicate is executed.
+//
+// The probe query is handed to sys.sp_describe_first_result_set as a
+// parameter, which compiles and binds the batch but never runs it — a
+// "SELECT TOP (0) … WHERE <predicate>" would execute anything after a ';' in
+// predicate. The predicate is also parenthesised, so a statement separator
+// inside it is a syntax error rather than a second statement that compiles;
+// the closing parenthesis goes on its own line so a trailing "--" comment in
+// predicate cannot swallow it.
 func (t *Table) CheckWhereSyntax(ctx context.Context, predicate string) error {
-	q := fmt.Sprintf("SELECT TOP (0) 1 AS ok FROM %s WHERE %s", t.FullName(), predicate)
-	rows, err := t.db.query(ctx, q)
+	probe := fmt.Sprintf("SELECT 1 AS ok FROM %s WHERE (%s\n)", t.FullName(), predicate)
+	rows, err := t.db.query(ctx, "EXEC sys.sp_describe_first_result_set @tsql = @p1", probe)
 	if err != nil {
+		return fmt.Errorf("gosmo: check syntax for %s: %w", t.FullName(), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
 		return fmt.Errorf("gosmo: check syntax for %s: %w", t.FullName(), err)
 	}
 	if err := rows.Close(); err != nil {
