@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -152,7 +154,7 @@ func orphanedUserNote(u *User) string {
 		"-- FOR LOGIN below names a login of the user's own name, which it was not\n"+
 		"-- created for; where one exists, the user maps to it, whoever it belongs to.\n"+
 		"-- Name the intended login, or create the user WITHOUT LOGIN, before running this.\n",
-		commentSafe(quoteIdent(u.Name)), sid)
+		tsql.CommentSafe(quoteIdent(u.Name)), sid)
 }
 
 // mappedUserObject is mappedObjectName for a user: the certificate or key it
@@ -625,16 +627,23 @@ func unwrapPredicate(def string) string {
 		return def
 	}
 	// Only when that first "(" is the one the last ")" closes — a definition
-	// that merely starts and ends with a paren must be left alone.
+	// that merely starts and ends with a paren must be left alone. Only code
+	// counts: a ")" inside N')', [fn)x] or a comment is text, and counting it
+	// reaches depth 0 early and leaves the catalog's wrapping in place.
 	depth := 0
-	for i, r := range def {
-		switch r {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 && i != len(def)-1 {
-				return def
+	for sp := range tsql.Spans(def) {
+		if sp.Kind != tsql.SpanCode {
+			continue
+		}
+		for i := sp.Start; i < sp.End; i++ {
+			switch def[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 && i != len(def)-1 {
+					return def
+				}
 			}
 		}
 	}

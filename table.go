@@ -416,8 +416,22 @@ func (d *Database) CreateTable(ctx context.Context, req CreateTableRequest) (*Ta
 	})
 }
 
+// TableDropMode says whether Table.Drop also drops the foreign keys that
+// reference the table.
+type TableDropMode int
+
+const (
+	// DropTableOnly drops the table alone; the server refuses while a
+	// foreign key references it (Msg 3726).
+	DropTableOnly TableDropMode = iota
+
+	// DropTableCascade drops every foreign key referencing the table first.
+	DropTableCascade
+)
+
 // Drop drops the table.
-// When cascade=true it first drops all incoming foreign-key constraints.
+// With DropTableCascade it first drops all incoming foreign-key constraints,
+// in the same atomic batch.
 //
 // # Dropping something that isn't there is an error
 //
@@ -432,13 +446,17 @@ func (d *Database) CreateTable(ctx context.Context, req CreateTableRequest) (*Ta
 //
 // The generated *scripts* keep IF EXISTS — Scripter's DROP-and-CREATE output
 // exists to be re-run, which is the opposite requirement.
-func (t *Table) Drop(ctx context.Context, cascade bool) error {
+func (t *Table) Drop(ctx context.Context, mode TableDropMode) error {
 	qn := t.FullName()
-	if !cascade {
+	switch mode {
+	case DropTableOnly:
 		if _, err := t.exec(ctx, "DROP TABLE "+qn); err != nil {
 			return fmt.Errorf("gosmo: drop table %s: %w", qn, err)
 		}
 		return nil
+	case DropTableCascade:
+	default:
+		return invalidf("gosmo: drop table %s: unrecognized drop mode %d", qn, mode)
 	}
 	if err := requireSchema("write to table", t.Schema, t.Name); err != nil {
 		return err

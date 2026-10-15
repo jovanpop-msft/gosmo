@@ -204,10 +204,28 @@ func (s Signer) clause(withPassword bool) (string, error) {
 	return c, nil
 }
 
+// SignatureKind says whether AddSignature/DropSignature act on a signature
+// or a countersignature.
+type SignatureKind int
+
+const (
+	// PlainSignature is ADD/DROP SIGNATURE: the module runs with the
+	// signer's permissions added.
+	PlainSignature SignatureKind = iota
+
+	// CounterSignature is ADD/DROP COUNTER SIGNATURE, which lets the module
+	// be called from a signed one without granting the signer's permissions
+	// on its own (ModuleSignature.Counter reads it back).
+	CounterSignature
+)
+
 // signatureStatement builds ADD or DROP [COUNTER] SIGNATURE.
-func signatureStatement(add bool, schema, module string, by Signer, counter bool) (string, error) {
+func signatureStatement(add bool, schema, module string, by Signer, kind SignatureKind) (string, error) {
 	if strings.TrimSpace(module) == "" {
 		return "", invalidf("no module named")
+	}
+	if kind != PlainSignature && kind != CounterSignature {
+		return "", invalidf("unrecognized signature kind %d", kind)
 	}
 	c, err := by.clause(add)
 	if err != nil {
@@ -217,7 +235,7 @@ func signatureStatement(add bool, schema, module string, by Signer, counter bool
 	if add {
 		verb, prep = "ADD", " TO "
 	}
-	if counter {
+	if kind == CounterSignature {
 		verb += " COUNTER"
 	}
 	return verb + " SIGNATURE" + prep + qualifiedName(schema, module) + " BY " + c, nil
@@ -225,7 +243,7 @@ func signatureStatement(add bool, schema, module string, by Signer, counter bool
 
 // signModule is the body of every module handle's AddSignature and
 // DropSignature: the statement is the same whatever the module is.
-func signModule(ctx context.Context, d *Database, add bool, schema, module string, by Signer, counter bool) error {
+func signModule(ctx context.Context, d *Database, add bool, schema, module string, by Signer, kind SignatureKind) error {
 	what := "drop signature"
 	if add {
 		what = "add signature"
@@ -233,7 +251,7 @@ func signModule(ctx context.Context, d *Database, add bool, schema, module strin
 	if err := requireSchema(what, schema, module); err != nil {
 		return err
 	}
-	stmt, err := signatureStatement(add, schema, module, by, counter)
+	stmt, err := signatureStatement(add, schema, module, by, kind)
 	if err == nil {
 		if add {
 			_, err = d.execPasswords(ctx, stmt, by.Password)
@@ -253,35 +271,35 @@ func signModule(ctx context.Context, d *Database, add bool, schema, module strin
 // AddSignature signs the procedure with ADD [COUNTER] SIGNATURE. Signing
 // needs the signer's private key, and CONTROL on it; altering the procedure
 // later drops the signature. A StoredProcedureRef is enough.
-func (p *StoredProcedure) AddSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, p.db, true, p.Schema, p.Name, by, counter)
+func (p *StoredProcedure) AddSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, p.db, true, p.Schema, p.Name, by, kind)
 }
 
 // DropSignature removes a signature from the procedure with DROP [COUNTER]
 // SIGNATURE. by's Password is not used.
-func (p *StoredProcedure) DropSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, p.db, false, p.Schema, p.Name, by, counter)
+func (p *StoredProcedure) DropSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, p.db, false, p.Schema, p.Name, by, kind)
 }
 
 // AddSignature signs the function — scalar or multi-statement; an inline
 // function cannot be signed. See StoredProcedure.AddSignature.
-func (f *UserDefinedFunction) AddSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, f.db, true, f.Schema, f.Name, by, counter)
+func (f *UserDefinedFunction) AddSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, f.db, true, f.Schema, f.Name, by, kind)
 }
 
 // DropSignature removes a signature from the function. by's Password is not
 // used.
-func (f *UserDefinedFunction) DropSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, f.db, false, f.Schema, f.Name, by, counter)
+func (f *UserDefinedFunction) DropSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, f.db, false, f.Schema, f.Name, by, kind)
 }
 
 // AddSignature signs the DML trigger. See StoredProcedure.AddSignature.
-func (t *Trigger) AddSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, t.db, true, t.Schema, t.Name, by, counter)
+func (t *Trigger) AddSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, t.db, true, t.Schema, t.Name, by, kind)
 }
 
 // DropSignature removes a signature from the DML trigger. by's Password is
 // not used.
-func (t *Trigger) DropSignature(ctx context.Context, by Signer, counter bool) error {
-	return signModule(ctx, t.db, false, t.Schema, t.Name, by, counter)
+func (t *Trigger) DropSignature(ctx context.Context, by Signer, kind SignatureKind) error {
+	return signModule(ctx, t.db, false, t.Schema, t.Name, by, kind)
 }

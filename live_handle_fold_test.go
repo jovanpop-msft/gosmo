@@ -143,7 +143,7 @@ SELECT (SELECT COUNT(*) FROM sys.objects WHERE SCHEMA_NAME(schema_id) COLLATE DA
 		{"view Drop", families[0].h.(*View).Drop(ctx), "arch", "V2"},
 		{"procedure Drop", families[1].h.(*StoredProcedure).Drop(ctx), "arch", "P2"},
 		{"function Drop", families[2].h.(*UserDefinedFunction).Drop(ctx), "arch", "F2"},
-		{"table Drop cascade", tbl.Drop(ctx, true), "arch", "T2"},
+		{"table Drop cascade", tbl.Drop(ctx, DropTableCascade), "arch", "T2"},
 	} {
 		if dr.err != nil {
 			t.Errorf("%s: %v", dr.what, dr.err)

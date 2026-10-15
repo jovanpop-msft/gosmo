@@ -140,19 +140,36 @@ func (m *MasterKey) exec(ctx context.Context, what, stmt, openPassword string, p
 	return nil
 }
 
-// Regenerate replaces the key material with ALTER MASTER KEY REGENERATE,
-// re-encrypting everything the key protects, and leaves it encrypted by
-// password and — where it was before — the service master key. force is
-// FORCE REGENERATE, which goes ahead even when something it protects cannot
-// be decrypted, losing that thing; use it only to recover from a damaged
-// key.
-func (m *MasterKey) Regenerate(ctx context.Context, password string, force bool, openPassword string) error {
+// MasterKeyRegenerateMode says whether MasterKey.Regenerate goes ahead
+// when something the key protects cannot be decrypted.
+type MasterKeyRegenerateMode int
+
+const (
+	// MasterKeyRegenerate is ALTER MASTER KEY REGENERATE, which fails if
+	// anything the key protects cannot be decrypted.
+	MasterKeyRegenerate MasterKeyRegenerateMode = iota
+
+	// MasterKeyForceRegenerate is FORCE REGENERATE, which goes ahead even
+	// then, losing whatever could not be decrypted; use it only to recover
+	// from a damaged key.
+	MasterKeyForceRegenerate
+)
+
+// Regenerate replaces the key material with ALTER MASTER KEY [FORCE]
+// REGENERATE, as mode says, re-encrypting everything the key protects, and
+// leaves it encrypted by password and — where it was before — the service
+// master key.
+func (m *MasterKey) Regenerate(ctx context.Context, password string, mode MasterKeyRegenerateMode, openPassword string) error {
 	if password == "" {
 		return invalidf("gosmo: regenerate the master key in %q: empty password", m.db.Name)
 	}
 	stmt := "ALTER MASTER KEY "
-	if force {
+	switch mode {
+	case MasterKeyRegenerate:
+	case MasterKeyForceRegenerate:
 		stmt += "FORCE "
+	default:
+		return invalidf("gosmo: regenerate the master key in %q: unrecognized mode %d", m.db.Name, mode)
 	}
 	stmt += "REGENERATE WITH ENCRYPTION BY PASSWORD = " + QuoteLiteral(password)
 	return m.exec(ctx, "regenerate", stmt, openPassword, password)

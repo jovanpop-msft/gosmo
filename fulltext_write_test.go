@@ -129,14 +129,14 @@ func TestFullTextWriteStatements(t *testing.T) {
 		{"index disable", func(c context.Context) error { return ix().Disable(c) },
 			u + "ALTER FULLTEXT INDEX ON " + tbl + " DISABLE"},
 		{"index add column", func(c context.Context) error {
-			return ix().AddColumn(c, FullTextIndexColumnSpec{Name: "a]b", Language: "0"}, true)
+			return ix().AddColumn(c, FullTextIndexColumnSpec{Name: "a]b", Language: "0"}, FullTextNoPopulation)
 		}, u + "ALTER FULLTEXT INDEX ON " + tbl + " ADD ([a]]b] LANGUAGE 0) WITH NO POPULATION"},
 		{"index add column, populate", func(c context.Context) error {
-			return ix().AddColumn(c, FullTextIndexColumnSpec{Name: "c"}, false)
+			return ix().AddColumn(c, FullTextIndexColumnSpec{Name: "c"}, FullTextRepopulate)
 		}, u + "ALTER FULLTEXT INDEX ON " + tbl + " ADD ([c])"},
-		{"index drop column", func(c context.Context) error { return ix().DropColumn(c, "a]b", false) },
+		{"index drop column", func(c context.Context) error { return ix().DropColumn(c, "a]b", FullTextRepopulate) },
 			u + "ALTER FULLTEXT INDEX ON " + tbl + " DROP ([a]]b])"},
-		{"index drop column, no population", func(c context.Context) error { return ix().DropColumn(c, "c", true) },
+		{"index drop column, no population", func(c context.Context) error { return ix().DropColumn(c, "c", FullTextNoPopulation) },
 			u + "ALTER FULLTEXT INDEX ON " + tbl + " DROP ([c]) WITH NO POPULATION"},
 		{"index change tracking", func(c context.Context) error { return ix().SetChangeTracking(c, FullTextChangeTrackingManual) },
 			u + "ALTER FULLTEXT INDEX ON " + tbl + " SET CHANGE_TRACKING = MANUAL"},

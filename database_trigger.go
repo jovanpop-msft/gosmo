@@ -113,7 +113,7 @@ func (t *DatabaseTrigger) Database() *Database { return t.db }
 // scanDatabaseTrigger decodes one sys.triggers row into a DatabaseTrigger.
 //
 // Twin of scanServerTrigger in server_trigger.go. That file and this one are
-// deliberately near-identical: this function, and the Enable/Disable/setEnabled
+// deliberately near-identical: this function, and the Enable/Disable/SetEnabled
 // block below it, differ only in the receiver type and in the scope the
 // statement targets (ON DATABASE here, ON ALL SERVER there). Unifying them
 // needs either generics over two receivers with different db/server fields or
@@ -141,29 +141,25 @@ func scanDatabaseTrigger(d *Database, scan func(...any) error) (*DatabaseTrigger
 
 // Enable enables the trigger.
 func (t *DatabaseTrigger) Enable(ctx context.Context) error {
-	return t.setEnabled(ctx, true)
+	return t.SetEnabled(ctx, true)
 }
 
 // Disable disables the trigger, leaving its definition in place.
 func (t *DatabaseTrigger) Disable(ctx context.Context) error {
-	return t.setEnabled(ctx, false)
+	return t.SetEnabled(ctx, false)
 }
 
 // SetEnabled is Enable when on is true and Disable otherwise.
 func (t *DatabaseTrigger) SetEnabled(ctx context.Context, on bool) error {
-	return t.setEnabled(ctx, on)
-}
-
-func (t *DatabaseTrigger) setEnabled(ctx context.Context, enabled bool) error {
 	verb := "DISABLE"
-	if enabled {
+	if on {
 		verb = "ENABLE"
 	}
 	stmt := fmt.Sprintf("%s TRIGGER %s ON DATABASE", verb, quoteIdent(t.Name))
 	if _, err := t.db.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: %s database trigger %q: %w", strings.ToLower(verb), t.Name, err)
 	}
-	setIfApplied(ctx, &t.IsEnabled, enabled)
+	setIfApplied(ctx, &t.IsEnabled, on)
 	return nil
 }
 

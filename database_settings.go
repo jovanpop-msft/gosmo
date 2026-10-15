@@ -32,15 +32,17 @@ func (d *Database) SetCompatibilityLevel(ctx context.Context, level Compatibilit
 	return nil
 }
 
-// Termination says what an ALTER DATABASE needing exclusive access does about
-// the other sessions in the database — the WITH <termination> clause of ALTER
-// DATABASE SET.
+// Termination says what a statement needing exclusive access to a database
+// does about the other sessions in it — the WITH <termination> clause of
+// ALTER DATABASE SET, and the force of Database.Drop and Database.Rename.
 type Termination int
 
 const (
-	// TerminationNone waits for the other sessions to leave, as the bare
-	// statement does. Nothing bounds the wait but the caller's context: WITH
-	// NO_WAIT was probed on 17.0 and still waited, so it is not offered.
+	// TerminationNone leaves the other sessions alone, as the bare statement
+	// does: ALTER DATABASE SET waits for them to leave, and DROP DATABASE and
+	// MODIFY NAME fail while any is connected. Nothing bounds the wait but
+	// the caller's context: WITH NO_WAIT was probed on 17.0 and still waited,
+	// so it is not offered.
 	TerminationNone Termination = iota
 
 	// TerminationRollbackImmediate disconnects every other session in the

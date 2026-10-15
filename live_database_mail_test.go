@@ -662,13 +662,13 @@ EXEC sp_configure 'show advanced options', %d; RECONFIGURE;`, adv))
 	exec("EXEC msdb.sys.sp_executesql N'CREATE USER [" + liveMailLogin + "] FOR LOGIN [" + liveMailLogin + "]'")
 	cleanup("EXEC msdb.sys.sp_executesql N'DROP USER [" + liveMailLogin + "]'")
 
-	if err := p.Grant(ctx, MailPublicPrincipal, true); err != nil || !p.IsPublic || !p.IsDefault {
+	if err := p.Grant(ctx, MailPublicPrincipal, MailDefaultProfile); err != nil || !p.IsPublic || !p.IsDefault {
 		t.Fatalf("Grant(public, default) = %v; mirrored IsPublic %v IsDefault %v", err, p.IsPublic, p.IsDefault)
 	}
-	if err := p.Grant(ctx, liveMailLogin, false); err != nil {
+	if err := p.Grant(ctx, liveMailLogin, MailNotDefaultProfile); err != nil {
 		t.Fatalf("Grant(user): %v", err)
 	}
-	if err := p.SetGrantDefault(ctx, liveMailLogin, true); err != nil {
+	if err := p.SetGrantDefault(ctx, liveMailLogin, MailDefaultProfile); err != nil {
 		t.Fatalf("SetGrantDefault: %v", err)
 	}
 	grantsOf := func() []string {
@@ -688,7 +688,7 @@ EXEC sp_configure 'show advanced options', %d; RECONFIGURE;`, adv))
 	}; !slices.Equal(got, want) {
 		t.Errorf("grants = %v, want %v", got, want)
 	}
-	if err := p.Grant(ctx, liveMailLogin+"_absent", false); err == nil {
+	if err := p.Grant(ctx, liveMailLogin+"_absent", MailNotDefaultProfile); err == nil {
 		t.Error("Grant to a principal with no msdb user returned no error")
 	}
 

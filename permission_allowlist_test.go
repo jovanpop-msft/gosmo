@@ -279,7 +279,7 @@ func TestSplitAndMergeRangeRejectBadBoundary(t *testing.T) {
 // SECONDARY" — is a syntax error, not a differently-ordered but valid form,
 // so that whole argument was unusable.
 func TestScopedConfigForSecondaryClauseOrder(t *testing.T) {
-	got, err := buildScopedConfigStatement("MAXDOP", "4", false)
+	got, err := buildScopedConfigStatement("MAXDOP", "4", ScopedConfigPrimary)
 	if err != nil {
 		t.Fatalf("buildScopedConfigStatement: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestScopedConfigForSecondaryClauseOrder(t *testing.T) {
 		t.Errorf("primary: got %q, want %q", got, want)
 	}
 
-	got, err = buildScopedConfigStatement("MAXDOP", "PRIMARY", true)
+	got, err = buildScopedConfigStatement("MAXDOP", "PRIMARY", ScopedConfigSecondary)
 	if err != nil {
 		t.Fatalf("buildScopedConfigStatement: %v", err)
 	}
@@ -302,10 +302,10 @@ func TestScopedConfigForSecondaryClauseOrder(t *testing.T) {
 // TestScopedConfigStatementRejectsInjection pins that the validation still
 // runs on the extracted builder, not just at the old call site.
 func TestScopedConfigStatementRejectsInjection(t *testing.T) {
-	if _, err := buildScopedConfigStatement("MAXDOP; DROP TABLE x --", "4", false); err == nil {
+	if _, err := buildScopedConfigStatement("MAXDOP; DROP TABLE x --", "4", ScopedConfigPrimary); err == nil {
 		t.Error("buildScopedConfigStatement accepted an injected name")
 	}
-	if _, err := buildScopedConfigStatement("MAXDOP", "4; DROP TABLE x --", false); err == nil {
+	if _, err := buildScopedConfigStatement("MAXDOP", "4; DROP TABLE x --", ScopedConfigPrimary); err == nil {
 		t.Error("buildScopedConfigStatement accepted an injected value")
 	}
 }

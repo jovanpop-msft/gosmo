@@ -170,8 +170,8 @@ func TestMasterKeyWrites(t *testing.T) {
 			"    CLOSE MASTER KEY;\nTHROW;\nEND CATCH;"
 	}
 	got := capture(t,
-		func(ctx context.Context) error { return m.Regenerate(ctx, "new", false, "") },
-		func(ctx context.Context) error { return m.Regenerate(ctx, "new", true, "op") },
+		func(ctx context.Context) error { return m.Regenerate(ctx, "new", MasterKeyRegenerate, "") },
+		func(ctx context.Context) error { return m.Regenerate(ctx, "new", MasterKeyForceRegenerate, "op") },
 		func(ctx context.Context) error {
 			return m.AddEncryption(ctx, MasterKeyEncryptor{ServiceMasterKey: true}, "op")
 		},
@@ -203,7 +203,7 @@ func TestMasterKeyWritesReject(t *testing.T) {
 	ctx, col := WithScript(context.Background())
 	m := (&Server{}).DatabaseRef("AppDB").MasterKeyRef()
 	for _, err := range []error{
-		m.Regenerate(ctx, "", false, ""),
+		m.Regenerate(ctx, "", MasterKeyRegenerate, ""),
 		m.AddEncryption(ctx, MasterKeyEncryptor{}, ""),
 		m.AddEncryption(ctx, MasterKeyEncryptor{ServiceMasterKey: true, Password: "p"}, ""),
 		m.DropEncryption(ctx, MasterKeyEncryptor{}, ""),
@@ -244,23 +244,23 @@ func TestSignatureWrites(t *testing.T) {
 	asym := Signer{Kind: SignerAsymmetricKey, Name: "a"}
 	got := capture(t,
 		func(ctx context.Context) error {
-			return d.StoredProcedureRef("dbo", "p]1").AddSignature(ctx, cert, false)
+			return d.StoredProcedureRef("dbo", "p]1").AddSignature(ctx, cert, PlainSignature)
 		},
 		func(ctx context.Context) error {
-			return d.UserDefinedFunctionRef("dbo", "f").AddSignature(ctx, asym, true)
+			return d.UserDefinedFunctionRef("dbo", "f").AddSignature(ctx, asym, CounterSignature)
 		},
 		// DROP takes no password, even when the signer has one.
 		func(ctx context.Context) error {
-			return d.StoredProcedureRef("dbo", "p]1").DropSignature(ctx, cert, false)
+			return d.StoredProcedureRef("dbo", "p]1").DropSignature(ctx, cert, PlainSignature)
 		},
 		func(ctx context.Context) error {
-			return d.UserDefinedFunctionRef("dbo", "f").DropSignature(ctx, asym, true)
+			return d.UserDefinedFunctionRef("dbo", "f").DropSignature(ctx, asym, CounterSignature)
 		},
 		func(ctx context.Context) error {
-			return d.TriggerRef("sales", "trg").AddSignature(ctx, asym, false)
+			return d.TriggerRef("sales", "trg").AddSignature(ctx, asym, PlainSignature)
 		},
 		func(ctx context.Context) error {
-			return d.TriggerRef("sales", "trg").DropSignature(ctx, asym, false)
+			return d.TriggerRef("sales", "trg").DropSignature(ctx, asym, PlainSignature)
 		},
 	)
 	assertStatements(t, got, []string{
@@ -274,9 +274,9 @@ func TestSignatureWrites(t *testing.T) {
 
 	ctx, col := WithScript(context.Background())
 	for _, err := range []error{
-		d.StoredProcedureRef("dbo", "").AddSignature(ctx, cert, false),
-		d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: "SYMMETRIC KEY", Name: "s"}, false),
-		d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate}, false),
+		d.StoredProcedureRef("dbo", "").AddSignature(ctx, cert, PlainSignature),
+		d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: "SYMMETRIC KEY", Name: "s"}, PlainSignature),
+		d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate}, PlainSignature),
 	} {
 		if err == nil {
 			t.Error("an invalid signature write was accepted")

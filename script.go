@@ -14,6 +14,7 @@ import (
 	"time"
 
 	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/radix29/gosmo/tsql"
 )
 
 type scriptCtxKey struct{}
@@ -119,7 +120,7 @@ func (c *ScriptCollector) String() string {
 			if name == "" {
 				name = "(unknown instance)"
 			}
-			fmt.Fprintf(&b, "-- on %s\n", commentSafe(name))
+			fmt.Fprintf(&b, "-- on %s\n", tsql.CommentSafe(name))
 			cur = ""
 		}
 		switch {
@@ -405,61 +406,20 @@ const (
 //	N'a''b'
 //
 // — and a secret that is a prefix of another redacts the longer one only
-// partly. The scan skips [identifiers], "identifiers" and comments, where a
-// quote opens nothing. A literal elsewhere in the statement that happens to
+// partly. The scan (tsql.Spans) skips [identifiers], "identifiers" and
+// comments, where a quote opens nothing. A literal elsewhere in the statement that happens to
 // equal a secret is redacted too; that costs a reader a value, never a secret.
 func redactSecrets(stmt, placeholder string, secrets ...string) string {
 	var out strings.Builder
 	last := 0
-	literal := func(open, quote int) int {
-		v, end := scanQuoted(stmt, quote, '\'')
-		if v != "" && slices.Contains(secrets, v) {
-			out.WriteString(stmt[last:open])
-			out.WriteString(QuoteLiteral(placeholder))
-			last = end
+	for sp := range tsql.Spans(stmt) {
+		if !sp.IsLiteral() {
+			continue
 		}
-		return end
-	}
-	for i := 0; i < len(stmt); {
-		switch c := stmt[i]; {
-		case c == '\'':
-			i = literal(i, i)
-		case isIdentByte(c):
-			// A whole word at a time, so only a lone N opens a Unicode
-			// literal — not the last letter of a word that ends in one.
-			j := i
-			for j < len(stmt) && isIdentByte(stmt[j]) {
-				j++
-			}
-			if j == i+1 && (c == 'N' || c == 'n') && j < len(stmt) && stmt[j] == '\'' {
-				j = literal(i, j)
-			}
-			i = j
-		case c == '[':
-			_, i = scanQuoted(stmt, i, ']')
-		case c == '"':
-			_, i = scanQuoted(stmt, i, '"')
-		case strings.HasPrefix(stmt[i:], "--"):
-			if j := strings.IndexByte(stmt[i:], '\n'); j >= 0 {
-				i += j
-			} else {
-				i = len(stmt)
-			}
-		case strings.HasPrefix(stmt[i:], "/*"):
-			depth, j := 1, i+2
-			for j < len(stmt) && depth > 0 {
-				switch {
-				case strings.HasPrefix(stmt[j:], "/*"):
-					depth, j = depth+1, j+2
-				case strings.HasPrefix(stmt[j:], "*/"):
-					depth, j = depth-1, j+2
-				default:
-					j++
-				}
-			}
-			i = j
-		default:
-			i++
+		if v := sp.Unescape(stmt); v != "" && slices.Contains(secrets, v) {
+			out.WriteString(stmt[last:sp.Start])
+			out.WriteString(QuoteLiteral(placeholder))
+			last = sp.End
 		}
 	}
 	if last == 0 {
@@ -467,31 +427,6 @@ func redactSecrets(stmt, placeholder string, secrets ...string) string {
 	}
 	out.WriteString(stmt[last:])
 	return out.String()
-}
-
-// scanQuoted reads a span opened at stmt[open] and closed by closer, where a
-// doubled closer is an escaped one — a 'literal', a [name] or a "name". It
-// returns the unescaped content and the index just past the closer (or the
-// end of stmt, for a span left open).
-func scanQuoted(stmt string, open int, closer byte) (string, int) {
-	var val strings.Builder
-	for j := open + 1; j < len(stmt); j++ {
-		if stmt[j] == closer {
-			if j+1 < len(stmt) && stmt[j+1] == closer {
-				val.WriteByte(closer)
-				j++
-				continue
-			}
-			return val.String(), j + 1
-		}
-		val.WriteByte(stmt[j])
-	}
-	return val.String(), len(stmt)
-}
-
-func isIdentByte(c byte) bool {
-	return c == '_' || c == '@' || c == '#' || c == '$' ||
-		'0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
 // atomicBatch renders stmts as one batch that applies all of them or none.
@@ -645,7 +580,7 @@ var placeholderPat = regexp.MustCompile(`@p([0-9]+)`)
 // DECLARE @p1 in the same batch is an error.
 //
 // Substitution skips string literals, quoted identifiers and comments (see
-// scriptCodeSpans). Textual replacement over the whole statement was correct
+// tsql.Spans). Textual replacement over the whole statement was correct
 // for every statement this package binds today, and silently wrong for the
 // first one to both interpolate a name and bind a parameter: an object
 // actually named "@p1" reaches the statement inside an escapeSingle'd literal,
@@ -670,11 +605,16 @@ func bindScriptArgs(q string, args []any) (string, error) {
 	}
 	var bindErr error
 	bound := make([]bool, len(args))
-	var out strings.Builder
-	spans := scriptCodeSpans(q)
-	for _, span := range spans {
-		out.WriteString(q[span.prev:span.start])
-		out.WriteString(placeholderPat.ReplaceAllStringFunc(q[span.start:span.end], func(m string) string {
+	var out, skipped strings.Builder
+	for sp := range tsql.Spans(q) {
+		text := q[sp.Start:sp.End]
+		if sp.Kind != tsql.SpanCode {
+			out.WriteString(text)
+			skipped.WriteString(text)
+			skipped.WriteByte(' ')
+			continue
+		}
+		out.WriteString(placeholderPat.ReplaceAllStringFunc(text, func(m string) string {
 			n, err := strconv.Atoi(m[2:])
 			if err != nil || n < 1 || n > len(args) {
 				if bindErr == nil {
@@ -702,82 +642,14 @@ func bindScriptArgs(q string, args []any) (string, error) {
 	// second leaves "@p1" in a script that then fails by hand with "Must
 	// declare the scalar variable" — the original bug — so it is an error here
 	// rather than a statement that looks fine until it is run.
-	for _, span := range spans {
-		for _, m := range placeholderPat.FindAllString(q[span.prev:span.start], -1) {
-			n, err := strconv.Atoi(m[2:])
-			if err != nil || n < 1 || n > len(args) || bound[n-1] {
-				continue
-			}
-			return "", fmt.Errorf("gosmo: script: %s appears only inside a literal or comment", m)
+	for _, m := range placeholderPat.FindAllString(skipped.String(), -1) {
+		n, err := strconv.Atoi(m[2:])
+		if err != nil || n < 1 || n > len(args) || bound[n-1] {
+			continue
 		}
+		return "", fmt.Errorf("gosmo: script: %s appears only inside a literal or comment", m)
 	}
 	return out.String(), nil
-}
-
-// codeSpan is one run of q that substitution applies to, together with the
-// span of skipped text immediately before it.
-type codeSpan struct{ prev, start, end int }
-
-// scriptCodeSpans splits q into the runs where an @pN is a parameter
-// placeholder, skipping the four places it is text the server never
-// interprets: a 'string literal', a "quoted identifier", a [quoted
-// identifier], a -- line comment and a /* block comment */.
-//
-// A doubled quote is how each of the quoted forms escapes its own delimiter,
-// and it needs no special case: the first of the pair closes the span and the
-// second opens a new one of the same kind, so the same bytes are skipped
-// either way. T-SQL block comments nest, so those are counted, not matched.
-func scriptCodeSpans(q string) []codeSpan {
-	var spans []codeSpan
-	prev, start := 0, 0
-	skip := func(from, to int) {
-		spans = append(spans, codeSpan{prev: prev, start: start, end: from})
-		prev, start = from, to
-	}
-	for i := 0; i < len(q); {
-		switch {
-		case q[i] == '\'' || q[i] == '"' || q[i] == '[':
-			closer := q[i]
-			if closer == '[' {
-				closer = ']'
-			}
-			j := i + 1
-			for j < len(q) && q[j] != closer {
-				j++
-			}
-			if j < len(q) {
-				j++
-			}
-			skip(i, j)
-			i = j
-		case strings.HasPrefix(q[i:], "--"):
-			j := strings.IndexByte(q[i:], '\n')
-			if j < 0 {
-				j = len(q)
-			} else {
-				j += i
-			}
-			skip(i, j)
-			i = j
-		case strings.HasPrefix(q[i:], "/*"):
-			depth, j := 1, i+2
-			for j < len(q) && depth > 0 {
-				switch {
-				case strings.HasPrefix(q[j:], "/*"):
-					depth, j = depth+1, j+2
-				case strings.HasPrefix(q[j:], "*/"):
-					depth, j = depth-1, j+2
-				default:
-					j++
-				}
-			}
-			skip(i, j)
-			i = j
-		default:
-			i++
-		}
-	}
-	return append(spans, codeSpan{prev: prev, start: start, end: len(q)})
 }
 
 // scriptLiteral renders one bound argument as the T-SQL literal that would

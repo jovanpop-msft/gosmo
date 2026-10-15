@@ -3,20 +3,21 @@ package gosmo
 import (
 	"strings"
 
-	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/radix29/gosmo/tsql"
 )
 
-// quoting.go centralises T-SQL identifier and literal quoting on the driver's
-// own TSQLQuoter, so gosmo, its callers, and gossms share one implementation
-// instead of each hand-rolling bracket/quote escaping.
+// quoting.go centralises T-SQL identifier and literal quoting, so gosmo, its
+// callers, and gossms share one implementation instead of each hand-rolling
+// bracket/quote escaping. The text rules live in the driver-free tsql
+// package; QuoteName, UnquoteName, QuoteLiteral and QuoteAnsiLiteral here
+// forward to it, so a caller may import either.
 
-// QuoteName wraps a SQL Server identifier (schema, table, column, ...) in
-// square brackets, doubling any embedded closing bracket — the equivalent of
-// T-SQL's QUOTENAME(). Use it to build object names safely; note it quotes
-// the whole string as one identifier, so pass each part of a multi-part name
-// separately.
+// QuoteName wraps a SQL Server identifier in square brackets, doubling any
+// embedded closing bracket — T-SQL's QUOTENAME(). It quotes the whole string
+// as one identifier, so pass each part of a multi-part name separately. It
+// is tsql.QuoteName.
 func QuoteName(name string) string {
-	return mssql.TSQLQuoter{}.ID(name)
+	return tsql.QuoteName(name)
 }
 
 // QuoteNameIfNeeded returns name as it stands when SQL Server would read it
@@ -62,35 +63,11 @@ func isRegularIdentifier(name string) bool {
 	return true
 }
 
-// UnquoteName undoes QuoteName for one name part: "[a]]b]" is "a]b", and a
-// double-quoted identifier, `"a""b"`, is `a"b`. Anything else — a bare name,
-// or one whose brackets don't match — comes back unchanged. It does not split
-// a multi-part name: "[dbo].[t]" is not one part, so it is returned as is.
-//
-// Use it where SQL Server hands back an identifier already quoted (showplan
-// XML, sys.dm_exec_* text) and the bare name is wanted. strings.Trim(s, "[]")
-// is not that: it leaves "]]" doubled and also strips a bracket that is part
-// of the name.
+// UnquoteName undoes QuoteName for one name part: "[a]]b]" is "a]b", and
+// `"a""b"` is `a"b`; anything else comes back unchanged. It is
+// tsql.UnquoteName, whose doc has the details.
 func UnquoteName(name string) string {
-	if len(name) < 2 {
-		return name
-	}
-	var closer string
-	switch {
-	case name[0] == '[' && name[len(name)-1] == ']':
-		closer = "]"
-	case name[0] == '"' && name[len(name)-1] == '"':
-		closer = `"`
-	default:
-		return name
-	}
-	inner := name[1 : len(name)-1]
-	// Every closer inside must be doubled, or the outer pair is not one
-	// quoted identifier ("[a]b]", "[a].[b]").
-	if strings.Count(inner, closer+closer)*2 != strings.Count(inner, closer) {
-		return name
-	}
-	return strings.ReplaceAll(inner, closer+closer, closer)
+	return tsql.UnquoteName(name)
 }
 
 // SplitName splits a multi-part name the way T-SQL reads one — "dbo.t",
@@ -212,7 +189,7 @@ VALUES VARYING VIEW WAITFOR WHEN WHERE WHILE WITH WRITETEXT`)
 // QuoteLiteral renders s as a T-SQL Unicode string literal — N'…', doubling
 // any embedded quote — safe to embed in SQL text where a parameter
 // placeholder is not accepted (DDL, dynamic SQL). Prefer a query parameter
-// for ordinary values.
+// for ordinary values. It is tsql.QuoteLiteral.
 //
 // The N prefix is not optional. Without it the literal is varchar, converted
 // through the current database's code page, and any character outside that
@@ -241,15 +218,13 @@ VALUES VARYING VIEW WAITFOR WHEN WHERE WHILE WITH WRITETEXT`)
 // for the wrong tables instead of failing. See
 // identifier_quoting_test.go, which pins all of this.
 func QuoteLiteral(s string) string {
-	return "N" + mssql.TSQLQuoter{}.Value(s)
+	return tsql.QuoteLiteral(s)
 }
 
 // QuoteAnsiLiteral renders s as a T-SQL non-Unicode string literal — '…',
-// doubling any embedded quote, with no N prefix. It is for the few places
-// that want varchar and not nvarchar: an Extended Events predicate on an
-// ansi_string field, whose like_i_sql_ansi_string comparator takes a
-// varchar. Everywhere else use QuoteLiteral; a character outside the current
-// code page becomes '?' here, which is the reason QuoteLiteral has its N.
+// doubling any embedded quote, with no N prefix — for the few places that
+// want varchar, such as an Extended Events predicate on an ansi_string
+// field. Everywhere else use QuoteLiteral. It is tsql.QuoteAnsiLiteral.
 func QuoteAnsiLiteral(s string) string {
-	return mssql.TSQLQuoter{}.Value(s)
+	return tsql.QuoteAnsiLiteral(s)
 }

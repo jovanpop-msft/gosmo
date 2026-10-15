@@ -213,9 +213,9 @@ func TestLiveFullTextWrites(t *testing.T) {
 		do   func() error
 	}{
 		{"AddColumn", func() error {
-			return h.AddColumn(ctx, FullTextIndexColumnSpec{Name: "extra", Language: "0"}, true)
+			return h.AddColumn(ctx, FullTextIndexColumnSpec{Name: "extra", Language: "0"}, FullTextNoPopulation)
 		}},
-		{"DropColumn", func() error { return h.DropColumn(ctx, "extra", true) }},
+		{"DropColumn", func() error { return h.DropColumn(ctx, "extra", FullTextNoPopulation) }},
 		{"SetChangeTracking MANUAL", func() error { return h.SetChangeTracking(ctx, FullTextChangeTrackingManual) }},
 		{"StartPopulation FULL", func() error { return h.StartPopulation(ctx, FullTextPopulationFull) }},
 	}

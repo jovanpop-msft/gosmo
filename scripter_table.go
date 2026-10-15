@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -326,7 +327,7 @@ func buildTableScript(schema, name, dbName string, p tableScriptParts, opts Scri
 	// written below rather than passed as the envelope's.
 	return opts.envelope(drop.String(), "", func(sb *strings.Builder) {
 		if opts.IncludeHeaders {
-			fmt.Fprintf(sb, "/* Table: %s  Database: %s */\n", blockCommentSafe(fullName), blockCommentSafe(dbName))
+			fmt.Fprintf(sb, "/* Table: %s  Database: %s */\n", tsql.BlockCommentSafe(fullName), tsql.BlockCommentSafe(dbName))
 		}
 		sb.WriteString(previewFeaturesNote(p.cols))
 		if opts.AnsiPadding {
@@ -438,7 +439,7 @@ func previewFeaturesNote(cols []*Column) string {
 			continue
 		}
 		if col.DataType == DataTypeVector && strings.EqualFold(col.VectorBaseType, "float16") {
-			names = append(names, commentSafe(quoteIdent(col.Name)))
+			names = append(names, tsql.CommentSafe(quoteIdent(col.Name)))
 		}
 	}
 	return float16Note(names)
@@ -514,7 +515,7 @@ func schemaBoundNote(fullName string, deps []schemaBoundDependent) string {
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "-- This DROP fails with Msg 3729 while these are schema-bound to %s:\n", commentSafe(fullName))
+	fmt.Fprintf(&sb, "-- This DROP fails with Msg 3729 while these are schema-bound to %s:\n", tsql.CommentSafe(fullName))
 	native := false
 	for _, d := range deps {
 		kind := d.typeDesc
@@ -522,7 +523,7 @@ func schemaBoundNote(fullName string, deps []schemaBoundDependent) string {
 			kind += ", natively compiled"
 			native = true
 		}
-		fmt.Fprintf(&sb, "--   %s (%s)\n", commentSafe(qualifiedName(d.schema, d.name)), kind)
+		fmt.Fprintf(&sb, "--   %s (%s)\n", tsql.CommentSafe(qualifiedName(d.schema, d.name)), kind)
 	}
 	sb.WriteString("-- Drop them first, or ALTER them without SCHEMABINDING.\n")
 	if native {
@@ -567,47 +568,13 @@ func referencingForeignKeyNote(fullName string, fks []referencingForeignKey, ver
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "-- This DROP fails with Msg 3726 while these foreign keys reference %s:\n", commentSafe(fullName))
+	fmt.Fprintf(&sb, "-- This DROP fails with Msg 3726 while these foreign keys reference %s:\n", tsql.CommentSafe(fullName))
 	for _, fk := range fks {
-		fmt.Fprintf(&sb, "--   %s.%s (FOREIGN KEY)\n", commentSafe(qualifiedName(fk.schema, fk.table)), commentSafe(quoteIdent(fk.name)))
+		fmt.Fprintf(&sb, "--   %s.%s (FOREIGN KEY)\n", tsql.CommentSafe(qualifiedName(fk.schema, fk.table)), tsql.CommentSafe(quoteIdent(fk.name)))
 	}
 	sb.WriteString("-- Drop them first, and recreate them after.\n")
 	if versioned {
 		sb.WriteString("-- They do not block SET (SYSTEM_VERSIONING = OFF): it runs, and stays off.\n")
-	}
-	return sb.String()
-}
-
-// commentSafe makes s safe inside a -- comment: a line break in an
-// identifier would end the comment and run the rest of the name as T-SQL.
-// Use blockCommentSafe inside /* */.
-func commentSafe(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, s)
-}
-
-// blockCommentSafe makes s safe inside a /* */ comment: a "*/" in an
-// identifier would close the comment early and run the rest as T-SQL, and a
-// "/*" would open a nested one — T-SQL block comments nest — that swallows
-// the closing "*/" and everything after it. A space goes between the two
-// runes of either pair, checked against what was already written so that
-// "*/*" cannot leave a "/*" behind.
-func blockCommentSafe(s string) string {
-	if !strings.Contains(s, "*/") && !strings.Contains(s, "/*") {
-		return s
-	}
-	var sb strings.Builder
-	var prev rune
-	for _, r := range s {
-		if (prev == '*' && r == '/') || (prev == '/' && r == '*') {
-			sb.WriteByte(' ')
-		}
-		sb.WriteRune(r)
-		prev = r
 	}
 	return sb.String()
 }

@@ -23,7 +23,7 @@ func TestEmptySchemaIsRefused(t *testing.T) {
 		call func(context.Context, *Database) error
 	}{
 		// The plan's two examples, which disagreed.
-		{"Table.Drop", func(c context.Context, d *Database) error { return d.TableRef("", "t").Drop(c, false) }},
+		{"Table.Drop", func(c context.Context, d *Database) error { return d.TableRef("", "t").Drop(c, DropTableOnly) }},
 		{"Sequence handle Drop", func(c context.Context, d *Database) error { return d.SequenceRef("", "s").Drop(c) }},
 
 		{"View.Drop", func(c context.Context, d *Database) error { return d.ViewRef("", "v").Drop(c) }},

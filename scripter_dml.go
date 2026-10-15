@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -188,7 +190,7 @@ func buildUpdateScript(schema, name string, cols []*Column) string {
 	full := qualifiedName(schema, name)
 	writable := scriptableColumns(cols, false)
 	if len(writable) == 0 {
-		return fmt.Sprintf("-- %s has no updatable columns.\n", commentSafe(full))
+		return fmt.Sprintf("-- %s has no updatable columns.\n", tsql.CommentSafe(full))
 	}
 	sets := make([]string, len(writable))
 	for i, c := range writable {

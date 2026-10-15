@@ -207,7 +207,7 @@ func main() {
 		opts.Owner, opts.PageVerify, opts.UserAccess, opts.AutoCreateStats, opts.ReadCommittedSnapshot)
 
 	demo.Section("Database scoped configurations (non-default only)")
-	demo.Must(db.SetDatabaseScopedConfig(ctx, "MAXDOP", "2", false))
+	demo.Must(db.SetDatabaseScopedConfig(ctx, "MAXDOP", "2", gosmo.ScopedConfigPrimary))
 	for _, c := range demo.Value(db.DatabaseScopedConfigs(ctx)) {
 		if c.IsValueDefault {
 			continue

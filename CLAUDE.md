@@ -66,7 +66,8 @@ exercise the write, drop them; never mutate pre-existing objects.
 - **After a change to quoting, `NameKey` or script-text rewriting**
   (`bindScriptArgs`, `alterModuleDefinition`, `ParseServerAddress`), run
   `go test -run XXX -fuzz FuzzNames -fuzztime 60s -fuzzminimizetime 0`; a
-  crasher's `testdata/fuzz/` file stays as the regression seed.
+  crasher's `testdata/fuzz/` file stays as the regression seed. A change to
+  the scanner (`tsql.Spans`) also runs `FuzzSpans` the same way in `./tsql`.
 - Build and test **here** before relying on a change from gossms — a gossms
   build compiles only the packages it imports.
 
@@ -95,7 +96,11 @@ exercise the write, drop them; never mutate pre-existing objects.
   is not an error. Shared scan helpers (`scanColumns`, `scanExtProps`,
   `scanEffectivePermissions`, `securityPredicates`, `indexColumns`,
   `execWithProgress`) return bare errors on purpose; their callers wrap.
-- **Quoting** — `quoting.go`'s doc comments are the authority. `QuoteName`/
+- **Quoting** — `quoting.go`'s and `tsql/quote.go`'s doc comments are the
+  authority. The text layer (quoting, comment safety, the `tsql.Spans`
+  lexical scanner) lives in package `tsql`, which may import only the
+  standard library (`TestImportsOnlyStdlib`); the root's `QuoteName`/
+  `QuoteLiteral`/`QuoteAnsiLiteral`/`UnquoteName` forward to it. `QuoteName`/
   `qualifiedName` bracket an identifier; `QuoteLiteral` builds a whole literal;
   `escapeSingle` (`helpers.go`) escapes inside quotes already in the format
   string. An identifier *inside* a literal (`OBJECT_ID`, `DBCC
@@ -110,8 +115,9 @@ exercise the write, drop them; never mutate pre-existing objects.
   bare form fails Msg 468 and costs three round trips (`useBatch`).
   `collation_lookup_test.go` enforces it, `filterColumns` maps included.
 - **A name or stored value written into a script comment is wrapped**:
-  `commentSafe` inside `--` (a line break ends the comment), `blockCommentSafe`
-  inside `/* */` (`*/` closes it, `/*` nests and swallows the rest). Either
+  `tsql.CommentSafe` inside `--` (a line break ends the comment),
+  `tsql.BlockCommentSafe` inside `/* */` (`*/` closes it, `/*` nests and
+  swallows the rest). Either
   way the remainder runs as T-SQL. `comment_safe_test.go` lists every site;
   a new one goes there too.
 - **A name that came from the catalog is matched exactly.** Picking one of

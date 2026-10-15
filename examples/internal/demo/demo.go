@@ -153,7 +153,7 @@ func Connect() *gosmo.Server {
 // Examples never write to a database they didn't create.
 func TempDatabase(srv *gosmo.Server, name string) (*gosmo.Database, func()) {
 	ctx := context.Background()
-	_ = srv.DatabaseRef(name).Drop(ctx, true)
+	_ = srv.DatabaseRef(name).Drop(ctx, gosmo.TerminationRollbackImmediate)
 	db := Value(srv.CreateDatabase(ctx, gosmo.CreateDatabaseRequest{
 		Name:          name,
 		RecoveryModel: gosmo.RecoveryModelSimple,
@@ -162,7 +162,7 @@ func TempDatabase(srv *gosmo.Server, name string) (*gosmo.Database, func()) {
 	fmt.Printf("Created throwaway database [%s]\n", name)
 
 	return db, func() {
-		if err := srv.DatabaseRef(name).Drop(ctx, true); err != nil {
+		if err := srv.DatabaseRef(name).Drop(ctx, gosmo.TerminationRollbackImmediate); err != nil {
 			log.Printf("cleanup: dropping [%s]: %v", name, err)
 			return
 		}

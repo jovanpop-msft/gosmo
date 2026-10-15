@@ -257,7 +257,7 @@ func TestLiveFullText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFullTextIndex with STATISTICAL_SEMANTICS: %v", err)
 	}
-	if err := semIdx.AddColumn(ctx, FullTextIndexColumnSpec{Name: "title", Language: "English", StatisticalSemantics: true}, true); err != nil {
+	if err := semIdx.AddColumn(ctx, FullTextIndexColumnSpec{Name: "title", Language: "English", StatisticalSemantics: true}, FullTextNoPopulation); err != nil {
 		t.Fatalf("AddColumn with STATISTICAL_SEMANTICS: %v", err)
 	}
 	semIdx, err = sem.FullTextIndex(ctx)

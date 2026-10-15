@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -82,7 +84,7 @@ func scriptIndex(idx *Index, tableName string, tableDS DataSpace, opts ScriptOpt
 		return sb.String()
 	case idx.Type == IndexTypeXML || idx.Type == IndexTypeSpatial:
 		fmt.Fprintf(&sb, "-- %s index %s on %s is not scripted (its DDL has no generic form here).\n\n",
-			idx.Type, commentSafe(quoteIdent(idx.Name)), commentSafe(tableName))
+			idx.Type, tsql.CommentSafe(quoteIdent(idx.Name)), tsql.CommentSafe(tableName))
 		return sb.String()
 	}
 

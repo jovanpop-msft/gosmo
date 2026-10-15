@@ -125,7 +125,7 @@ func TestLiveAPIPass(t *testing.T) {
 		path := strings.TrimRight(dir, sep) + sep + devName + ".bak"
 		cleanup := func() {
 			if dev, err := srv.BackupDeviceByName(ctx, devName); err == nil {
-				_ = dev.Drop(ctx, true)
+				_ = dev.Drop(ctx, DeleteDeviceFile)
 			}
 		}
 		cleanup()

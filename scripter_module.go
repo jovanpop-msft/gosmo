@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -174,7 +176,7 @@ ORDER  BY p.parameter_id`, schema, name)
 	return scanRows(rows, err, "", func(scan func(...any) error) (string, error) {
 		var n string
 		err := scan(&n)
-		return commentSafe(n), err
+		return tsql.CommentSafe(n), err
 	})
 }
 
@@ -190,18 +192,26 @@ var float16VectorType = regexp.MustCompile(`(?i)(?:^|[^\w@#$])vector\s*\(\s*\d+\
 // it into a database with PREVIEW_FEATURES off fails with Msg 195 just as a
 // float16 parameter does.
 //
-// It is a lexical scan, not a parse: scriptCodeSpans drops comments, string
-// literals and quoted identifiers, each replaced by a space since the server
-// treats a comment between two tokens as whitespace. The type spelled inside
-// dynamic SQL is a string literal, and is not found: buildsFloat16Vector
-// looks there.
+// It is a lexical scan, not a parse: codeOnly drops comments, string
+// literals and quoted identifiers. The type spelled inside dynamic SQL is a
+// string literal, and is not found: buildsFloat16Vector looks there.
 func usesFloat16Vector(def string) bool {
+	return float16VectorType.MatchString(codeOnly(def))
+}
+
+// codeOnly returns def's code (tsql.Spans) with every comment, literal and
+// quoted identifier replaced by a space, as the server treats a comment
+// between two tokens as whitespace.
+func codeOnly(def string) string {
 	var code strings.Builder
-	for _, sp := range scriptCodeSpans(def) {
-		code.WriteString(def[sp.start:sp.end])
-		code.WriteByte(' ')
+	for sp := range tsql.Spans(def) {
+		if sp.Kind == tsql.SpanCode {
+			code.WriteString(def[sp.Start:sp.End])
+		} else {
+			code.WriteByte(' ')
+		}
 	}
-	return float16VectorType.MatchString(code.String())
+	return code.String()
 }
 
 // executesDynamicSQL matches EXEC, EXECUTE or sp_executesql as a word.
@@ -219,16 +229,10 @@ var executesDynamicSQL = regexp.MustCompile(`(?i)(?:^|[^\w@#$])(?:exec(?:ute)?|s
 // comment. Literals joined by + are folded first (stringLiterals), so a type
 // name split across them is found; one split around a variable is not.
 func buildsFloat16Vector(def string) bool {
-	spans := scriptCodeSpans(def)
-	var code strings.Builder
-	for _, sp := range spans {
-		code.WriteString(def[sp.start:sp.end])
-		code.WriteByte(' ')
-	}
-	if !executesDynamicSQL.MatchString(code.String()) {
+	if !executesDynamicSQL.MatchString(codeOnly(def)) {
 		return false
 	}
-	for _, text := range stringLiterals(def, spans) {
+	for _, text := range stringLiterals(def) {
 		if usesFloat16Vector(text) || buildsFloat16Vector(text) {
 			return true
 		}
@@ -237,38 +241,28 @@ func buildsFloat16Vector(def string) bool {
 }
 
 // concatenatesLiterals matches the code between two string literals that
-// concatenates them: a +, then the second literal's optional N prefix.
-var concatenatesLiterals = regexp.MustCompile(`^\s*\+\s*[Nn]?$`)
+// concatenates them: a + and nothing else.
+var concatenatesLiterals = regexp.MustCompile(`^\s*\+\s*$`)
 
 // stringLiterals returns the values of def's string literals, unescaped, in
-// order, given its scriptCodeSpans. A literal joined to the one before it by
-// + alone, comments aside, is folded into it, as the server would concatenate
-// them: 'vector(4, ' + N'float16)' is one value.
-func stringLiterals(def string, spans []codeSpan) []string {
+// order. A literal joined to the one before it by + alone, comments aside, is
+// folded into it, as the server would concatenate them: 'vector(4, ' +
+// N'float16)' is one value.
+func stringLiterals(def string) []string {
 	var lits []string
 	var between strings.Builder // the code since the last literal
-	for i := 0; i < len(spans); i++ {
-		from := spans[i].prev
-		if spans[i].start == from || def[from] != '\'' {
-			between.WriteString(def[spans[i].start:spans[i].end])
-			continue
+	for sp := range tsql.Spans(def) {
+		switch {
+		case sp.Kind == tsql.SpanCode:
+			between.WriteString(def[sp.Start:sp.End])
+		case sp.IsLiteral():
+			if text := sp.Unescape(def); len(lits) > 0 && concatenatesLiterals.MatchString(between.String()) {
+				lits[len(lits)-1] += text
+			} else {
+				lits = append(lits, text)
+			}
+			between.Reset()
 		}
-		// A doubled quote splits one literal into adjacent skipped spans with
-		// no code between them (scriptCodeSpans); they are rejoined before the
-		// literal is unescaped, or a nested 'string' would be read as code.
-		for i+1 < len(spans) && spans[i].start == spans[i].end &&
-			spans[i+1].start > spans[i+1].prev && def[spans[i+1].prev] == '\'' {
-			i++
-		}
-		lit := def[from:spans[i].start]
-		text := strings.ReplaceAll(strings.TrimSuffix(lit[1:], "'"), "''", "'")
-		if len(lits) > 0 && concatenatesLiterals.MatchString(between.String()) {
-			lits[len(lits)-1] += text
-		} else {
-			lits = append(lits, text)
-		}
-		between.Reset()
-		between.WriteString(def[spans[i].start:spans[i].end])
 	}
 	return lits
 }
@@ -313,19 +307,21 @@ func alterModuleDefinition(def string) string {
 // neither whitespace nor inside a comment, or -1 if there is none or the
 // first thing def holds is quoted text rather than code.
 //
-// This is scriptCodeSpans' walk, not a regular expression, because T-SQL
+// This is tsql.Spans' walk, not a regular expression, because T-SQL
 // block comments nest: a lazy /\*.*?\*/ stops at the first */ of
 // "/* a /* b */ c */", so a definition opening with a nested comment was
 // not recognised and Script as ALTER handed back the CREATE, which then
 // failed with "There is already an object named …".
 func leadingTriviaEnd(def string) int {
-	for _, sp := range scriptCodeSpans(def) {
-		if sp.start > sp.prev && def[sp.prev] != '-' && def[sp.prev] != '/' {
+	for sp := range tsql.Spans(def) {
+		switch {
+		case sp.IsComment():
+		case sp.Kind != tsql.SpanCode:
 			return -1
-		}
-		code := def[sp.start:sp.end]
-		if i := strings.IndexFunc(code, func(r rune) bool { return !unicode.IsSpace(r) }); i >= 0 {
-			return sp.start + i
+		default:
+			if i := strings.IndexFunc(def[sp.Start:sp.End], func(r rune) bool { return !unicode.IsSpace(r) }); i >= 0 {
+				return sp.Start + i
+			}
 		}
 	}
 	return -1
@@ -427,71 +423,45 @@ func (t headerToken) isWord(kw string) bool {
 }
 
 // nextHeaderToken returns the first token of def at or after i, skipping
-// whitespace and comments (block comments nest, as in scriptCodeSpans). ok is
-// false at the end of def and in an unterminated comment or quoted
-// identifier, where nothing after can be trusted.
+// whitespace and comments (tsql.Spans). ok is false at the end of def and at
+// an unterminated quoted identifier, where nothing after can be trusted. A
+// string literal is one token that is not an identifier.
 func nextHeaderToken(def string, i int) (headerToken, bool) {
 	isWordRune := func(r rune) bool {
 		return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '@' || r == '#' || r == '$'
 	}
-	for i < len(def) {
-		r, size := utf8.DecodeRuneInString(def[i:])
+	rest := def[i:]
+	for sp := range tsql.Spans(rest) {
+		start, end := i+sp.Start, i+sp.End
 		switch {
-		case unicode.IsSpace(r):
-			i += size
-		case strings.HasPrefix(def[i:], "--"):
-			j := strings.IndexByte(def[i:], '\n')
-			if j < 0 {
+		case sp.IsComment():
+			continue
+		case sp.IsLiteral():
+			return headerToken{start: start, end: end, text: def[start:end]}, true
+		case sp.IsQuoted():
+			if !sp.Closed {
 				return headerToken{}, false
 			}
-			i += j + 1
-		case strings.HasPrefix(def[i:], "/*"):
-			depth, j := 1, i+2
-			for j < len(def) && depth > 0 {
-				switch {
-				case strings.HasPrefix(def[j:], "/*"):
-					depth, j = depth+1, j+2
-				case strings.HasPrefix(def[j:], "*/"):
-					depth, j = depth-1, j+2
-				default:
-					j++
-				}
-			}
-			if depth > 0 {
-				return headerToken{}, false
-			}
-			i = j
-		case r == '[' || r == '"':
-			closer := byte(']')
-			if r == '"' {
-				closer = '"'
-			}
-			var val strings.Builder
-			for j := i + 1; j < len(def); j++ {
-				if def[j] != closer {
-					val.WriteByte(def[j])
-					continue
-				}
-				if j+1 < len(def) && def[j+1] == closer {
-					val.WriteByte(closer)
-					j++
-					continue
-				}
-				return headerToken{start: i, end: j + 1, text: val.String(), ident: true, quoted: true}, true
-			}
-			return headerToken{}, false
-		case isWordRune(r):
-			j := i + size
-			for j < len(def) {
-				r, size := utf8.DecodeRuneInString(def[j:])
-				if !isWordRune(r) {
-					break
-				}
+			return headerToken{start: start, end: end, text: sp.Unescape(rest), ident: true, quoted: true}, true
+		}
+		for j := start; j < end; {
+			r, size := utf8.DecodeRuneInString(def[j:end])
+			switch {
+			case unicode.IsSpace(r):
 				j += size
+			case isWordRune(r):
+				k := j + size
+				for k < end {
+					r, size := utf8.DecodeRuneInString(def[k:end])
+					if !isWordRune(r) {
+						break
+					}
+					k += size
+				}
+				return headerToken{start: j, end: k, text: def[j:k], ident: true}, true
+			default:
+				return headerToken{start: j, end: j + size, text: def[j : j+size]}, true
 			}
-			return headerToken{start: i, end: j, text: def[i:j], ident: true}, true
-		default:
-			return headerToken{start: i, end: i + size, text: def[i : i+size]}, true
 		}
 	}
 	return headerToken{}, false

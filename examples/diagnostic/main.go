@@ -192,7 +192,7 @@ END`,
 		cpu.CPUCount, cpu.NUMANodeCount, cpu.HyperthreadRatio)
 
 	demo.Section("Sessions")
-	sessions := demo.Value(srv.ActiveSessions(ctx, false))
+	sessions := demo.Value(srv.ActiveSessions(ctx, gosmo.UserSessionsOnly))
 	fmt.Printf("  %d user session(s)\n", len(sessions))
 	for _, s := range sessions {
 		blocked := ""

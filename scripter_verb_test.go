@@ -123,6 +123,14 @@ func TestRenameModuleHeader(t *testing.T) {
 			"CREATE VIEW /* dbo.v AS SELECT 1"},
 		{"unterminated bracket left alone", "CREATE VIEW [dbo.v AS SELECT 1", "VIEW", "dbo", "w",
 			"CREATE VIEW [dbo.v AS SELECT 1"},
+		// A -- comment with no newline runs to the end of the text
+		// (tsql.Spans): the name before it is still read.
+		{"trailing line comment with no newline", "CREATE VIEW dbo.oldv -- x", "VIEW", "dbo", "v",
+			"CREATE VIEW [dbo].[v] -- x"},
+		{"line comment ending the text left alone", "CREATE VIEW -- dbo.v", "VIEW", "dbo", "w",
+			"CREATE VIEW -- dbo.v"},
+		{"bracket escape ends where ]] does not", "CREATE VIEW [dbo].[a]]'b] AS SELECT 1", "VIEW", "dbo", "w",
+			"CREATE VIEW [dbo].[w] AS SELECT 1"},
 		{"four parts left alone", "CREATE VIEW a.b.c.d AS SELECT 1", "VIEW", "dbo", "w",
 			"CREATE VIEW a.b.c.d AS SELECT 1"},
 		{"not a header left alone", "SELECT 1", "VIEW", "dbo", "w", "SELECT 1"},

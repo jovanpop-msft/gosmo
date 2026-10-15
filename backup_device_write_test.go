@@ -84,7 +84,7 @@ func TestCreateBackupDeviceUnderScriptReturnsAHandle(t *testing.T) {
 		t.Fatalf("collected statements: %v", col.Statements())
 	}
 	// The handle must still be usable for a follow-up write.
-	if err := d.Drop(ctx, false); err != nil {
+	if err := d.Drop(ctx, KeepDeviceFile); err != nil {
 		t.Fatalf("Drop on the returned handle: %v", err)
 	}
 }
@@ -93,17 +93,17 @@ func TestCreateBackupDeviceUnderScriptReturnsAHandle(t *testing.T) {
 // file behind it; the two must not be the same statement.
 func TestDropBackupDeviceDelFile(t *testing.T) {
 	cases := []struct {
-		name       string
-		deleteFile bool
-		want       string
+		name string
+		file DeviceFileMode
+		want string
 	}{
-		{"keep the file", false, `EXEC sp_dropdevice @logicalname = N'NightlyDev'`},
-		{"delete the file", true, `EXEC sp_dropdevice @logicalname = N'NightlyDev', @delfile = N'DELFILE'`},
+		{"keep the file", KeepDeviceFile, `EXEC sp_dropdevice @logicalname = N'NightlyDev'`},
+		{"delete the file", DeleteDeviceFile, `EXEC sp_dropdevice @logicalname = N'NightlyDev', @delfile = N'DELFILE'`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, col := WithScript(context.Background())
-			if err := (&Server{}).BackupDeviceRef("NightlyDev").Drop(ctx, tc.deleteFile); err != nil {
+			if err := (&Server{}).BackupDeviceRef("NightlyDev").Drop(ctx, tc.file); err != nil {
 				t.Fatalf("Drop: %v", err)
 			}
 			if len(col.Statements()) != 1 || col.Statements()[0] != tc.want {

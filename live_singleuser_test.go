@@ -96,7 +96,7 @@ func TestLiveSingleUserForcedDropThatFailsLeavesTheDatabaseUsable(t *testing.T) 
 		t.Fatalf("create snapshot: %v", err)
 	}
 
-	err := srv.DatabaseRef(name).Drop(ctx, true)
+	err := srv.DatabaseRef(name).Drop(ctx, TerminationRollbackImmediate)
 	if err == nil {
 		t.Fatal("the drop succeeded; the snapshot was supposed to make it fail")
 	}
@@ -194,7 +194,7 @@ func TestLiveSingleUserForcedRenameReleasesTheDatabase(t *testing.T) {
 	defer holder.Close()
 
 	start := time.Now()
-	if err := srv.DatabaseRef(name).Rename(ctx, renamed, true); err != nil {
+	if err := srv.DatabaseRef(name).Rename(ctx, renamed, TerminationRollbackImmediate); err != nil {
 		t.Fatalf("forced rename: %v", err)
 	}
 	t.Logf("forced rename took %v", time.Since(start))
@@ -250,7 +250,7 @@ func TestLiveSingleUserForcedWritesKeepTheAccessMode(t *testing.T) {
 		}
 		set(name)
 
-		if err := srv.DatabaseRef(name).Rename(ctx, taken, true); err == nil {
+		if err := srv.DatabaseRef(name).Rename(ctx, taken, TerminationRollbackImmediate); err == nil {
 			t.Fatalf("from %s: a rename onto a taken name succeeded", mode)
 		}
 		check("a refused forced rename", name)
@@ -258,11 +258,11 @@ func TestLiveSingleUserForcedWritesKeepTheAccessMode(t *testing.T) {
 			t.Errorf("from %s: a refused rename touched the database holding the name (%s)", mode, got)
 		}
 
-		if err := srv.DatabaseRef(name).Rename(ctx, renamed, true); err != nil {
+		if err := srv.DatabaseRef(name).Rename(ctx, renamed, TerminationRollbackImmediate); err != nil {
 			t.Fatalf("from %s: forced rename: %v", mode, err)
 		}
 		check("a forced rename", renamed)
-		if err := srv.DatabaseRef(renamed).Rename(ctx, name, true); err != nil {
+		if err := srv.DatabaseRef(renamed).Rename(ctx, name, TerminationRollbackImmediate); err != nil {
 			t.Fatalf("from %s: forced rename back: %v", mode, err)
 		}
 
@@ -276,7 +276,7 @@ func TestLiveSingleUserForcedWritesKeepTheAccessMode(t *testing.T) {
 			" ON (NAME = "+quoteIdent(name)+", FILENAME = '"+escapeSingle(file)+"') AS SNAPSHOT OF "+quoteIdent(name)); err != nil {
 			t.Fatalf("create snapshot: %v", err)
 		}
-		if err := srv.DatabaseRef(name).Drop(ctx, true); err == nil {
+		if err := srv.DatabaseRef(name).Drop(ctx, TerminationRollbackImmediate); err == nil {
 			t.Fatalf("from %s: the drop succeeded; the snapshot was supposed to refuse it", mode)
 		}
 		check("a refused forced drop", name)

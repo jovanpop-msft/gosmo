@@ -68,15 +68,29 @@ func (d *Database) DatabaseScopedConfigs(ctx context.Context) ([]*DatabaseScoped
 	})
 }
 
+// ScopedConfigReplica says which replicas a database scoped configuration
+// change applies to.
+type ScopedConfigReplica int
+
+const (
+	// ScopedConfigPrimary sets the value for the primary (and a database not
+	// in an availability group).
+	ScopedConfigPrimary ScopedConfigReplica = iota
+
+	// ScopedConfigSecondary sets the value for readable secondary replicas
+	// (FOR SECONDARY).
+	ScopedConfigSecondary
+)
+
 // buildScopedConfigStatement renders (and validates the inputs of) one
 // ALTER DATABASE SCOPED CONFIGURATION statement.
 //
 // FOR SECONDARY precedes SET: "ALTER DATABASE SCOPED CONFIGURATION FOR
 // SECONDARY SET MAXDOP = PRIMARY". Appending it after the assignment instead
 // is a syntax error, not a differently-ordered but valid clause — that made
-// forSecondary unusable outright. Split out from the method so the clause
+// ScopedConfigSecondary unusable outright. Split out from the method so the clause
 // order can be asserted without a server.
-func buildScopedConfigStatement(name, value string, forSecondary bool) (string, error) {
+func buildScopedConfigStatement(name, value string, replica ScopedConfigReplica) (string, error) {
 	if !isSimpleIdentifier(name) {
 		return "", invalidf("gosmo: set database scoped configuration: invalid name %q", name)
 	}
@@ -84,8 +98,12 @@ func buildScopedConfigStatement(name, value string, forSecondary bool) (string, 
 		return "", invalidf("gosmo: set database scoped configuration %s: invalid value %q", name, value)
 	}
 	scope := ""
-	if forSecondary {
+	switch replica {
+	case ScopedConfigPrimary:
+	case ScopedConfigSecondary:
 		scope = "FOR SECONDARY "
+	default:
+		return "", invalidf("gosmo: set database scoped configuration %s: unrecognized replica %d", name, replica)
 	}
 	return fmt.Sprintf("ALTER DATABASE SCOPED CONFIGURATION %sSET %s = %s", scope, name, value), nil
 }
@@ -93,15 +111,15 @@ func buildScopedConfigStatement(name, value string, forSecondary bool) (string, 
 // SetDatabaseScopedConfig changes one database scoped configuration option.
 // value is the keyword or literal that follows the option name verbatim,
 // e.g. "ON", "OFF", "4" — see ALTER DATABASE SCOPED CONFIGURATION's
-// reference for each option's accepted values. forSecondary applies the
-// change to readable secondary replicas (FOR SECONDARY) instead of the
+// reference for each option's accepted values. ScopedConfigSecondary applies
+// the change to readable secondary replicas (FOR SECONDARY) instead of the
 // primary.
 //
 // Unlike ALTER DATABASE SET options (SetDatabaseOption), ALTER DATABASE
 // SCOPED CONFIGURATION is scoped to whichever database is current, so this
 // runs through d.exec (USE first), not d.server.exec.
-func (d *Database) SetDatabaseScopedConfig(ctx context.Context, name, value string, forSecondary bool) error {
-	q, err := buildScopedConfigStatement(name, value, forSecondary)
+func (d *Database) SetDatabaseScopedConfig(ctx context.Context, name, value string, replica ScopedConfigReplica) error {
+	q, err := buildScopedConfigStatement(name, value, replica)
 	if err != nil {
 		return err
 	}

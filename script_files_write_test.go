@@ -90,10 +90,10 @@ func TestScriptDatabaseOptionWrites(t *testing.T) {
 			return scriptTestDB().SetUserAccess(c, "SINGLE_USER")
 		}, "ALTER DATABASE [App'DB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE"},
 		{"SetDatabaseScopedConfig", func(c context.Context) error {
-			return scriptTestDB().SetDatabaseScopedConfig(c, "MAXDOP", "4", false)
+			return scriptTestDB().SetDatabaseScopedConfig(c, "MAXDOP", "4", ScopedConfigPrimary)
 		}, scriptUsePrefix + "ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4"},
 		{"SetDatabaseScopedConfig for secondary", func(c context.Context) error {
-			return scriptTestDB().SetDatabaseScopedConfig(c, "LEGACY_CARDINALITY_ESTIMATION", "ON", true)
+			return scriptTestDB().SetDatabaseScopedConfig(c, "LEGACY_CARDINALITY_ESTIMATION", "ON", ScopedConfigSecondary)
 		}, scriptUsePrefix + "ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET LEGACY_CARDINALITY_ESTIMATION = ON"},
 		{"Table.SetChangeTracking on with columns", func(c context.Context) error {
 			return scriptTestDB().TableRef("dbo", "Sales.Archive").SetChangeTracking(c, true, true)

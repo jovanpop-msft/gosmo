@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // The table kinds ScriptTable handles beyond a plain disk-based table —
@@ -360,7 +362,7 @@ func buildFileTableScript(schema, name, dbName string, p tableScriptParts, opts 
 
 	return opts.envelope(drop.String(), "", func(sb *strings.Builder) {
 		if opts.IncludeHeaders {
-			fmt.Fprintf(sb, "/* FileTable: %s  Database: %s */\n", blockCommentSafe(fullName), blockCommentSafe(dbName))
+			fmt.Fprintf(sb, "/* FileTable: %s  Database: %s */\n", tsql.BlockCommentSafe(fullName), tsql.BlockCommentSafe(dbName))
 		}
 		if opts.IncludeIfNotExists {
 			fmt.Fprintf(sb, "IF OBJECT_ID(N'%s', N'U') IS NULL\n", escapeSingle(fullName))
@@ -459,7 +461,7 @@ func buildExternalTableScript(schema, name, dbName string, p tableScriptParts, d
 
 	return opts.envelope(drop.String(), "", func(sb *strings.Builder) {
 		if opts.IncludeHeaders {
-			fmt.Fprintf(sb, "/* External table: %s  Database: %s */\n", blockCommentSafe(fullName), blockCommentSafe(dbName))
+			fmt.Fprintf(sb, "/* External table: %s  Database: %s */\n", tsql.BlockCommentSafe(fullName), tsql.BlockCommentSafe(dbName))
 		}
 		for _, d := range deps {
 			sb.WriteString(d)

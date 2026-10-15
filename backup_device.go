@@ -142,16 +142,29 @@ func (s *Server) CreateBackupDevice(ctx context.Context, req CreateBackupDeviceR
 	})
 }
 
-// Drop removes the logical backup device. deleteFile also deletes the
+// DeviceFileMode says whether BackupDevice.Drop deletes the physical file
+// behind the device — sp_dropdevice's @delfile.
+type DeviceFileMode int
+
+const (
+	// KeepDeviceFile unregisters the device and leaves the backup file on
+	// disk.
+	KeepDeviceFile DeviceFileMode = iota
+
+	// DeleteDeviceFile deletes the backup file too, which is not recoverable.
+	DeleteDeviceFile
+)
+
+// Drop removes the logical backup device, and with DeleteDeviceFile the
 // physical file behind it.
-//
-// deleteFile is sp_dropdevice's @delfile: false unregisters the alias and
-// leaves the backup file on disk, true deletes the file too and is not
-// recoverable.
-func (d *BackupDevice) Drop(ctx context.Context, deleteFile bool) error {
+func (d *BackupDevice) Drop(ctx context.Context, file DeviceFileMode) error {
 	stmt := fmt.Sprintf("EXEC sp_dropdevice @logicalname = N'%s'", escapeSingle(d.Name))
-	if deleteFile {
+	switch file {
+	case KeepDeviceFile:
+	case DeleteDeviceFile:
 		stmt += ", @delfile = N'DELFILE'"
+	default:
+		return invalidf("gosmo: drop backup device %q: unrecognized file mode %d", d.Name, file)
 	}
 	if err := d.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: drop backup device %q: %w", d.Name, err)

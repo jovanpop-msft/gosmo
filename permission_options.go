@@ -245,6 +245,18 @@ func (c SecurableClass) HasColumns() bool {
 	return false
 }
 
+// SchemaScoped reports whether a securable of the class lives in a schema,
+// so that Securable.Schema is required and its name is shown two-part
+// ([schema].[name]). Server, database, schema and certificate are not.
+func (c SecurableClass) SchemaScoped() bool {
+	switch c {
+	case SecurableTable, SecurableView, SecurableProcedure, SecurableScalarFunction,
+		SecurableInlineFunction, SecurableTableFunction, SecurableSequence, SecurableSynonym, SecurableUserType:
+		return true
+	}
+	return false
+}
+
 // ColumnPermissionNames returns every permission name GRANT/DENY/REVOKE
 // accepts on a column of a securable of the class, sorted; none for a class
 // whose HasColumns is false.
@@ -256,16 +268,6 @@ func (c SecurableClass) ColumnPermissionNames() []string {
 		}
 	}
 	return names
-}
-
-// schemaScoped reports whether the class's securables live in a schema.
-func (c SecurableClass) schemaScoped() bool {
-	switch c {
-	case SecurableTable, SecurableView, SecurableProcedure, SecurableScalarFunction,
-		SecurableInlineFunction, SecurableTableFunction, SecurableSequence, SecurableSynonym, SecurableUserType:
-		return true
-	}
-	return false
 }
 
 // on renders the statement's ON clause, empty for a class that names no
@@ -303,10 +305,10 @@ func (s Securable) check(verb PermissionVerb, perm string) error {
 		return invalidf("gosmo: %s permission: a %s securable needs a name", lower, strings.ToLower(string(s.Class)))
 	case !named && (s.Name != "" || s.Schema != ""):
 		return invalidf("gosmo: %s permission: a %s permission names no securable", lower, strings.ToLower(string(s.Class)))
-	case !s.Class.schemaScoped() && s.Schema != "":
+	case !s.Class.SchemaScoped() && s.Schema != "":
 		return invalidf("gosmo: %s permission: a %s is not schema-scoped", lower, strings.ToLower(string(s.Class)))
 	}
-	if s.Class.schemaScoped() {
+	if s.Class.SchemaScoped() {
 		if err := requireSchema(lower+" permission", s.Schema, s.Name); err != nil {
 			return err
 		}

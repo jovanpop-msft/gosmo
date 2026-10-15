@@ -103,12 +103,30 @@ func (c *ConfigurationOption) SetValue(ctx context.Context, value int64) error {
 	return nil
 }
 
-// Reconfigure applies pending sp_configure changes.
-// Pass override=true to use RECONFIGURE WITH OVERRIDE (bypasses range checks).
-func (s *Server) Reconfigure(ctx context.Context, override bool) error {
+// ReconfigureMode says whether Server.Reconfigure checks the pending values
+// against their recommended ranges.
+type ReconfigureMode int
+
+const (
+	// ReconfigureChecked is the bare RECONFIGURE, which refuses a value
+	// outside its option's recommended range.
+	ReconfigureChecked ReconfigureMode = iota
+
+	// ReconfigureOverride is RECONFIGURE WITH OVERRIDE, which installs it
+	// anyway.
+	ReconfigureOverride
+)
+
+// Reconfigure applies pending sp_configure changes, with the range checks
+// mode says.
+func (s *Server) Reconfigure(ctx context.Context, mode ReconfigureMode) error {
 	q := "RECONFIGURE"
-	if override {
+	switch mode {
+	case ReconfigureChecked:
+	case ReconfigureOverride:
 		q += " WITH OVERRIDE"
+	default:
+		return invalidf("gosmo: reconfigure: unrecognized mode %d", mode)
 	}
 	if err := s.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: reconfigure: %w", err)
@@ -465,12 +483,28 @@ type ActiveSession struct {
 	WaitTimeMS        int64
 }
 
-// ActiveSessions returns running sessions.
-// Set includeSystem=true to include SQL Server internal sessions.
-func (s *Server) ActiveSessions(ctx context.Context, includeSystem bool) ([]*ActiveSession, error) {
-	sysFilter := "AND s.is_user_process = 1"
-	if includeSystem {
-		sysFilter = ""
+// SessionScope says which sessions Server.ActiveSessions returns.
+type SessionScope int
+
+const (
+	// UserSessionsOnly is the sessions of user connections
+	// (is_user_process = 1).
+	UserSessionsOnly SessionScope = iota
+
+	// AllSessions adds SQL Server's internal sessions.
+	AllSessions
+)
+
+// ActiveSessions returns the sessions scope names, other than the caller's
+// own.
+func (s *Server) ActiveSessions(ctx context.Context, scope SessionScope) ([]*ActiveSession, error) {
+	var sysFilter string
+	switch scope {
+	case UserSessionsOnly:
+		sysFilter = "AND s.is_user_process = 1"
+	case AllSessions:
+	default:
+		return nil, invalidf("gosmo: active sessions: unrecognized session scope %d", scope)
 	}
 	q := fmt.Sprintf(`
 SELECT s.session_id, ISNULL(s.login_name, ''), ISNULL(s.host_name, ''), ISNULL(s.program_name, ''),

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -290,7 +292,7 @@ func extendedPropertyStatement(p scriptedExtProp, guard bool) string {
 				on = strings.Join(where, ".")
 			}
 			return fmt.Sprintf("-- Extended property %s on %s holds a %s value with no literal form: not scripted.\n",
-				commentSafe(QuoteLiteral(p.name)), commentSafe(on), commentSafe(p.baseType))
+				tsql.CommentSafe(QuoteLiteral(p.name)), tsql.CommentSafe(on), tsql.CommentSafe(p.baseType))
 		}
 		fmt.Fprintf(&sb, "DECLARE @value sql_variant = CONVERT(%s, %s%s);\n", typ, QuoteLiteral(p.value.String), style)
 		value = "@value"

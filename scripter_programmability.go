@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -406,7 +408,7 @@ func buildBoundObjectScript(keyword, schema, name, definition string, opts Scrip
 	return opts.envelope(drop, "", func(sb *strings.Builder) {
 		if strings.TrimSpace(definition) == "" {
 			fmt.Fprintf(sb, "/* The definition of %s %s cannot be read — it is encrypted. */\n",
-				strings.ToLower(keyword), blockCommentSafe(fullName))
+				strings.ToLower(keyword), tsql.BlockCommentSafe(fullName))
 			return
 		}
 		sb.WriteString(strings.TrimRight(definition, "\r\n"))

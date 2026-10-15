@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // hostileNames each try to leave the comment a script puts them in: a line
@@ -89,7 +91,7 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 			return buildExternalLibraryScript(&ExternalLibrary{Name: "l", Scope: n}, DefaultScriptOptions())
 		},
 		"float16 parameter note": func(n string) string {
-			return float16Note([]string{commentSafe(n)}) // as float16Parameters scans it
+			return float16Note([]string{tsql.CommentSafe(n)}) // as float16Parameters scans it
 		},
 		"extended property with no literal form": func(n string) string {
 			return extendedPropertyStatement(scriptedExtProp{name: n, baseType: n, value: sql.NullString{String: "v", Valid: true},
@@ -105,28 +107,11 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 			if strings.Contains(n, "EVIL") && !strings.Contains(strings.ToUpper(s), "EVIL") {
 				t.Fatalf("%s: the name never reached the script:\n%s", site, s)
 			}
-			var code strings.Builder
 			full := s + "\nSURVIVE"
-			for _, sp := range scriptCodeSpans(full) {
-				code.WriteString(full[sp.start:sp.end])
-				code.WriteString(" ")
-			}
-			if c := code.String(); strings.Contains(strings.ToUpper(c), "EVIL") || !strings.Contains(c, "SURVIVE") {
+			if c := codeOnly(full); strings.Contains(strings.ToUpper(c), "EVIL") || !strings.Contains(c, "SURVIVE") {
 				t.Errorf("%s, name %q: the comment does not contain it; code outside comments and quotes:\n%s\nscript:\n%s",
 					site, n, c, s)
 			}
-		}
-	}
-}
-
-func TestBlockCommentSafe(t *testing.T) {
-	for _, s := range []string{"*/", "/*", "*/*", "/*/", "**//", "a*/*/b", "/**/", "x"} {
-		got := blockCommentSafe(s)
-		if strings.Contains(got, "*/") || strings.Contains(got, "/*") {
-			t.Errorf("blockCommentSafe(%q) = %q, still holds a delimiter", s, got)
-		}
-		if strings.ReplaceAll(got, " ", "") != strings.ReplaceAll(s, " ", "") {
-			t.Errorf("blockCommentSafe(%q) = %q, changed more than spacing", s, got)
 		}
 	}
 }

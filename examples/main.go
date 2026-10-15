@@ -240,7 +240,7 @@ END`,
 
 	// -- Active sessions -------------------------------------------------
 	demo.Section("Active sessions")
-	fmt.Printf("  %d user session(s) active\n", len(demo.Value(srv.ActiveSessions(ctx, false))))
+	fmt.Printf("  %d user session(s) active\n", len(demo.Value(srv.ActiveSessions(ctx, gosmo.UserSessionsOnly))))
 
 	// -- Agent jobs (read-only) ------------------------------------------
 	demo.Section("SQL Server Agent Jobs")

@@ -164,6 +164,12 @@ func TestUnwrapPredicate(t *testing.T) {
 		{"[sec].[fn]([TenantID])", "[sec].[fn]([TenantID])"},
 		// Starts and ends with a paren, but not the same pair.
 		{"(a) OR (b)", "(a) OR (b)"},
+		// A ")" that is text, not code, does not close the outer pair.
+		{"([sec].[fn]([c],N')'))", "[sec].[fn]([c],N')')"},
+		{"([sec].[fn)x]([c]))", "[sec].[fn)x]([c])"},
+		{"([sec].[f]]n)x]([c]))", "[sec].[f]]n)x]([c])"},
+		{"([sec].[fn]([c] /* ) */))", "[sec].[fn]([c] /* ) */)"},
+		{"([sec].[fn]([c],N'(')) OR (1=1)", "([sec].[fn]([c],N'(')) OR (1=1)"},
 		{"", ""},
 	} {
 		if got := unwrapPredicate(tt.in); got != tt.want {

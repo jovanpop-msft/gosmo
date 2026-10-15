@@ -150,8 +150,9 @@ options beside them, are in
 
 Passwords are escaped and never spliced in raw; every keyword or literal DDL
 cannot parameterize is validated by shape or allowlist before it reaches a
-statement; identifier and literal quoting goes through one implementation
-wrapping the driver's own. The detail is in
+statement; identifier and literal quoting goes through one implementation,
+pinned to the driver's own and importable without the driver as
+`github.com/radix29/gosmo/tsql`. The detail is in
 [`ARCHITECTURE.md`](ARCHITECTURE.md#security).
 
 ---

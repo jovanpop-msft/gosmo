@@ -123,7 +123,7 @@ func TestLiveReplicationMonitor(t *testing.T) {
 		if !strings.EqualFold(a.Publisher, tran.Publisher) {
 			t.Errorf("agent %q Publisher = %q, want %q", name, a.Publisher, tran.Publisher)
 		}
-		sess, err := a.Sessions(ctx, 0, false)
+		sess, err := a.Sessions(ctx, 0, AllReplSessions)
 		if err != nil {
 			t.Errorf("Sessions(%q): %v", name, err)
 			continue
@@ -197,7 +197,7 @@ func TestLiveReplicationMonitorErrors(t *testing.T) {
 	}
 	found := 0
 	for _, a := range agents {
-		sess, err := a.Sessions(ctx, 0, true)
+		sess, err := a.Sessions(ctx, 0, FailedReplSessions)
 		if err != nil {
 			t.Fatalf("Sessions(%q, errors only): %v", a.Name, err)
 		}

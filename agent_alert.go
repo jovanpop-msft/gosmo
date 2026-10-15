@@ -223,17 +223,13 @@ func (a *Alert) Rename(ctx context.Context, newName string) error {
 }
 
 // Enable enables the alert.
-func (a *Alert) Enable(ctx context.Context) error { return a.setEnabled(ctx, true) }
+func (a *Alert) Enable(ctx context.Context) error { return a.SetEnabled(ctx, true) }
 
 // Disable disables the alert.
-func (a *Alert) Disable(ctx context.Context) error { return a.setEnabled(ctx, false) }
+func (a *Alert) Disable(ctx context.Context) error { return a.SetEnabled(ctx, false) }
 
 // SetEnabled is Enable when on is true and Disable otherwise.
 func (a *Alert) SetEnabled(ctx context.Context, on bool) error {
-	return a.setEnabled(ctx, on)
-}
-
-func (a *Alert) setEnabled(ctx context.Context, on bool) error {
 	return a.Alter(ctx, AlertChanges{Enabled: &on})
 }
 

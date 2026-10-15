@@ -115,9 +115,11 @@ func TestWithScriptBindsParametersIntoTheStatement(t *testing.T) {
 			want: []string{"EXEC sp_rename", "N'[dbo].[Orders].[IX_Old]'", "N'IX_New'", "N'INDEX'"},
 		},
 		{
-			name:  "Table.Drop cascade",
-			write: func(ctx context.Context, d *Database) error { return d.TableRef("dbo", "Orders").Drop(ctx, true) },
-			want:  []string{"OBJECT_ID(N''[dbo].[Orders]'')", "DROP TABLE [dbo].[Orders]"},
+			name: "Table.Drop cascade",
+			write: func(ctx context.Context, d *Database) error {
+				return d.TableRef("dbo", "Orders").Drop(ctx, DropTableCascade)
+			},
+			want: []string{"OBJECT_ID(N''[dbo].[Orders]'')", "DROP TABLE [dbo].[Orders]"},
 		},
 	}
 
@@ -605,6 +607,11 @@ func TestBindScriptArgsSkipsLiteralsAndComments(t *testing.T) {
 		{"bracket identifier",
 			"SELECT [@p2] FROM t WHERE a = @p1 AND b = @p2",
 			"SELECT [@p2] FROM t WHERE a = N'new' AND b = N'other'"},
+		// "]]" escapes a "]": a scanner that ends the identifier at the first
+		// "]" reads "'…" as a literal opening and swallows the live @p1.
+		{"doubled bracket inside an identifier",
+			"SELECT [a]]'@p2] FROM t WHERE a = @p1 AND b = @p2",
+			"SELECT [a]]'@p2] FROM t WHERE a = N'new' AND b = N'other'"},
 		{"double-quoted identifier",
 			`SELECT "@p2" FROM t WHERE a = @p1 AND b = @p2`,
 			`SELECT "@p2" FROM t WHERE a = N'new' AND b = N'other'`},

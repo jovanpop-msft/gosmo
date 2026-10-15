@@ -4,6 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	mssql "github.com/microsoft/go-mssqldb"
+	"github.com/radix29/gosmo/tsql"
 )
 
 func TestQuoteNameIfNeeded(t *testing.T) {
@@ -26,31 +29,6 @@ func TestQuoteNameIfNeeded(t *testing.T) {
 	} {
 		if got := QuoteNameIfNeeded(tc.in); got != tc.want {
 			t.Errorf("QuoteNameIfNeeded(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestUnquoteName(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"[a]]b]", "a]b"},
-		{"[a]]]]b]", "a]]b"},
-		{"[[x]", "[x"},
-		{`"a""b"`, `a"b`},
-		{"[]", ""},
-		{"plain", "plain"},
-		{"[open", "[open"},
-		{"[a]b]", "[a]b]"},         // an undoubled ']' inside: not one quoted part
-		{"[dbo].[t]", "[dbo].[t]"}, // two parts
-		{"[", "["},
-		{`"a"b"`, `"a"b"`},
-	} {
-		if got := UnquoteName(tc.in); got != tc.want {
-			t.Errorf("UnquoteName(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-	for _, name := range []string{"a]b", "]]", "x", "", "[y]", `q"`} {
-		if got := UnquoteName(QuoteName(name)); got != name {
-			t.Errorf("UnquoteName(QuoteName(%q)) = %q", name, got)
 		}
 	}
 }
@@ -80,6 +58,27 @@ func TestQuoteAnsiLiteral(t *testing.T) {
 	}
 	if got := QuoteLiteral("it's"); got != "N'it''s'" {
 		t.Errorf("QuoteLiteral = %s", got)
+	}
+	if got := UnquoteName("[a]]b]"); got != "a]b" {
+		t.Errorf("UnquoteName = %s", got)
+	}
+}
+
+// TestTSQLQuoterParity pins package tsql's quoting to the mssql driver's
+// TSQLQuoter, which gosmo called directly before tsql existed: tsql writes
+// the two rules out so that it need not import the driver.
+func TestTSQLQuoterParity(t *testing.T) {
+	q := mssql.TSQLQuoter{}
+	for _, s := range []string{"", "a", "a]b", "]]", "[x]", "it's", "''", "é\x00\n", "a]'b\"c", "N'x'"} {
+		if got, want := tsql.QuoteName(s), q.ID(s); got != want {
+			t.Errorf("tsql.QuoteName(%q) = %s, driver %s", s, got, want)
+		}
+		if got, want := tsql.QuoteAnsiLiteral(s), q.Value(s); got != want {
+			t.Errorf("tsql.QuoteAnsiLiteral(%q) = %s, driver %s", s, got, want)
+		}
+		if got, want := tsql.QuoteLiteral(s), "N"+q.Value(s); got != want {
+			t.Errorf("tsql.QuoteLiteral(%q) = %s, driver N%s", s, got, want)
+		}
 	}
 }
 

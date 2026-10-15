@@ -380,7 +380,7 @@ func TestServerLevelDropAndRenameStatements(t *testing.T) {
 		{
 			name: "Database.Rename",
 			write: func(ctx context.Context, s *Server) error {
-				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", false)
+				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", TerminationNone)
 			},
 			want: "ALTER DATABASE [AppDB] MODIFY NAME = [AppDB2]",
 		},
@@ -389,14 +389,14 @@ func TestServerLevelDropAndRenameStatements(t *testing.T) {
 			// names the database by whatever it is called by then.
 			name: "Database.Rename force",
 			write: func(ctx context.Context, s *Server) error {
-				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", true)
+				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", TerminationRollbackImmediate)
 			},
 			want: "ALTER DATABASE [AppDB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE",
 		},
 		{
 			name: "Database.Rename force releases under the new name",
 			write: func(ctx context.Context, s *Server) error {
-				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", true)
+				return s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", TerminationRollbackImmediate)
 			},
 			want: "ALTER DATABASE [AppDB2] SET MULTI_USER",
 		},
@@ -441,7 +441,7 @@ func TestDropStatementsAreNotIdempotent(t *testing.T) {
 		{"database trigger", func() error { return d.DatabaseTriggerRef("ddl_tr").Drop(ctx) }},
 		{"synonym", func() error { return d.SynonymRef("dbo", "syn").Drop(ctx) }},
 		{"sequence", func() error { return d.SequenceRef("dbo", "seq").Drop(ctx) }},
-		{"table", func() error { return d.TableRef("dbo", "t").Drop(ctx, false) }},
+		{"table", func() error { return d.TableRef("dbo", "t").Drop(ctx, DropTableOnly) }},
 		{"database scoped credential", func() error { return d.DatabaseScopedCredentialRef("cred").Drop(ctx) }},
 		{"certificate", func() error { return d.CertificateRef("cert").Drop(ctx) }},
 		{"asymmetric key", func() error { return d.AsymmetricKeyRef("key").Drop(ctx) }},
@@ -595,7 +595,7 @@ func TestAFailedForcedDropIsPutBackToMultiUser(t *testing.T) {
 	s := detServer(t)
 	detFailOn("DROP DATABASE")
 
-	if err := s.DatabaseRef("appdb").Drop(context.Background(), true); err == nil {
+	if err := s.DatabaseRef("appdb").Drop(context.Background(), TerminationRollbackImmediate); err == nil {
 		t.Fatal("a failing drop returned no error")
 	}
 	stmts := detLog.statements()
@@ -613,7 +613,7 @@ func TestAFailedForcedDropIsPutBackToMultiUserEvenWhenTheContextIsGone(t *testin
 	s := detServer(t)
 	ctx := detCancelOn(t, "DROP DATABASE")
 
-	if err := s.DatabaseRef("appdb").Drop(ctx, true); err == nil {
+	if err := s.DatabaseRef("appdb").Drop(ctx, TerminationRollbackImmediate); err == nil {
 		t.Fatal("a drop whose context expired returned no error")
 	}
 	stmts := detLog.statements()
@@ -632,7 +632,7 @@ func TestAFailedDropWithoutForceLeavesTheAccessModeAlone(t *testing.T) {
 	detLog.failOn = "DROP DATABASE" // a plain error: cut short, the worst case
 	detLog.mu.Unlock()
 
-	if err := s.DatabaseRef("appdb").Drop(context.Background(), false); err == nil {
+	if err := s.DatabaseRef("appdb").Drop(context.Background(), TerminationNone); err == nil {
 		t.Fatal("a failing drop returned no error")
 	}
 	for _, stmt := range detLog.statements() {
@@ -648,7 +648,7 @@ func TestAFailedDropWithoutForceLeavesTheAccessModeAlone(t *testing.T) {
 // is worse than not issuing it. The batch's own repair is guarded on DB_ID.
 func TestASuccessfulDropDoesNotTryToAlterTheDatabaseAfterwards(t *testing.T) {
 	s := detServer(t)
-	if err := s.DatabaseRef("appdb").Drop(context.Background(), true); err != nil {
+	if err := s.DatabaseRef("appdb").Drop(context.Background(), TerminationRollbackImmediate); err != nil {
 		t.Fatalf("Database.Drop: %v", err)
 	}
 	stmts := detLog.statements()
@@ -667,7 +667,7 @@ func TestAForcedRenameReleasesMultiUserEvenWhenTheContextIsGone(t *testing.T) {
 	s := detServer(t)
 	ctx := detCancelOn(t, "MODIFY NAME")
 
-	if err := s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", true); err == nil {
+	if err := s.DatabaseRef("AppDB").Rename(ctx, "AppDB2", TerminationRollbackImmediate); err == nil {
 		t.Fatal("a rename whose context expired returned no error")
 	}
 	stmts := detLog.statements()
@@ -690,7 +690,7 @@ func TestAForcedRenameIsOneBatchThatReleasesWhicheverNameTheDatabaseHas(t *testi
 		if fail {
 			detFailOn("MODIFY NAME")
 		}
-		err := s.DatabaseRef("AppDB").Rename(context.Background(), "AppDB2", true)
+		err := s.DatabaseRef("AppDB").Rename(context.Background(), "AppDB2", TerminationRollbackImmediate)
 		if (err != nil) != fail {
 			t.Fatalf("fail=%v: Database.Rename returned %v", fail, err)
 		}
@@ -725,7 +725,9 @@ func TestAForcedWriteCutShortRepairsToTheModeTheDatabaseHad(t *testing.T) {
 		repair   func(mode string) string
 	}{
 		"drop": {"DROP DATABASE",
-			func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Drop(ctx, true) },
+			func(ctx context.Context, s *Server) error {
+				return s.DatabaseRef("appdb").Drop(ctx, TerminationRollbackImmediate)
+			},
 			func(m string) string { return "ALTER DATABASE [appdb] SET " + m }},
 		"detach": {"sp_detach_db",
 			func(ctx context.Context, s *Server) error {
@@ -733,7 +735,9 @@ func TestAForcedWriteCutShortRepairsToTheModeTheDatabaseHad(t *testing.T) {
 			},
 			func(m string) string { return "ALTER DATABASE [appdb] SET " + m }},
 		"rename": {"MODIFY NAME",
-			func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Rename(ctx, "appdb2", true) },
+			func(ctx context.Context, s *Server) error {
+				return s.DatabaseRef("appdb").Rename(ctx, "appdb2", TerminationRollbackImmediate)
+			},
 			func(m string) string {
 				return "IF DB_ID(N'appdb') IS NOT NULL ALTER DATABASE [appdb] SET " + m +
 					"\nELSE IF DB_ID(N'appdb2') IS NOT NULL ALTER DATABASE [appdb2] SET " + m
@@ -773,7 +777,7 @@ func TestAForcedWriteCutShortRepairsToTheModeTheDatabaseHad(t *testing.T) {
 func TestAForcedWriteUnderWithScriptReadsNoAccessMode(t *testing.T) {
 	s := detServer(t)
 	ctx, script := WithScript(context.Background())
-	if err := s.DatabaseRef("appdb").Rename(ctx, "appdb2", true); err != nil {
+	if err := s.DatabaseRef("appdb").Rename(ctx, "appdb2", TerminationRollbackImmediate); err != nil {
 		t.Fatalf("Rename under WithScript: %v", err)
 	}
 	if detLog.accessReads != 0 || len(detLog.statements()) != 0 {
@@ -797,7 +801,7 @@ func TestAForcedDropOnAManagedInstanceKillsSessionsInsteadOfSingleUser(t *testin
 			detLog.failOn = "DROP DATABASE"
 			detLog.mu.Unlock()
 		}
-		err := s.DatabaseRef("appdb").Drop(context.Background(), true)
+		err := s.DatabaseRef("appdb").Drop(context.Background(), TerminationRollbackImmediate)
 		if (err != nil) != fail {
 			t.Fatalf("fail=%v: Database.Drop returned %v", fail, err)
 		}
@@ -822,7 +826,7 @@ func TestAForcedDropOnAManagedInstanceKillsSessionsInsteadOfSingleUser(t *testin
 func TestAForcedRenameOnAManagedInstanceKillsSessionsInsteadOfSingleUser(t *testing.T) {
 	s := detServer(t)
 	s.info = &ServerInfo{EngineEdition: int(EngineAzureManagedInst)}
-	if err := s.DatabaseRef("AppDB").Rename(context.Background(), "AppDB2", true); err != nil {
+	if err := s.DatabaseRef("AppDB").Rename(context.Background(), "AppDB2", TerminationRollbackImmediate); err != nil {
 		t.Fatalf("Database.Rename: %v", err)
 	}
 	stmts := detLog.statements()
@@ -837,7 +841,7 @@ func TestAForcedRenameOnAManagedInstanceKillsSessionsInsteadOfSingleUser(t *test
 func TestAForcedDropOnPremStillUsesSingleUser(t *testing.T) {
 	s := detServer(t)
 	s.info = &ServerInfo{EngineEdition: int(EngineEnterprise)}
-	if err := s.DatabaseRef("appdb").Drop(context.Background(), true); err != nil {
+	if err := s.DatabaseRef("appdb").Drop(context.Background(), TerminationRollbackImmediate); err != nil {
 		t.Fatalf("Database.Drop: %v", err)
 	}
 	stmts := detLog.statements()
@@ -852,8 +856,12 @@ func TestAForcedDropOnPremStillUsesSingleUser(t *testing.T) {
 // between freeing the single-user slot and using it either (S8).
 func TestWithScriptForcedExclusiveWritesAreOneStatement(t *testing.T) {
 	cases := map[string]func(context.Context, *Server) error{
-		"drop":   func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Drop(ctx, true) },
-		"rename": func(ctx context.Context, s *Server) error { return s.DatabaseRef("appdb").Rename(ctx, "appdb2", true) },
+		"drop": func(ctx context.Context, s *Server) error {
+			return s.DatabaseRef("appdb").Drop(ctx, TerminationRollbackImmediate)
+		},
+		"rename": func(ctx context.Context, s *Server) error {
+			return s.DatabaseRef("appdb").Rename(ctx, "appdb2", TerminationRollbackImmediate)
+		},
 		"detach": func(ctx context.Context, s *Server) error {
 			return s.DatabaseRef("appdb").Detach(ctx, DetachOptions{DropConnections: true})
 		},

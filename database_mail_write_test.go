@@ -158,9 +158,9 @@ func TestMailProfileStatementShapes(t *testing.T) {
 			[]string{"EXEC msdb.dbo.sysmail_delete_profileaccount_sp @profile_name = N'alerts', @account_name = N'ops'"}},
 		{"resequence", func(ctx context.Context) error { return p.SetAccountSequence(ctx, "ops", 1) },
 			[]string{"EXEC msdb.dbo.sysmail_update_profileaccount_sp @profile_name = N'alerts', @account_name = N'ops', @sequence_number = 1"}},
-		{"grant public default", func(ctx context.Context) error { return p.Grant(ctx, MailPublicPrincipal, true) },
+		{"grant public default", func(ctx context.Context) error { return p.Grant(ctx, MailPublicPrincipal, MailDefaultProfile) },
 			[]string{"EXEC msdb.dbo.sysmail_add_principalprofile_sp @principal_name = N'public', @profile_name = N'alerts', @is_default = 1"}},
-		{"set default", func(ctx context.Context) error { return p.SetGrantDefault(ctx, "app", false) },
+		{"set default", func(ctx context.Context) error { return p.SetGrantDefault(ctx, "app", MailNotDefaultProfile) },
 			[]string{"EXEC msdb.dbo.sysmail_update_principalprofile_sp @principal_name = N'app', @profile_name = N'alerts', @is_default = 0"}},
 		{"revoke", func(ctx context.Context) error { return p.Revoke(ctx, "app") },
 			[]string{"EXEC msdb.dbo.sysmail_delete_principalprofile_sp @principal_name = N'app', @profile_name = N'alerts'"}},
@@ -179,12 +179,12 @@ func TestMailProfileStatementShapes(t *testing.T) {
 func TestMailProfileGrantMirrorsPublic(t *testing.T) {
 	p := (&Server{}).MailProfileRef("alerts")
 	ctx, _ := WithScript(context.Background())
-	if err := p.Grant(ctx, MailPublicPrincipal, true); err != nil || p.IsPublic || p.IsDefault {
+	if err := p.Grant(ctx, MailPublicPrincipal, MailDefaultProfile); err != nil || p.IsPublic || p.IsDefault {
 		t.Errorf("scripted Grant: err %v, IsPublic %v, IsDefault %v; want nothing mirrored", err, p.IsPublic, p.IsDefault)
 	}
 	s := captureServer(t, 17)
 	p = s.MailProfileRef("alerts")
-	if err := p.Grant(context.Background(), MailPublicPrincipal, true); err != nil || !p.IsPublic || !p.IsDefault {
+	if err := p.Grant(context.Background(), MailPublicPrincipal, MailDefaultProfile); err != nil || !p.IsPublic || !p.IsDefault {
 		t.Errorf("Grant: err %v, IsPublic %v, IsDefault %v; want both set", err, p.IsPublic, p.IsDefault)
 	}
 	if err := p.Revoke(context.Background(), MailPublicPrincipal); err != nil || p.IsPublic || p.IsDefault {

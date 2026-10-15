@@ -51,7 +51,7 @@ func TestLiveDropTableCascadeIsAtomic(t *testing.T) {
 
 	// The schema-bound view makes DROP TABLE fail (Msg 3729) after the key
 	// drop has run; the key must survive it.
-	if err := d.TableRef("dbo", "Parent").Drop(ctx, true); err == nil {
+	if err := d.TableRef("dbo", "Parent").Drop(ctx, DropTableCascade); err == nil {
 		t.Fatal("Table.Drop(cascade) of a table a schema-bound view references succeeded")
 	} else if !strings.Contains(err.Error(), "vParent") {
 		t.Errorf("Table.Drop error %v does not name the view", err)
@@ -61,7 +61,7 @@ func TestLiveDropTableCascadeIsAtomic(t *testing.T) {
 	}
 
 	liveExecIn(t, d, ctx, "DROP VIEW dbo.vParent")
-	if err := d.TableRef("dbo", "Parent").Drop(ctx, true); err != nil {
+	if err := d.TableRef("dbo", "Parent").Drop(ctx, DropTableCascade); err != nil {
 		t.Fatalf("Table.Drop(cascade): %v", err)
 	}
 	if fks() != 0 || parent() != 0 {
@@ -98,7 +98,7 @@ func TestLiveForcedRenameAndDropAreOneBatch(t *testing.T) {
 	_, dropTaken := liveScratchDB(t, db, ctx, taken)
 	defer dropTaken()
 	liveExecIn(t, d, ctx, "ALTER DATABASE ["+taken+"] SET RESTRICTED_USER")
-	if err := srv.DatabaseRef(name).Rename(ctx, taken, true); err == nil {
+	if err := srv.DatabaseRef(name).Rename(ctx, taken, TerminationRollbackImmediate); err == nil {
 		t.Fatal("renaming onto a taken name succeeded")
 	} else if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("refused rename error %v is not the server's own (Msg 1801)", err)
@@ -124,7 +124,7 @@ func TestLiveForcedRenameAndDropAreOneBatch(t *testing.T) {
 
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err := srv.DatabaseRef(name).Rename(rctx, renamed, true); err != nil {
+	if err := srv.DatabaseRef(name).Rename(rctx, renamed, TerminationRollbackImmediate); err != nil {
 		t.Fatalf("forced Database.Rename with a parked session: %v", err)
 	}
 	if got := userAccess(t, srv, ctx, renamed); got != "MULTI_USER" {
@@ -133,7 +133,7 @@ func TestLiveForcedRenameAndDropAreOneBatch(t *testing.T) {
 
 	dctx, cancel2 := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel2()
-	if err := srv.DatabaseRef(renamed).Drop(dctx, true); err != nil {
+	if err := srv.DatabaseRef(renamed).Drop(dctx, TerminationRollbackImmediate); err != nil {
 		t.Fatalf("forced Database.Drop: %v", err)
 	}
 	if got := userAccess(t, srv, ctx, renamed); got != "(no such database)" {

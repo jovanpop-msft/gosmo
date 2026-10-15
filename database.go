@@ -696,18 +696,23 @@ WHERE  SCHEMA_NAME(t.schema_id) COLLATE DATABASE_DEFAULT = @p1
 
 // -- Drop and rename -----------------------------------------------------------
 
-// Drop drops the database.
-// When force is true, active connections are terminated first — by SET
-// SINGLE_USER WITH ROLLBACK IMMEDIATE, or on a Managed Instance, which refuses
-// that statement, by killing the database's sessions (see killDatabaseSessions).
-// A forced drop that fails puts the database back to the user-access mode it
-// had — MULTI_USER, or RESTRICTED_USER left as it was. This Server's own idle sessions are released first either way (see
-// ReleaseIdleConnections).
-func (d *Database) Drop(ctx context.Context, force bool) error {
+// Drop drops the database. With TerminationNone it fails while another
+// session is connected. With TerminationRollbackImmediate those sessions are
+// terminated first — by SET SINGLE_USER WITH ROLLBACK IMMEDIATE, or on a
+// Managed Instance, which refuses that statement, by killing the database's
+// sessions (see killDatabaseSessions). A forced drop that fails puts the
+// database back to the user-access mode it had — MULTI_USER, or
+// RESTRICTED_USER left as it was. This Server's own idle sessions are released
+// first either way (see ReleaseIdleConnections).
+func (d *Database) Drop(ctx context.Context, term Termination) error {
 	s, name := d.server, d.Name
 	if name == "" {
 		return invalidf("gosmo: drop database: name is required")
 	}
+	if _, err := term.withClause(); err != nil {
+		return fmt.Errorf("gosmo: drop database %q: %w", name, err)
+	}
+	force := term == TerminationRollbackImmediate
 	s.releaseIdle(ctx)
 	drop := fmt.Sprintf("DROP DATABASE %s", quoteIdent(name))
 	switch {
@@ -745,31 +750,35 @@ func (d *Database) Drop(ctx context.Context, force bool) error {
 // server needs exclusive access to it, so any other connection to the
 // database fails the statement outright rather than waiting.
 //
-// When force is true the database is put into SINGLE_USER WITH ROLLBACK
+// With TerminationRollbackImmediate the database is put into SINGLE_USER WITH ROLLBACK
 // IMMEDIATE first — terminating those connections and rolling back their
 // transactions — and back to the user-access mode it had afterwards,
 // including when the rename itself fails, so a refused rename never leaves
 // the database single-user and a RESTRICTED_USER one is not opened to
-// everyone. A Managed Instance refuses SET SINGLE_USER, so there force
-// kills the database's sessions instead and changes no access mode. This
-// Server's own idle sessions are released first either way (see
-// ReleaseIdleConnections).
+// everyone. A Managed Instance refuses SET SINGLE_USER, so there
+// TerminationRollbackImmediate kills the database's sessions instead and
+// changes no access mode. This Server's own idle sessions are released first
+// either way (see ReleaseIdleConnections).
 //
 // The new name is mirrored onto the receiver (through setIfApplied, so not
 // under WithScript).
-func (d *Database) Rename(ctx context.Context, newName string, force bool) error {
-	if err := d.rename(ctx, newName, force); err != nil {
+func (d *Database) Rename(ctx context.Context, newName string, term Termination) error {
+	if err := d.rename(ctx, newName, term); err != nil {
 		return err
 	}
 	setIfApplied(ctx, &d.Name, newName)
 	return nil
 }
 
-func (d *Database) rename(ctx context.Context, newName string, force bool) error {
+func (d *Database) rename(ctx context.Context, newName string, term Termination) error {
 	s, oldName := d.server, d.Name
 	if oldName == "" || newName == "" {
 		return invalidf("gosmo: rename database: both names are required")
 	}
+	if _, err := term.withClause(); err != nil {
+		return fmt.Errorf("gosmo: rename database %q: %w", oldName, err)
+	}
+	force := term == TerminationRollbackImmediate
 	q := fmt.Sprintf("ALTER DATABASE %s MODIFY NAME = %s", quoteIdent(oldName), quoteIdent(newName))
 	s.releaseIdle(ctx)
 	switch {

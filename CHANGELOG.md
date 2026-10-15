@@ -4,6 +4,16 @@ All notable changes to gosmo are documented here, newest first, from
 `v0.0.4` onward — this is the history. `RELEASE.md` carries the current
 release only, as a short summary of the entry below it.
 
+## Unreleased
+
+### Added
+
+- **Package `tsql`** (`github.com/radix29/gosmo/tsql`) — the T-SQL text layer as a leaf package that imports only the standard library, so a consumer that builds or reads T-SQL text without connecting need not link the mssql driver. It holds `QuoteName`, `QuoteLiteral`, `QuoteAnsiLiteral` and `UnquoteName`; `CommentSafe` and `BlockCommentSafe` (a name kept from ending a `--` or `/* */` comment); and `Spans`, the lexical scanner behind every script-text rewrite, which splits text into code, comments, literals and quoted identifiers (`Span`, `SpanKind`, `Unescape`). `TestImportsOnlyStdlib` keeps the package a leaf, and `TestTSQLQuoterParity` pins its quoting to the driver's `TSQLQuoter`.
+
+### Changed
+
+- **`QuoteName`, `QuoteLiteral`, `QuoteAnsiLiteral` and `UnquoteName` forward to `tsql`.** Same signatures and output; existing callers need no change.
+
 ## v0.0.17
 
 Two new families — Full-Text Search and Replication — plus Live Query

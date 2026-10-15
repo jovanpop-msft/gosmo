@@ -103,6 +103,22 @@ func TestEverySecurableClassIsReadAndSearched(t *testing.T) {
 	}
 }
 
+// TestSchemaScopedAgreesWithOnClause pins SchemaScoped to the ON clause:
+// a class is schema-scoped exactly when on() renders its name two-part, so
+// a new class cannot be qualified in one and bare in the other.
+func TestSchemaScopedAgreesWithOnClause(t *testing.T) {
+	for _, c := range []SecurableClass{
+		SecurableServer, SecurableDatabase, SecurableSchema, SecurableTable, SecurableView,
+		SecurableProcedure, SecurableScalarFunction, SecurableInlineFunction, SecurableTableFunction,
+		SecurableSequence, SecurableSynonym, SecurableUserType, SecurableCertificate,
+	} {
+		qualified := strings.Contains(Securable{Class: c, Schema: "s", Name: "n"}.on(), "[s].[n]")
+		if c.SchemaScoped() != qualified {
+			t.Errorf("%s: SchemaScoped() = %v, but on() qualifies the name: %v", c, c.SchemaScoped(), qualified)
+		}
+	}
+}
+
 func TestFindSecurablesSearchesEveryClass(t *testing.T) {
 	d := captureDatabase(t)
 	captured.reset(cannedRow{match: "TOP (@p2)", cols: []string{"kind", "schema", "name"}, rows: [][]driver.Value{

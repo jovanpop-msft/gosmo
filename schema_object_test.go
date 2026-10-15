@@ -22,7 +22,7 @@ func TestSchemaObjectHandleStatements(t *testing.T) {
 		{"StoredProcedure.Drop", func(c context.Context) error { return d.StoredProcedureRef("dbo", "p").Drop(c) }, []string{"DROP PROCEDURE [dbo].[p]"}},
 		{"UserDefinedFunction.Drop", func(c context.Context) error { return d.UserDefinedFunctionRef("dbo", "f").Drop(c) }, []string{"DROP FUNCTION [dbo].[f]"}},
 		{"Trigger.Drop", func(c context.Context) error { return d.TriggerRef("dbo", "tr").Drop(c) }, []string{"DROP TRIGGER [dbo].[tr]"}},
-		{"Table.Drop", func(c context.Context) error { return d.TableRef("dbo", "t").Drop(c, false) }, []string{"DROP TABLE [dbo].[t]"}},
+		{"Table.Drop", func(c context.Context) error { return d.TableRef("dbo", "t").Drop(c, DropTableOnly) }, []string{"DROP TABLE [dbo].[t]"}},
 		{"Table.Truncate", func(c context.Context) error { return d.TableRef("dbo", "t").Truncate(c) }, []string{"TRUNCATE TABLE [dbo].[t]"}},
 
 		{"Table.Rename", func(c context.Context) error { return d.TableRef("dbo", "t").Rename(c, "t2") }, []string{"sp_rename", "N'[dbo].[t]'", "N't2'", "N'OBJECT'"}},
@@ -92,7 +92,7 @@ func TestSchemaObjectHandleIsNotMutatedWhileScripting(t *testing.T) {
 		t.Errorf("view handle is [%s].[%s] after scripted writes, want [dbo].[v]", v.Schema, v.Name)
 	}
 
-	if err := d.Rename(ctx, "AppDB2", false); err != nil {
+	if err := d.Rename(ctx, "AppDB2", TerminationNone); err != nil {
 		t.Fatalf("Database.Rename: %v", err)
 	}
 	if d.Name != "AppDB" {
@@ -130,8 +130,8 @@ func TestDatabaseHandleWrites(t *testing.T) {
 		act  func(context.Context, *Database) error
 		want string
 	}{
-		{"Drop", func(c context.Context, d *Database) error { return d.Drop(c, false) }, "DROP DATABASE [odd]]db]"},
-		{"Rename", func(c context.Context, d *Database) error { return d.Rename(c, "new", false) }, "ALTER DATABASE [odd]]db] MODIFY NAME = [new]"},
+		{"Drop", func(c context.Context, d *Database) error { return d.Drop(c, TerminationNone) }, "DROP DATABASE [odd]]db]"},
+		{"Rename", func(c context.Context, d *Database) error { return d.Rename(c, "new", TerminationNone) }, "ALTER DATABASE [odd]]db] MODIFY NAME = [new]"},
 		{"Detach", func(c context.Context, d *Database) error { return d.Detach(c, DetachOptions{}) }, "sp_detach_db @dbname = N'odd]db'"},
 	}
 	for _, tc := range cases {

@@ -47,7 +47,7 @@ func TestLiveBackupDeviceCreateReadDrop(t *testing.T) {
 		if d, err := s.BackupDeviceByName(ctx, liveBackupDeviceName); err == nil {
 			// @delfile deletes the .bak too, which is what leaves the server
 			// as it was found — and exercises the branch.
-			if err := d.Drop(ctx, true); err != nil {
+			if err := d.Drop(ctx, DeleteDeviceFile); err != nil {
 				t.Logf("cleanup of backup device %q: %v", liveBackupDeviceName, err)
 			}
 		}
@@ -120,7 +120,7 @@ func TestLiveBackupDeviceCreateReadDrop(t *testing.T) {
 
 	// A drop that keeps the file must leave the file behind — the alias goes,
 	// the backup does not.
-	if err := d.Drop(ctx, false); err != nil {
+	if err := d.Drop(ctx, KeepDeviceFile); err != nil {
 		t.Fatalf("Drop(false): %v", err)
 	}
 	if _, err := s.BackupDeviceByName(ctx, liveBackupDeviceName); !errors.Is(err, ErrNotFound) {
@@ -150,7 +150,7 @@ func TestLiveBackupDeviceScriptRunsAsGenerated(t *testing.T) {
 	const name = liveBackupDeviceName + "_script"
 	drop := func() {
 		if d, err := s.BackupDeviceByName(ctx, name); err == nil {
-			d.Drop(ctx, false)
+			d.Drop(ctx, KeepDeviceFile)
 		}
 	}
 	drop()
@@ -171,7 +171,7 @@ func TestLiveBackupDeviceScriptRunsAsGenerated(t *testing.T) {
 		t.Fatalf("CreateBackupDevice: %v", err)
 	}
 	script := buildBackupDeviceScript(src, ScriptOptions{Verb: ScriptDropAndCreate})
-	if err := src.Drop(ctx, false); err != nil {
+	if err := src.Drop(ctx, KeepDeviceFile); err != nil {
 		t.Fatalf("Drop before replay: %v", err)
 	}
 

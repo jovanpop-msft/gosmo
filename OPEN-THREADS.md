@@ -279,7 +279,7 @@ as soon as two schedules share the name.
 `database_trigger.go` and `server_trigger.go` duplicate roughly thirty lines:
 `scanDatabaseTrigger`/`scanServerTrigger` are twelve identical lines apart from
 the receiver, and the `Enable`/`Disable`/
-`setEnabled` block below each differs only in the scope the statement targets
+`SetEnabled` block below each differs only in the scope the statement targets
 (`ON DATABASE` versus `ON ALL SERVER`) and in which exec helper it reaches
 (`db.exec` versus `server.exec`).
 

@@ -149,7 +149,7 @@ func TestArgumentRefusalsWrapErrInvalidRequest(t *testing.T) {
 		{"create table", errOnly(d.CreateTable(ctx, CreateTableRequest{})), "gosmo: create table: name is required"},
 		{"set recovery model", d.SetRecoveryModel(ctx, "NOPE"), `gosmo: set recovery model of "appdb": unrecognized recovery model "NOPE"`},
 		{"create login", errOnly(s.CreateLogin(ctx, CreateLoginRequest{Name: "x", Source: LoginSourceSQL})), "a SQL login requires a password"},
-		{"signer", d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate}, false), "signature by certificate has no name"},
+		{"signer", d.StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate}, PlainSignature), "signature by certificate has no name"},
 		{"apply permission", d.ApplyPermission(ctx, VerbGrant, Securable{Class: SecurableTable, Schema: "dbo", Name: "t"}, PermExecute, "x", PermissionOptions{}),
 			`gosmo: grant permission: "EXECUTE" cannot be granted on a table`},
 	}

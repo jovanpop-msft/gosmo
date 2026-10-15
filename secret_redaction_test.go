@@ -65,7 +65,7 @@ func secretWrites() []secretWrite {
 			return errOnly(db(s).CreateMasterKey(ctx, CreateMasterKeyRequest{Password: pw("dmk")}))
 		}},
 		{"MasterKey.Regenerate", []string{pw("new"), pw("open")}, func(ctx context.Context, s *Server) error {
-			return db(s).MasterKeyRef().Regenerate(ctx, pw("new"), false, pw("open"))
+			return db(s).MasterKeyRef().Regenerate(ctx, pw("new"), MasterKeyRegenerate, pw("open"))
 		}},
 		{"MasterKey.AddEncryption", []string{pw("add"), pw("open")}, func(ctx context.Context, s *Server) error {
 			return db(s).MasterKeyRef().AddEncryption(ctx, MasterKeyEncryptor{Password: pw("add")}, pw("open"))
@@ -97,7 +97,7 @@ func secretWrites() []secretWrite {
 				SymmetricKeyDecryptor{Kind: SymmetricKeyByPassword, Password: pw("open")})
 		}},
 		{"AddSignature", []string{pw("sig")}, func(ctx context.Context, s *Server) error {
-			return db(s).StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate, Name: "c", Password: pw("sig")}, false)
+			return db(s).StoredProcedureRef("dbo", "p").AddSignature(ctx, Signer{Kind: SignerCertificate, Name: "c", Password: pw("sig")}, PlainSignature)
 		}},
 		{"CreateMailAccount", []string{pw("mail")}, func(ctx context.Context, s *Server) error {
 			return errOnly(s.CreateMailAccount(ctx, CreateMailAccountRequest{Name: "a", EmailAddress: "a@b", ServerName: "x",

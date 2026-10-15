@@ -605,11 +605,40 @@ func mailPrincipalProfileStmt(proc, profile, principal string, isDefault *bool) 
 	return a.exec(proc)
 }
 
+// MailProfileDefault says whether a granted profile is the principal's
+// default — sysmail_*_principalprofile_sp's @is_default.
+type MailProfileDefault int
+
+const (
+	// MailNotDefaultProfile grants the profile without making it the
+	// principal's default.
+	MailNotDefaultProfile MailProfileDefault = iota
+
+	// MailDefaultProfile makes it the principal's default, clearing the
+	// previous one.
+	MailDefaultProfile
+)
+
+// isDefault is d as @is_default.
+func (d MailProfileDefault) isDefault() (bool, error) {
+	switch d {
+	case MailNotDefaultProfile:
+		return false, nil
+	case MailDefaultProfile:
+		return true, nil
+	}
+	return false, invalidf("unrecognized default %d", d)
+}
+
 // Grant lets principal — an msdb database user, or MailPublicPrincipal —
 // send through the profile, and makes it that principal's default profile
-// when isDefault is set (clearing its previous default).
-func (p *MailProfile) Grant(ctx context.Context, principal string, isDefault bool) error {
-	if err := p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_add_principalprofile_sp", p.Name, principal, &isDefault)); err != nil {
+// with MailDefaultProfile (clearing its previous default).
+func (p *MailProfile) Grant(ctx context.Context, principal string, def MailProfileDefault) error {
+	isDefault, err := def.isDefault()
+	if err == nil {
+		err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_add_principalprofile_sp", p.Name, principal, &isDefault))
+	}
+	if err != nil {
 		return fmt.Errorf("gosmo: grant mail profile %q to %q: %w", p.Name, principal, err)
 	}
 	if principal == MailPublicPrincipal {
@@ -620,9 +649,14 @@ func (p *MailProfile) Grant(ctx context.Context, principal string, isDefault boo
 }
 
 // SetGrantDefault changes whether the profile is principal's default; the
-// grant must exist. Setting it clears the principal's previous default.
-func (p *MailProfile) SetGrantDefault(ctx context.Context, principal string, isDefault bool) error {
-	if err := p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_update_principalprofile_sp", p.Name, principal, &isDefault)); err != nil {
+// grant must exist. MailDefaultProfile clears the principal's previous
+// default.
+func (p *MailProfile) SetGrantDefault(ctx context.Context, principal string, def MailProfileDefault) error {
+	isDefault, err := def.isDefault()
+	if err == nil {
+		err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_update_principalprofile_sp", p.Name, principal, &isDefault))
+	}
+	if err != nil {
 		return fmt.Errorf("gosmo: set default of mail profile %q for %q: %w", p.Name, principal, err)
 	}
 	if principal == MailPublicPrincipal {

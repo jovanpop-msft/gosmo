@@ -617,18 +617,35 @@ type ReplAgentSession struct {
 	ErrorID               int
 }
 
-// Sessions returns the agent's sessions, newest first: those of the last
-// hours hours, or every one history retention keeps when hours is 0. With
-// errorsOnly, only sessions that failed.
-func (a *ReplicationAgent) Sessions(ctx context.Context, hours int, errorsOnly bool) ([]ReplAgentSession, error) {
+// ReplSessionFilter says which sessions ReplicationAgent.Sessions returns —
+// the agent history procedures' @session_type.
+type ReplSessionFilter int
+
+const (
+	// AllReplSessions is every session.
+	AllReplSessions ReplSessionFilter = iota
+
+	// FailedReplSessions is only the sessions that failed.
+	FailedReplSessions
+)
+
+// Sessions returns the agent's sessions filter names, newest first: those
+// of the last hours hours, or every one history retention keeps when hours
+// is 0.
+func (a *ReplicationAgent) Sessions(ctx context.Context, hours int, filter ReplSessionFilter) ([]ReplAgentSession, error) {
 	what := fmt.Sprintf("read sessions of replication agent %q", a.Name)
 	if hours < 0 {
 		// The procedures' negative @hours is an unordered TOP 100.
 		hours = 0
 	}
-	sessionType := 1
-	if errorsOnly {
+	var sessionType int
+	switch filter {
+	case AllReplSessions:
+		sessionType = 1
+	case FailedReplSessions:
 		sessionType = 2
+	default:
+		return nil, invalidf("gosmo: %s: unrecognized session filter %d", what, filter)
 	}
 	rows, err := a.dd.srv.query(ctx, "EXEC "+quoteIdent(a.dd.Name)+".dbo."+replAgentProc(a.Kind)+
 		"_s @name = @p1, @hours = @p2, @session_type = @p3", a.Name, hours, sessionType)

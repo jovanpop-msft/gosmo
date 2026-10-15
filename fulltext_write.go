@@ -551,13 +551,6 @@ func (i *FullTextIndex) alter(ctx context.Context, what, action string) error {
 	return nil
 }
 
-func withNoPopulation(noPopulation bool) string {
-	if noPopulation {
-		return " WITH NO POPULATION"
-	}
-	return ""
-}
-
 // Enable turns the index back on; with change tracking it catches up on
 // what changed while it was off.
 func (i *FullTextIndex) Enable(ctx context.Context) error {
@@ -586,18 +579,52 @@ func (i *FullTextIndex) SetEnabled(ctx context.Context, on bool) error {
 	return i.Disable(ctx)
 }
 
-// AddColumn adds a column to the index. The server repopulates unless
-// noPopulation is set.
-func (i *FullTextIndex) AddColumn(ctx context.Context, col FullTextIndexColumnSpec, noPopulation bool) error {
-	return i.alter(ctx, fmt.Sprintf("add column %q to the full-text index on", col.Name),
-		"ADD ("+col.clause()+")"+withNoPopulation(noPopulation))
+// FullTextRepopulation says whether a column change to a full-text index
+// repopulates it — the WITH NO POPULATION clause of ALTER FULLTEXT INDEX
+// ADD/DROP.
+type FullTextRepopulation int
+
+const (
+	// FullTextRepopulate lets the server repopulate the index after the
+	// change, as the bare statement does.
+	FullTextRepopulate FullTextRepopulation = iota
+
+	// FullTextNoPopulation adds WITH NO POPULATION: the index is left as it
+	// is until a population is started.
+	FullTextNoPopulation
+)
+
+// withClause is p as the suffix of ALTER FULLTEXT INDEX ADD/DROP.
+func (p FullTextRepopulation) withClause() (string, error) {
+	switch p {
+	case FullTextRepopulate:
+		return "", nil
+	case FullTextNoPopulation:
+		return " WITH NO POPULATION", nil
+	}
+	return "", invalidf("unrecognized repopulation %d", p)
+}
+
+// AddColumn adds a column to the index. The server repopulates unless pop is
+// FullTextNoPopulation.
+func (i *FullTextIndex) AddColumn(ctx context.Context, col FullTextIndexColumnSpec, pop FullTextRepopulation) error {
+	what := fmt.Sprintf("add column %q to the full-text index on", col.Name)
+	with, err := pop.withClause()
+	if err != nil {
+		return fmt.Errorf("gosmo: %s %s: %w", what, i.FullName(), err)
+	}
+	return i.alter(ctx, what, "ADD ("+col.clause()+")"+with)
 }
 
 // DropColumn removes a column from the index. The server repopulates unless
-// noPopulation is set.
-func (i *FullTextIndex) DropColumn(ctx context.Context, name string, noPopulation bool) error {
-	return i.alter(ctx, fmt.Sprintf("drop column %q from the full-text index on", name),
-		"DROP ("+quoteIdent(name)+")"+withNoPopulation(noPopulation))
+// pop is FullTextNoPopulation.
+func (i *FullTextIndex) DropColumn(ctx context.Context, name string, pop FullTextRepopulation) error {
+	what := fmt.Sprintf("drop column %q from the full-text index on", name)
+	with, err := pop.withClause()
+	if err != nil {
+		return fmt.Errorf("gosmo: %s %s: %w", what, i.FullName(), err)
+	}
+	return i.alter(ctx, what, "DROP ("+quoteIdent(name)+")"+with)
 }
 
 // SetChangeTracking sets how changes reach the index: AUTO as they happen,

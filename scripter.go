@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/radix29/gosmo/tsql"
 )
 
 // ============================================================
@@ -454,7 +456,7 @@ func (sc *Scripter) scriptDatabaseFrom(d *Database, layout *databaseLayout) (str
 		if d.server != nil && d.server.info != nil {
 			version = d.server.info.ProductVersion
 		}
-		fmt.Fprintf(&sb, "/* Database: %s  Version: %s */\n\n", blockCommentSafe(d.Name), blockCommentSafe(version))
+		fmt.Fprintf(&sb, "/* Database: %s  Version: %s */\n\n", tsql.BlockCommentSafe(d.Name), tsql.BlockCommentSafe(version))
 	}
 	drop := "USE [master];\nGO\n"
 	if sc.opts.IncludeIfNotExists {
@@ -791,11 +793,11 @@ var scopedConfigDefaults2016 = map[string]string{
 // from scopedConfigDefaults2016 is left out — its default is not known.
 func scopedConfigStatements(l *databaseLayout) []string {
 	var out []string
-	add := func(c *DatabaseScopedConfig, raw, baseType string, secondary bool) {
+	add := func(c *DatabaseScopedConfig, raw, baseType string, replica ScopedConfigReplica) {
 		v, ok := scopedConfigValue(raw, baseType)
-		stmt, err := buildScopedConfigStatement(c.Name, v, secondary)
+		stmt, err := buildScopedConfigStatement(c.Name, v, replica)
 		if !ok || err != nil {
-			out = append(out, fmt.Sprintf("-- Database scoped configuration %s reports a value with no SET form: not scripted.\n", commentSafe(c.Name)))
+			out = append(out, fmt.Sprintf("-- Database scoped configuration %s reports a value with no SET form: not scripted.\n", tsql.CommentSafe(c.Name)))
 			return
 		}
 		out = append(out, stmt+";\nGO\n")
@@ -807,10 +809,10 @@ func scopedConfigStatements(l *databaseLayout) []string {
 			isDefault = !known || c.Value == def
 		}
 		if !isDefault {
-			add(c, c.Value, c.ValueType, false)
+			add(c, c.Value, c.ValueType, ScopedConfigPrimary)
 		}
 		if c.ValueForSecondary != "" {
-			add(c, c.ValueForSecondary, c.ValueForSecondaryType, true)
+			add(c, c.ValueForSecondary, c.ValueForSecondaryType, ScopedConfigSecondary)
 		}
 	}
 	return out
