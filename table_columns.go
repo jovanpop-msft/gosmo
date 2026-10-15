@@ -288,10 +288,20 @@ func scanColumns(rows *sql.Rows) ([]*Column, error) {
 	return cols, rows.Err()
 }
 
-// AlterColumn changes an existing column's data type and/or nullability
-// (ALTER TABLE ... ALTER COLUMN). Identity and default are not settable this
-// way — SQL Server requires dropping and re-adding the column, or its default
-// constraint, for those.
+// AlterColumn changes an existing column's data type, nullability and/or
+// collation (ALTER TABLE ... ALTER COLUMN). Identity and default are not
+// settable this way — SQL Server requires dropping and re-adding the column,
+// or its default constraint, for those.
+//
+// A string column keeps its collation unless col.Collation names another:
+// ALTER COLUMN with no COLLATE gives a char/varchar/nchar/nvarchar column the
+// database default, so changing only the length of a Latin1_General_CS_AS
+// column in a CI database would make it case-insensitive (and can break an
+// index or foreign key that depends on it). With col.Collation empty, this
+// reads the column's current collation from sys.columns first and restates
+// it, as SSMS's designer does; a column that had none (a non-string column
+// becoming a string one) takes the database default. A column the read does
+// not find is ErrNotFound.
 func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 	if col.Name == "" {
 		return invalidf("gosmo: alter column: name is required")
@@ -299,9 +309,17 @@ func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 	if err := checkColumnDefinition(col); err != nil {
 		return fmt.Errorf("gosmo: alter column %q: %w", col.Name, err)
 	}
+	if col.Collation == "" && collatable(col.DataType) {
+		current, err := t.columnCollation(ctx, col.Name)
+		if err != nil {
+			return err
+		}
+		col.Collation = current
+	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "ALTER TABLE %s ALTER COLUMN %s %s", t.FullName(), quoteIdent(col.Name), colTypeSQL(col))
+	fmt.Fprintf(&sb, "ALTER TABLE %s ALTER COLUMN %s %s%s",
+		t.FullName(), quoteIdent(col.Name), colTypeSQL(col), collateClause(col.Collation))
 	if col.IsNullable {
 		sb.WriteString(" NULL")
 	} else {
@@ -312,6 +330,20 @@ func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 		return fmt.Errorf("gosmo: alter column %q on %s: %w", col.Name, t.FullName(), err)
 	}
 	return nil
+}
+
+// columnCollation reads a column's current collation for AlterColumn: ""
+// for a column that has none. The name is compared with sys.columns.name in
+// the catalog collation, which is how ALTER COLUMN resolves it.
+func (t *Table) columnCollation(ctx context.Context, name string) (string, error) {
+	var collation sql.NullString
+	err := t.db.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&collation) }, `
+SELECT c.collation_name
+FROM   sys.columns c
+WHERE  c.object_id = OBJECT_ID(@p1) AND c.name = @p2`, t.FullName(), name)
+	return foundRow(collation.String, err,
+		notFoundf("gosmo: alter column %q: no such column on %s", name, t.FullName()),
+		fmt.Sprintf("alter column %q on %s: read current collation", name, t.FullName()))
 }
 
 // DropColumn removes a column from the table (ALTER TABLE ... DROP COLUMN).
@@ -398,6 +430,69 @@ func colTypeSQL(col ColumnDefinition) string {
 	return string(col.DataType)
 }
 
+// collatable reports whether a column of type dt has a collation.
+func collatable(dt DataType) bool {
+	switch dt {
+	case DataTypeChar, DataTypeVarChar, DataTypeText,
+		DataTypeNChar, DataTypeNVarChar, DataTypeNText:
+		return true
+	}
+	return false
+}
+
+// validCollationName reports whether s can follow COLLATE unquoted. COLLATE
+// takes a bare name, not a quoted identifier, and every SQL Server collation
+// name (Windows or SQL_) is letters, digits and underscores, so anything else
+// is refused rather than written into the statement.
+func validCollationName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// collateClause is " COLLATE <name>", or "" for no collation; the name was
+// checked by checkColumnDefinition or read from sys.columns.
+func collateClause(collation string) string {
+	if collation == "" {
+		return ""
+	}
+	return " COLLATE " + collation
+}
+
+// checkIdentity refuses an IDENTITY column the server would refuse, before
+// anything is sent: an increment of 0 (Msg 2753; both zero is the bare
+// IDENTITY, not this), a type that is not an integer or a decimal/numeric of scale 0
+// (Msg 2749), a nullable column (Msg 8147) and a DEFAULT (Msg 1754).
+func checkIdentity(col ColumnDefinition) error {
+	if !col.IsIdentity {
+		return nil
+	}
+	switch col.DataType {
+	case DataTypeTinyInt, DataTypeSmallInt, DataTypeInt, DataTypeBigInt:
+	case DataTypeDecimal, DataTypeNumeric:
+		if col.Scale != nil && *col.Scale != 0 {
+			return invalidf("an identity %s needs a scale of 0", col.DataType)
+		}
+	default:
+		return invalidf("%s cannot be an identity", col.DataType)
+	}
+	switch {
+	case col.IdentityIncr == 0 && col.IdentitySeed != 0:
+		return invalidf("an identity increment cannot be 0")
+	case col.IsNullable:
+		return invalidf("an identity column cannot be nullable")
+	case col.DefaultValue != "":
+		return invalidf("an identity column cannot have a default")
+	}
+	return nil
+}
+
 // checkColumnDefinition refuses a definition colTypeSQL cannot render as
 // written, rather than rendering something else: a decimal scale with no
 // precision has no T-SQL spelling (decimal(,2) is a syntax error), and a
@@ -414,6 +509,14 @@ func checkColumnDefinition(col ColumnDefinition) error {
 	}
 	if col.DataType != DataTypeVector && (col.VectorDimensions != 0 || col.VectorBaseType != "") {
 		return invalidf("%s takes no vector dimensions or base type", col.DataType)
+	}
+	if col.Collation != "" {
+		if !collatable(col.DataType) {
+			return invalidf("%s takes no collation", col.DataType)
+		}
+		if !validCollationName(col.Collation) {
+			return invalidf("invalid collation name %q", col.Collation)
+		}
 	}
 	switch col.DataType {
 	case DataTypeXML:

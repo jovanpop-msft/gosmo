@@ -152,7 +152,7 @@ type CreateDatabaseMirroringEndpointRequest struct {
 
 	// EncryptionAlgorithm is the ALGORITHM sub-clause. Empty omits it, leaving
 	// the server's default; AES is the only sensible value on any supported
-	// version.
+	// version. It is refused with DISABLED, which takes no ALGORITHM.
 	EncryptionAlgorithm string
 }
 
@@ -195,6 +195,11 @@ func (spec CreateDatabaseMirroringEndpointRequest) normalized() (CreateDatabaseM
 	// Role and Encryption above.
 	if spec.EncryptionAlgorithm != "" && !endpointAlgorithms[spec.EncryptionAlgorithm] {
 		return spec, invalidf("unrecognized endpoint encryption algorithm %q", spec.EncryptionAlgorithm)
+	}
+	// The grammar allows ALGORITHM only after SUPPORTED or REQUIRED;
+	// "ENCRYPTION = DISABLED ALGORITHM AES" is a syntax error (Msg 102).
+	if spec.Encryption == "DISABLED" && spec.EncryptionAlgorithm != "" {
+		return spec, invalidf("endpoint encryption DISABLED takes no algorithm (got %q)", spec.EncryptionAlgorithm)
 	}
 	spec.Authentication = orElse(spec.Authentication, "WINDOWS NEGOTIATE")
 	return spec, nil

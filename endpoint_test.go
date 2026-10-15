@@ -57,6 +57,7 @@ func TestCreateEndpointStatementRejects(t *testing.T) {
 		"bad encryption":  {Name: "e", Encryption: "MAYBE"},
 		"bad algorithm":   {Name: "e", EncryptionAlgorithm: "AES RC5"},
 		"blank name only": {Name: "   "},
+		"disabled + algo": {Name: "e", Encryption: "disabled", EncryptionAlgorithm: "AES"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, err := spec.createEndpointStatement(); err == nil {

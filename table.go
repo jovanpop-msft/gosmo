@@ -326,12 +326,26 @@ type ColumnDefinition struct {
 	// only with the database's PREVIEW_FEATURES scoped configuration on.
 	VectorDimensions int
 	VectorBaseType   string
-	IsNullable       bool
-	IsIdentity       bool
-	IdentitySeed     int64
-	IdentityIncr     int64
-	DefaultValue     string // expression, e.g. "sysdatetime()" or "0"
-	IsPrimaryKey     bool
+	// Collation is a char, varchar, text, nchar, nvarchar or ntext column's
+	// collation (e.g. "Latin1_General_CS_AS"), refused on any other type.
+	// "" means the database default in CreateTable, and the column's current
+	// collation in AlterColumn — ALTER COLUMN without COLLATE resets a string
+	// column to the database default, so leaving it out there would quietly
+	// change it.
+	Collation  string
+	IsNullable bool
+	// IsIdentity makes the column IDENTITY(IdentitySeed,IdentityIncr). Both
+	// zero is the zero value, not a request for an increment of 0 (which the
+	// server refuses): it renders the bare IDENTITY, SQL Server's (1,1). An
+	// increment of 0 with a seed is refused, as are an identity that is
+	// nullable, has a DefaultValue, or is not tinyint, smallint, int, bigint
+	// or a decimal/numeric of scale 0. CreateTable only — AlterColumn cannot
+	// add or change an identity.
+	IsIdentity   bool
+	IdentitySeed int64
+	IdentityIncr int64
+	DefaultValue string // expression, e.g. "sysdatetime()" or "0"
+	IsPrimaryKey bool
 }
 
 // CreateTable creates a table from a CreateTableRequest.
@@ -349,6 +363,9 @@ func (d *Database) CreateTable(ctx context.Context, req CreateTableRequest) (*Ta
 		if err := checkColumnDefinition(col); err != nil {
 			return nil, fmt.Errorf("gosmo: create table %q: column %q: %w", req.Name, col.Name, err)
 		}
+		if err := checkIdentity(col); err != nil {
+			return nil, fmt.Errorf("gosmo: create table %q: column %q: %w", req.Name, col.Name, err)
+		}
 	}
 
 	var sb strings.Builder
@@ -356,8 +373,12 @@ func (d *Database) CreateTable(ctx context.Context, req CreateTableRequest) (*Ta
 
 	var pkCols []string
 	for _, col := range req.Columns {
-		fmt.Fprintf(&sb, "    %s %s", quoteIdent(col.Name), colTypeSQL(col))
-		if col.IsIdentity {
+		fmt.Fprintf(&sb, "    %s %s%s", quoteIdent(col.Name), colTypeSQL(col), collateClause(col.Collation))
+		switch {
+		case !col.IsIdentity:
+		case col.IdentitySeed == 0 && col.IdentityIncr == 0:
+			sb.WriteString(" IDENTITY")
+		default:
 			fmt.Fprintf(&sb, " IDENTITY(%d,%d)", col.IdentitySeed, col.IdentityIncr)
 		}
 		if !col.IsNullable {

@@ -308,7 +308,11 @@ func (d *Database) query(ctx context.Context, q string, args ...any) (*dbRows, e
 
 // queryOn is query inside InTransaction: on the transaction's session, with
 // the same error report (recheckUse), and never retried. The batch's USE is
-// free, so it is sent even when the session is already in d.
+// free, so it is sent even when the session is already in d. A read with
+// arguments goes as an RPC call of sp_executesql, and a USE in a client's RPC
+// call persists after it (unlike one in EXEC sp_executesql from T-SQL), so the
+// session is in d afterwards either way; TestLiveInTransactionParameterisedReadKeepsDatabase
+// pins it.
 func (d *Database) queryOn(ctx context.Context, t *serverTx, q string, args ...any) (*sql.Rows, error) {
 	rows, err := t.tx.QueryContext(ctx, d.useBatch(q), args...)
 	if err != nil {

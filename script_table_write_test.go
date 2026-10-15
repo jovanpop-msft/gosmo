@@ -2,6 +2,9 @@ package gosmo
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +70,165 @@ func TestTypedXMLAndVectorDefinitionsRefusedWhenUnsayable(t *testing.T) {
 		}
 		if err := scriptTestDB().TableRef("dbo", "t").AlterColumn(ctx, col); err == nil {
 			t.Errorf("AlterColumn with %s = nil error, want a refusal", name)
+		}
+		if n := len(script.Statements()); n != 0 {
+			t.Errorf("%s scripted %d statements, want none", name, n)
+		}
+	}
+}
+
+// P2 (review plan 2026-10-15): a string column's collation is declared with
+// COLLATE after its type, in CreateTable and in AlterColumn when the caller
+// names one — no catalog read then.
+func TestScriptColumnCollation(t *testing.T) {
+	create := func(col ColumnDefinition) func(context.Context) error {
+		return func(c context.Context) error {
+			return errOnly(scriptTestDB().CreateTable(c, CreateTableRequest{Schema: "dbo", Name: "t", Columns: []ColumnDefinition{col}}))
+		}
+	}
+	alter := func(col ColumnDefinition) func(context.Context) error {
+		return func(c context.Context) error { return scriptTestDB().TableRef("dbo", "t").AlterColumn(c, col) }
+	}
+	runScriptCases(t, []scriptCase{
+		{"CreateTable collated varchar", create(ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 20,
+			Collation: "Latin1_General_CS_AS", IsNullable: true}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [c] varchar(20) COLLATE Latin1_General_CS_AS NULL\n)"},
+		{"CreateTable collated ntext", create(ColumnDefinition{Name: "c", DataType: DataTypeNText, Collation: "SQL_Latin1_General_CP1_CS_AS"}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [c] ntext COLLATE SQL_Latin1_General_CP1_CS_AS NOT NULL\n)"},
+		{"AlterColumn explicit collation", alter(ColumnDefinition{Name: "c", DataType: DataTypeNVarChar, MaxLength: -1,
+			Collation: "Latin1_General_100_CI_AS_SC_UTF8"}),
+			scriptUsePrefix + "ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(MAX) COLLATE Latin1_General_100_CI_AS_SC_UTF8 NOT NULL"},
+	})
+}
+
+// A collation on a type that has none, or a name COLLATE cannot take bare,
+// is refused before anything is scripted.
+func TestColumnCollationRefusedWhenUnsayable(t *testing.T) {
+	for name, col := range map[string]ColumnDefinition{
+		"collation on int":       {DataType: DataTypeInt, Collation: "Latin1_General_CS_AS"},
+		"collation on varbinary": {DataType: DataTypeVarBinary, MaxLength: 10, Collation: "Latin1_General_CS_AS"},
+		"collation on xml":       {DataType: DataTypeXML, Collation: "Latin1_General_CS_AS"},
+		"injected collation":     {DataType: DataTypeVarChar, Collation: "Latin1_General_CS_AS NULL; DROP TABLE x --"},
+		"bracketed collation":    {DataType: DataTypeVarChar, Collation: "[Latin1_General_CS_AS]"},
+	} {
+		col.Name = "c"
+		ctx, script := WithScript(context.Background())
+		if _, err := scriptTestDB().CreateTable(ctx, CreateTableRequest{Schema: "dbo", Name: "t", Columns: []ColumnDefinition{col}}); !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("CreateTable with %s = %v, want ErrInvalidRequest", name, err)
+		}
+		if err := scriptTestDB().TableRef("dbo", "t").AlterColumn(ctx, col); !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("AlterColumn with %s = %v, want ErrInvalidRequest", name, err)
+		}
+		if n := len(script.Statements()); n != 0 {
+			t.Errorf("%s scripted %d statements, want none", name, n)
+		}
+	}
+}
+
+// AlterColumn with no Collation on a string column restates the one the
+// column has: ALTER COLUMN without COLLATE would reset it to the database
+// default. A column with none (NULL, a non-string column becoming a string
+// one) gets no clause; a non-string target is not read at all; a column the
+// read does not find is ErrNotFound and nothing is altered.
+func TestAlterColumnRestatesCurrentCollation(t *testing.T) {
+	const read = "FROM   sys.columns c"
+	collationRow := func(v driver.Value) cannedRow {
+		return cannedRow{match: read, cols: []string{"collation_name"}, row: []driver.Value{v}}
+	}
+	cases := []struct {
+		name   string
+		canned []cannedRow
+		col    ColumnDefinition
+		want   string // the ALTER sent; "" for none
+		reads  bool
+		notFnd bool
+	}{
+		{"keeps CS collation", []cannedRow{collationRow("Latin1_General_CS_AS")},
+			ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 50, IsNullable: true},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(50) COLLATE Latin1_General_CS_AS NULL", true, false},
+		{"none to restate", []cannedRow{collationRow(nil)},
+			ColumnDefinition{Name: "c", DataType: DataTypeNVarChar, MaxLength: 10},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(10) NOT NULL", true, false},
+		{"explicit wins", []cannedRow{collationRow("Latin1_General_CS_AS")},
+			ColumnDefinition{Name: "c", DataType: DataTypeChar, MaxLength: 3, Collation: "Latin1_General_CI_AS"},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] char(3) COLLATE Latin1_General_CI_AS NOT NULL", false, false},
+		{"non-string not read", []cannedRow{collationRow("Latin1_General_CS_AS")},
+			ColumnDefinition{Name: "c", DataType: DataTypeInt},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] int NOT NULL", false, false},
+		{"no such column", nil,
+			ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 5},
+			"", true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := captureServer(t, 17)
+			captured.reset(c.canned...)
+			err := (&Database{server: s, Name: "app"}).TableRef("dbo", "t").AlterColumn(t.Context(), c.col)
+			if c.notFnd {
+				if !errors.Is(err, ErrNotFound) {
+					t.Fatalf("err = %v, want ErrNotFound", err)
+				}
+			} else if err != nil {
+				t.Fatalf("AlterColumn: %v", err)
+			}
+			if q := captured.find(read); (q != "") != c.reads {
+				t.Errorf("collation read sent = %v, want %v", q != "", c.reads)
+			} else if c.reads && !strings.Contains(q, "c.name = @p2") {
+				t.Errorf("collation read %q does not match the column by name", q)
+			}
+			got := captured.find("ALTER TABLE")
+			if _, rest, ok := splitUseBatch(got); ok {
+				got = rest
+			}
+			if got != c.want {
+				t.Errorf("ALTER sent\n got %q\nwant %q", got, c.want)
+			}
+		})
+	}
+}
+
+// An identity column renders IDENTITY(seed,incr), and the zero value (both
+// 0) the bare IDENTITY — SQL Server's (1,1) — rather than IDENTITY(0,0),
+// which the server refuses (Msg 2753).
+func TestScriptIdentityColumn(t *testing.T) {
+	create := func(col ColumnDefinition) func(context.Context) error {
+		return func(c context.Context) error {
+			return errOnly(scriptTestDB().CreateTable(c, CreateTableRequest{Schema: "dbo", Name: "t", Columns: []ColumnDefinition{col}}))
+		}
+	}
+	scale0 := 0
+	prec := 18
+	runScriptCases(t, []scriptCase{
+		{"zero value", create(ColumnDefinition{Name: "id", DataType: DataTypeInt, IsIdentity: true}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [id] int IDENTITY NOT NULL\n)"},
+		{"explicit", create(ColumnDefinition{Name: "id", DataType: DataTypeBigInt, IsIdentity: true, IdentitySeed: 100, IdentityIncr: -5}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [id] bigint IDENTITY(100,-5) NOT NULL\n)"},
+		{"seed 0", create(ColumnDefinition{Name: "id", DataType: DataTypeTinyInt, IsIdentity: true, IdentityIncr: 1}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [id] tinyint IDENTITY(0,1) NOT NULL\n)"},
+		{"decimal scale 0", create(ColumnDefinition{Name: "id", DataType: DataTypeDecimal, Precision: &prec, Scale: &scale0,
+			IsIdentity: true, IdentitySeed: 1, IdentityIncr: 1}),
+			scriptUsePrefix + "CREATE TABLE [dbo].[t] (\n    [id] decimal(18,0) IDENTITY(1,1) NOT NULL\n)"},
+	})
+}
+
+// An identity the server would refuse is refused before anything is
+// scripted: an increment of 0 with a seed, a type that cannot be an
+// identity, a nullable identity and an identity with a default.
+func TestIdentityColumnRefusedWhenInvalid(t *testing.T) {
+	scale2 := 2
+	prec := 9
+	for name, col := range map[string]ColumnDefinition{
+		"increment 0":       {DataType: DataTypeInt, IsIdentity: true, IdentitySeed: 5},
+		"varchar identity":  {DataType: DataTypeVarChar, MaxLength: 5, IsIdentity: true},
+		"float identity":    {DataType: DataTypeFloat, IsIdentity: true},
+		"decimal scale 2":   {DataType: DataTypeDecimal, Precision: &prec, Scale: &scale2, IsIdentity: true},
+		"nullable identity": {DataType: DataTypeInt, IsIdentity: true, IsNullable: true},
+		"identity default":  {DataType: DataTypeInt, IsIdentity: true, DefaultValue: "1"},
+	} {
+		col.Name = "id"
+		ctx, script := WithScript(context.Background())
+		if _, err := scriptTestDB().CreateTable(ctx, CreateTableRequest{Schema: "dbo", Name: "t", Columns: []ColumnDefinition{col}}); !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("CreateTable with %s = %v, want ErrInvalidRequest", name, err)
 		}
 		if n := len(script.Statements()); n != 0 {
 			t.Errorf("%s scripted %d statements, want none", name, n)
