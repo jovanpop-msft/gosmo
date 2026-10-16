@@ -224,6 +224,18 @@ const databaseSessionPredicate = `s.is_user_process = 1 AND s.session_id <> @@SP
 // failed Msg 3702. The restore's CloseExistingConnections (Q4) has the same
 // shape; see buildRestoreStatement.
 //
+// Only a database in a state that accepts the ALTER (singleUserState) is set
+// SINGLE_USER. One that is RESTORING (Msg 5052) or RECOVERY_PENDING (Msg
+// 5181) refuses it, so the drop never ran and the refusal was the whole
+// answer — exactly when deleting the database is the usual next step (probed
+// on 17, 2026-10-15). Nobody can be connected to such a database, so op runs
+// as it is; the server's own refusal of op (sp_detach_db on a RECOVERY_PENDING
+// database, Msg 3707) is then the answer. A database in STANDBY can have
+// readers — the log-shipping secondary — so its sessions are killed instead,
+// as the restore does, and no access mode is set or released. The state is
+// tested in the batch, not read beforehand, so a state change between a read
+// and the write cannot bring the failure back.
+//
 // Two behaviours of the server, both probed on 17.0, fix the rest of the
 // shape:
 //
@@ -235,24 +247,47 @@ const databaseSessionPredicate = `s.is_user_process = 1 AND s.session_id <> @@SP
 // sp_detach_db aborts the batch despite being severity 16, so a trailing
 // repair never ran and the database stayed SINGLE_USER. Inside TRY the
 // failure goes to CATCH instead, which repairs and re-raises the original
-// error with THROW.
+// error with THROW. Only a database this batch set SINGLE_USER (@closed) is
+// released.
 func exclusiveBatch(name, op string) string {
 	db := quoteIdent(name)
+	standby := fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state = 0 AND is_in_standby = 1)", QuoteLiteral(name))
 	return fmt.Sprintf(`%[4]s
-DECLARE @closed bit = 0;
-ALTER DATABASE %[1]s SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-IF @@ERROR = 0 SET @closed = 1;
-IF @closed = 1
+DECLARE @closed bit = 0, @run bit = 0;
+IF %[6]s
+BEGIN
+    ALTER DATABASE %[1]s SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    IF @@ERROR = 0 SELECT @closed = 1, @run = 1;
+END
+ELSE IF %[7]s
+BEGIN
+%[8]s;
+    SET @run = 1;
+END
+ELSE SET @run = 1;
+IF @run = 1
 BEGIN TRY
     %[2]s;
 END TRY
 BEGIN CATCH
-    IF DB_ID(%[3]s) IS NOT NULL
+    IF @closed = 1 AND DB_ID(%[3]s) IS NOT NULL
     BEGIN
         %[5]s
     END;
     THROW;
-END CATCH;`, db, op, QuoteLiteral(name), captureAccessMode(name), releaseAccessMode(db, "        "))
+END CATCH;`, db, op, QuoteLiteral(name), captureAccessMode(name), releaseAccessMode(db, "        "),
+		singleUserState(name), standby, killDatabaseSessionsBatch(name))
+}
+
+// singleUserState is the EXISTS test that the database is in a state where
+// SET SINGLE_USER WITH ROLLBACK IMMEDIATE is accepted and can have sessions to
+// close: ONLINE and read-write (not in STANDBY), or EMERGENCY — which a
+// sysadmin can be connected to, and where the ALTER succeeds (probed on 17).
+// OFFLINE takes the ALTER too but has no sessions, so it is left out with
+// RESTORING, RECOVERY_PENDING and SUSPECT, which refuse it.
+func singleUserState(name string) string {
+	return fmt.Sprintf("EXISTS (SELECT 1 FROM sys.databases WHERE name = %s AND state IN (0, 5) AND is_in_standby = 0)",
+		QuoteLiteral(name))
 }
 
 // renameExclusiveBatch is exclusiveBatch for ALTER DATABASE … MODIFY NAME:

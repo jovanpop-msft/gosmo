@@ -196,20 +196,33 @@ func detFailOn(needle string) {
 }
 
 // assertExclusiveBatch checks stmt is exclusiveBatch's shape around op: the
-// access mode captured, SINGLE_USER, op gated on it having succeeded and
-// inside TRY, and a CATCH that releases a database still there to the
-// captured mode before re-raising. A trailing repair after op does not run —
-// a failed DROP DATABASE or sp_detach_db aborts the batch (probed) — so the
-// repair must be in the CATCH.
+// access mode captured, SINGLE_USER only for a database in a state that takes
+// it, STANDBY's sessions killed instead, any other state running op as it is,
+// op gated on @run and inside TRY, and a CATCH that releases to the captured
+// mode only a database the batch set SINGLE_USER and that is still there,
+// before re-raising. A trailing repair after op does not run — a failed DROP
+// DATABASE or sp_detach_db aborts the batch (probed) — so the repair must be
+// in the CATCH.
 func assertExclusiveBatch(t *testing.T, stmt, db, op string) {
 	t.Helper()
 	capture := strings.Index(stmt, "DECLARE @access nvarchar(60) = (SELECT user_access_desc FROM sys.databases WHERE name = N'")
-	single := strings.Index(stmt, "ALTER DATABASE "+db+" SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
-	gate := strings.Index(stmt, "IF @@ERROR = 0 SET @closed = 1;\nIF @closed = 1\nBEGIN TRY\n    "+op)
-	catch := strings.Index(stmt, "BEGIN CATCH\n    IF DB_ID(")
+	state := strings.Index(stmt, "DECLARE @closed bit = 0, @run bit = 0;\nIF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'")
+	single := strings.Index(stmt, "AND state IN (0, 5) AND is_in_standby = 0)\nBEGIN\n    ALTER DATABASE "+db+" SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n    IF @@ERROR = 0 SELECT @closed = 1, @run = 1;\nEND\n")
+	standby := strings.Index(stmt, "ELSE IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'")
+	kill := strings.Index(stmt, "AND state = 0 AND is_in_standby = 1)\nBEGIN\nDECLARE @db int = DB_ID(N'")
+	other := strings.Index(stmt, "    SET @run = 1;\nEND\nELSE SET @run = 1;\n")
+	gate := strings.Index(stmt, "IF @run = 1\nBEGIN TRY\n    "+op)
+	catch := strings.Index(stmt, "BEGIN CATCH\n    IF @closed = 1 AND DB_ID(")
 	release := strings.Index(stmt, "IS NOT NULL\n    BEGIN\n        "+releaseWant(db, "        ")+"\n    END;\n    THROW;\nEND CATCH;")
-	if capture != 0 || single < 0 || gate < 0 || catch < 0 || release < 0 || !(single < gate && gate < catch && catch < release) {
-		t.Errorf("batch is not the mode captured, SINGLE_USER, then %q gated on it in TRY, then a CATCH releasing a DB_ID-guarded database to the captured mode and THROW:\n%s", op, stmt)
+	order := []int{capture, state, single, standby, kill, other, gate, catch, release}
+	for i, at := range order {
+		if at < 0 || i > 0 && at < order[i-1] {
+			t.Errorf("batch is not the mode captured, SINGLE_USER when the state takes it, STANDBY's sessions killed, op as it is otherwise, then %q gated on @run in TRY, then a CATCH releasing only a database it closed, DB_ID-guarded, and THROW (part %d of %v):\n%s", op, i, order, stmt)
+			break
+		}
+	}
+	if capture != 0 {
+		t.Errorf("batch does not open by capturing the access mode:\n%s", stmt)
 	}
 	if !strings.HasSuffix(stmt, "END CATCH;") {
 		t.Errorf("something follows the CATCH, which a failed op never reaches:\n%s", stmt)

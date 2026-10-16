@@ -702,8 +702,15 @@ WHERE  SCHEMA_NAME(t.schema_id) COLLATE DATABASE_DEFAULT = @p1
 // Managed Instance, which refuses that statement, by killing the database's
 // sessions (see killDatabaseSessions). A forced drop that fails puts the
 // database back to the user-access mode it had — MULTI_USER, or
-// RESTRICTED_USER left as it was. This Server's own idle sessions are released
-// first either way (see ReleaseIdleConnections).
+// RESTRICTED_USER left as it was. A database that cannot be set SINGLE_USER
+// and has nobody to terminate — RESTORING, RECOVERY_PENDING, OFFLINE — is
+// dropped as it is, and one in STANDBY has its sessions killed instead (see
+// exclusiveBatch). This Server's own idle sessions are released first either
+// way (see ReleaseIdleConnections).
+//
+// SQL Server deletes only the files of a database it has open: dropping an
+// OFFLINE database leaves its data and log files on disk, an EMERGENCY one its
+// log file, and one in STANDBY its undo file (probed on 17).
 func (d *Database) Drop(ctx context.Context, term Termination) error {
 	s, name := d.server, d.Name
 	if name == "" {

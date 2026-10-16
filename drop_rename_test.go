@@ -885,3 +885,43 @@ func TestWithScriptForcedExclusiveWritesAreOneStatement(t *testing.T) {
 		}
 	}
 }
+
+// TestExclusiveBatchTakesSingleUserOnlyWhereTheStateAcceptsIt. A RESTORING
+// database refuses SET SINGLE_USER (Msg 5052) and a RECOVERY_PENDING one too
+// (Msg 5181), so a forced drop gated on the ALTER never ran — the database
+// left by an interrupted restore could not be deleted. Each branch, by the
+// condition that selects it: ONLINE read-write or EMERGENCY takes the ALTER
+// and alone is released; STANDBY has its readers killed; every other state
+// runs op as it is.
+func TestExclusiveBatchTakesSingleUserOnlyWhereTheStateAcceptsIt(t *testing.T) {
+	b := exclusiveBatch("App'DB", "DROP DATABASE [App'DB]")
+	branches := []struct {
+		name, cond, body string
+	}{
+		{"online or emergency: SINGLE_USER",
+			"IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'App''DB' AND state IN (0, 5) AND is_in_standby = 0)\nBEGIN\n",
+			"    ALTER DATABASE [App'DB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n    IF @@ERROR = 0 SELECT @closed = 1, @run = 1;\nEND\n"},
+		{"standby: kill the readers",
+			"ELSE IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'App''DB' AND state = 0 AND is_in_standby = 1)\nBEGIN\n",
+			killDatabaseSessionsBatch("App'DB") + ";\n    SET @run = 1;\nEND\n"},
+		{"any other state: op as it is",
+			"ELSE SET @run = 1;\n", ""},
+	}
+	at := 0
+	for _, br := range branches {
+		i := strings.Index(b[at:], br.cond+br.body)
+		if i < 0 {
+			t.Fatalf("%s: branch %q%q not found in order:\n%s", br.name, br.cond, br.body, b)
+		}
+		at += i + len(br.cond) + len(br.body)
+	}
+	if !strings.HasPrefix(b[at:], "IF @run = 1\nBEGIN TRY\n    DROP DATABASE [App'DB];\nEND TRY") {
+		t.Errorf("op does not follow the branches, gated on @run:\n%s", b[at:])
+	}
+	if strings.Count(b, "SET SINGLE_USER") != 1 {
+		t.Errorf("SINGLE_USER is set outside its branch:\n%s", b)
+	}
+	if !strings.Contains(b, "BEGIN CATCH\n    IF @closed = 1 AND DB_ID(N'App''DB') IS NOT NULL") {
+		t.Errorf("the CATCH releases a database the batch did not set SINGLE_USER:\n%s", b)
+	}
+}

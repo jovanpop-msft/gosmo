@@ -20,7 +20,8 @@ type DetachOptions struct {
 	// database with any other connection open refuses to detach. A detach
 	// that then fails is put back to the user-access mode it had, so a
 	// refusal never leaves the database single-user — same contract as
-	// Database.Rename.
+	// Database.Rename. A database with nobody to disconnect that refuses
+	// SINGLE_USER (RESTORING) is detached as it is (see exclusiveBatch).
 	DropConnections bool
 
 	// UpdateStatistics runs UPDATE STATISTICS across the database before
