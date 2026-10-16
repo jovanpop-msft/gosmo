@@ -540,6 +540,28 @@ func (i *ServerInfo) IsWindows() bool {
 	return strings.Contains(i.DefaultBackupPath, `\`)
 }
 
+// SupportsBackupCompression reports whether the edition accepts BACKUP ...
+// WITH COMPRESSION: Enterprise and Developer (EngineEdition 3), Standard (2)
+// but not Web, which shares Standard's EngineEdition and is told apart only by
+// the Edition string, and Managed Instance (8). Express (4) and the rest
+// refuse the clause with Msg 1844. NO_COMPRESSION is accepted everywhere, so
+// this gates only forcing compression on.
+//
+// A nil ServerInfo answers true: with nothing to go on, a caller offers the
+// option and lets the server's refusal speak, rather than hiding it.
+func (i *ServerInfo) SupportsBackupCompression() bool {
+	if i == nil {
+		return true
+	}
+	switch EngineEdition(i.EngineEdition) {
+	case EngineEnterprise, EngineAzureManagedInst:
+		return true
+	case EngineStandard:
+		return !strings.Contains(strings.ToLower(i.Edition), "web")
+	}
+	return false
+}
+
 // BackupInfo holds metadata about a specific database backup.
 type BackupInfo struct {
 	DatabaseName  string

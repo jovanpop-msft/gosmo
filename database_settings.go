@@ -143,3 +143,24 @@ func (d *Database) SetOnline(ctx context.Context) error {
 	setIfApplied(ctx, &d.State, "ONLINE")
 	return nil
 }
+
+// RecoverFromRestoring brings a database left RESTORING online by running
+// recovery on it: RESTORE DATABASE ... WITH RECOVERY, with no FROM clause.
+// That is the state a RESTORE ... WITH NORECOVERY, an interrupted restore,
+// or a log-shipping secondary leaves; SetOnline cannot reach it, since the
+// server refuses every ALTER DATABASE on a RESTORING database (Msg 5052).
+//
+// The server refuses recovery while the restore sequence is incomplete —
+// Msg 4303, "Additional roll forward past LSN … is required to complete the
+// restore sequence", after a file restore whose log is still to restore
+// (seen on 17, 2026-10-16). Its error is returned as is, so the caller can
+// show what is missing.
+func (d *Database) RecoverFromRestoring(ctx context.Context) error {
+	if err := d.server.exec(ctx,
+		fmt.Sprintf("RESTORE DATABASE %s WITH RECOVERY", quoteIdent(d.Name)),
+	); err != nil {
+		return fmt.Errorf("gosmo: recover %q from restoring: %w", d.Name, err)
+	}
+	setIfApplied(ctx, &d.State, "ONLINE")
+	return nil
+}

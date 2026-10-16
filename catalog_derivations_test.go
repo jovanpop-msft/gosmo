@@ -119,6 +119,34 @@ func TestServerInfoIsWindows(t *testing.T) {
 	}
 }
 
+// TestServerInfoSupportsBackupCompression pins the edition matrix. Answering
+// true on Express or Web hands the backup dialog a default that fails every
+// backup with Msg 1844; answering false on Standard hides a supported option.
+func TestServerInfoSupportsBackupCompression(t *testing.T) {
+	for _, tc := range []struct {
+		engine  EngineEdition
+		edition string
+		want    bool
+	}{
+		{EngineEnterprise, "Enterprise Edition (64-bit)", true},
+		{EngineEnterprise, "Developer Edition (64-bit)", true},
+		{EngineStandard, "Standard Edition (64-bit)", true},
+		{EngineStandard, "Web Edition (64-bit)", false},
+		{EngineExpress, "Express Edition (64-bit)", false},
+		{EngineExpress, "Express Edition with Advanced Services (64-bit)", false},
+		{EngineAzureManagedInst, "SQL Azure", true},
+		{EngineAzureSQLDatabase, "SQL Azure", false},
+	} {
+		info := &ServerInfo{EngineEdition: int(tc.engine), Edition: tc.edition}
+		if got := info.SupportsBackupCompression(); got != tc.want {
+			t.Errorf("%d %q: SupportsBackupCompression = %v, want %v", tc.engine, tc.edition, got, tc.want)
+		}
+	}
+	if !(*ServerInfo)(nil).SupportsBackupCompression() {
+		t.Error("a nil ServerInfo refuses compression; unknown must fail open")
+	}
+}
+
 // TestQueryStoreInfoIsReadable. READ_ONLY is what a Query Store that filled its
 // quota degrades to: it stopped collecting, but everything it already holds is
 // still worth reporting. Treating it as off would blank every report at exactly

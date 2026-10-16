@@ -74,7 +74,7 @@ func TestLiveRecoveryStatusTracksTheLogBackupChain(t *testing.T) {
 		if listed == nil {
 			t.Fatalf("%s: %s missing from the server-wide listing of %d databases", what, name, len(all))
 		}
-		if listed.LastLogBackupLSN != one.LastLogBackupLSN || listed.LogBackupChainStarted != one.LogBackupChainStarted {
+		if *listed != *one {
 			t.Errorf("%s: listing says %+v, by-name says %+v", what, listed, one)
 		}
 		return one
@@ -87,14 +87,29 @@ func TestLiveRecoveryStatusTracksTheLogBackupChain(t *testing.T) {
 	}
 	if st := statusOf(t, "before any backup"); st.LogBackupChainStarted {
 		t.Errorf("chain reported started before any backup, LSN %q", st.LastLogBackupLSN)
+	} else if !st.DifferentialBaseKnown || st.HasDifferentialBase {
+		// sa sees sys.master_files, so the base is known — and absent, which
+		// is what makes BACKUP ... WITH DIFFERENTIAL fail with Msg 3035.
+		t.Errorf("before any backup: base known %v, has base %v (LSN %q), want known and absent",
+			st.DifferentialBaseKnown, st.HasDifferentialBase, st.DifferentialBaseLSN)
 	}
 
 	device := liveBackupPath(t, srv, ctx, name+".bak")
+	defer db.ExecContext(context.Background(), "EXEC master.dbo.xp_delete_files @FilePath = N'"+device+"'")
+	defer db.ExecContext(context.Background(), "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = N'"+name+"'")
+
+	// A COPY_ONLY full sets no differential base and starts no chain: the
+	// server still refuses a differential after one (verified 2026-10-16).
+	if err := srv.Backup(ctx, BackupOptions{Database: name, Devices: []BackupTarget{DiskTarget(device)}, Init: true, CopyOnly: true}); err != nil {
+		t.Fatalf("copy-only backup: %v", err)
+	}
+	if st := statusOf(t, "after a copy-only full"); st.HasDifferentialBase || st.LogBackupChainStarted {
+		t.Errorf("after a copy-only full: has base %v, chain started %v, want neither", st.HasDifferentialBase, st.LogBackupChainStarted)
+	}
+
 	if err := srv.Backup(ctx, BackupOptions{Database: name, Devices: []BackupTarget{DiskTarget(device)}, Init: true}); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
-	defer db.ExecContext(context.Background(), "EXEC master.dbo.xp_delete_files @FilePath = N'"+device+"'")
-	defer db.ExecContext(context.Background(), "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = N'"+name+"'")
 
 	after := statusOf(t, "after a full backup")
 	if !after.LogBackupChainStarted {
@@ -102,6 +117,9 @@ func TestLiveRecoveryStatusTracksTheLogBackupChain(t *testing.T) {
 	}
 	if after.LastLogBackupLSN == "" {
 		t.Errorf("LogBackupChainStarted is true but LastLogBackupLSN is empty")
+	}
+	if !after.HasDifferentialBase || after.DifferentialBaseLSN == "" {
+		t.Errorf("no differential base after a full backup: %+v", after)
 	}
 
 	// Deleting the msdb history must not change the answer — the state lives
@@ -125,5 +143,9 @@ func TestLiveRecoveryStatusTracksTheLogBackupChain(t *testing.T) {
 	}
 	if st := statusOf(t, "after a SIMPLE round trip"); st.LogBackupChainStarted {
 		t.Errorf("chain reported started after a SIMPLE round trip, LSN %q", st.LastLogBackupLSN)
+	} else if !st.HasDifferentialBase {
+		// The base survives the round trip — a differential still works then,
+		// only the log chain is broken.
+		t.Errorf("differential base lost on a SIMPLE round trip: %+v", st)
 	}
 }

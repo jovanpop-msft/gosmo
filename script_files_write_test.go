@@ -89,6 +89,14 @@ func TestScriptDatabaseOptionWrites(t *testing.T) {
 		{"SetUserAccess", func(c context.Context) error {
 			return scriptTestDB().SetUserAccess(c, "SINGLE_USER")
 		}, "ALTER DATABASE [App'DB] SET SINGLE_USER WITH ROLLBACK IMMEDIATE"},
+		{"SetOnline", func(c context.Context) error {
+			return scriptTestDB().SetOnline(c)
+		}, "ALTER DATABASE [App'DB] SET ONLINE"},
+		// K3 (review plan 2026-10-16): a RESTORING database is refused every
+		// ALTER DATABASE; recovery is a RESTORE with no FROM clause.
+		{"RecoverFromRestoring", func(c context.Context) error {
+			return scriptTestDB().RecoverFromRestoring(c)
+		}, "RESTORE DATABASE [App'DB] WITH RECOVERY"},
 		{"SetDatabaseScopedConfig", func(c context.Context) error {
 			return scriptTestDB().SetDatabaseScopedConfig(c, "MAXDOP", "4", ScopedConfigPrimary)
 		}, scriptUsePrefix + "ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4"},

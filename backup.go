@@ -351,8 +351,49 @@ type DatabaseRecoveryStatus struct {
 	LastLogBackupLSN string
 
 	// LogBackupChainStarted is LastLogBackupLSN != "", named for the question
-	// callers actually ask.
+	// callers actually ask. A log backup needs it: without it BACKUP LOG fails
+	// with Msg 4214 ("there is no current database backup"), including after
+	// a full backup taken while the database was still SIMPLE.
 	LogBackupChainStarted bool
+
+	// DifferentialBaseLSN is the primary data file's differential base
+	// (sys.master_files.differential_base_lsn, file_id 1) — the full backup a
+	// differential is taken against — or "" when the column is NULL or the
+	// row is not visible. NULL means no full backup yet, and BACKUP ... WITH
+	// DIFFERENTIAL fails with Msg 3035. A COPY_ONLY full sets no base.
+	DifferentialBaseLSN string
+
+	// DifferentialBaseKnown reports whether the primary file's row was
+	// visible at all. sys.master_files shows a row only to a login with
+	// CREATE DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION, which a
+	// db_backupoperator need not have, so "" alone does not say "no base".
+	DifferentialBaseKnown bool
+
+	// HasDifferentialBase is DifferentialBaseLSN != "": a differential
+	// backup has a base to be taken against. Meaningful only when
+	// DifferentialBaseKnown.
+	HasDifferentialBase bool
+}
+
+// recoveryStatusSelect is the column list both recovery status reads scan
+// with scanRecoveryStatus. The LEFT JOIN keeps a database whose primary file
+// the caller cannot see; DifferentialBaseKnown records which case it was.
+const recoveryStatusSelect = `
+SELECT d.name, ISNULL(CONVERT(varchar(40), rs.last_log_backup_lsn), ''),
+       ISNULL(CONVERT(varchar(40), mf.differential_base_lsn), ''),
+       CAST(CASE WHEN mf.file_id IS NULL THEN 0 ELSE 1 END AS bit)
+FROM   sys.database_recovery_status rs
+JOIN   sys.databases d ON d.database_id = rs.database_id
+LEFT   JOIN sys.master_files mf ON mf.database_id = rs.database_id AND mf.file_id = 1`
+
+func scanRecoveryStatus(scan func(...any) error) (*DatabaseRecoveryStatus, error) {
+	st := &DatabaseRecoveryStatus{}
+	if err := scan(&st.DatabaseName, &st.LastLogBackupLSN, &st.DifferentialBaseLSN, &st.DifferentialBaseKnown); err != nil {
+		return nil, err
+	}
+	st.LogBackupChainStarted = st.LastLogBackupLSN != ""
+	st.HasDifferentialBase = st.DifferentialBaseLSN != ""
+	return st, nil
 }
 
 // DatabaseRecoveryStatuses returns the log backup chain state of every
@@ -362,38 +403,22 @@ type DatabaseRecoveryStatus struct {
 // caller deciding which databases qualify for something needs them all, and
 // sys.database_recovery_status is a server-scoped view.
 func (s *Server) DatabaseRecoveryStatuses(ctx context.Context) ([]*DatabaseRecoveryStatus, error) {
-	const q = `
-SELECT d.name, ISNULL(CONVERT(varchar(40), rs.last_log_backup_lsn), '')
-FROM   sys.database_recovery_status rs
-JOIN   sys.databases d ON d.database_id = rs.database_id
-ORDER  BY d.name`
-
-	rows, err := s.query(ctx, q)
-	return scanRows(rows, err, "database recovery statuses", func(scan func(...any) error) (*DatabaseRecoveryStatus, error) {
-		st := &DatabaseRecoveryStatus{}
-		if err := scan(&st.DatabaseName, &st.LastLogBackupLSN); err != nil {
-			return nil, err
-		}
-		st.LogBackupChainStarted = st.LastLogBackupLSN != ""
-		return st, nil
-	})
+	rows, err := s.query(ctx, recoveryStatusSelect+`
+ORDER  BY d.name`)
+	return scanRows(rows, err, "database recovery statuses", scanRecoveryStatus)
 }
 
 // RecoveryStatus returns this database's place in its log backup chain.
 func (d *Database) RecoveryStatus(ctx context.Context) (*DatabaseRecoveryStatus, error) {
-	const q = `
-SELECT d.name, ISNULL(CONVERT(varchar(40), rs.last_log_backup_lsn), '')
-FROM   sys.database_recovery_status rs
-JOIN   sys.databases d ON d.database_id = rs.database_id
-WHERE  d.name = @p1`
-
-	st := &DatabaseRecoveryStatus{}
+	var st *DatabaseRecoveryStatus
 	err := d.server.queryRow(ctx, func(r *sql.Row) error {
-		return r.Scan(&st.DatabaseName, &st.LastLogBackupLSN)
-	}, q, d.Name)
+		var err error
+		st, err = scanRecoveryStatus(func(dest ...any) error { return r.Scan(dest...) })
+		return err
+	}, recoveryStatusSelect+`
+WHERE  d.name = @p1`, d.Name)
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: recovery status for %q: %w", d.Name, err)
 	}
-	st.LogBackupChainStarted = st.LastLogBackupLSN != ""
 	return st, nil
 }

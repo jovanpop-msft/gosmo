@@ -897,3 +897,38 @@ func TestProgressIsIgnoredUnderWithScript(t *testing.T) {
 		t.Errorf("collected %d statements, want the BACKUP and the RESTORE: %v", n, col.Statements())
 	}
 }
+
+// scanRecoveryStatus derives the two answers callers ask from the raw LSNs.
+// An unseen primary file (DifferentialBaseKnown false) must not read as "no
+// base": a caller greying Differential on HasDifferentialBase alone would then
+// refuse a db_backupoperator a backup the server accepts.
+func TestScanRecoveryStatusDerivations(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		logLSN, baseLSN    string
+		known              bool
+		wantChain, wantHas bool
+	}{
+		{"never backed up", "", "", true, false, false},
+		{"full backup, SIMPLE", "", "62000000036000001", true, false, true},
+		{"full backup, FULL", "62000000040000001", "62000000036000001", true, true, true},
+		{"primary file not visible", "62000000040000001", "", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := scanRecoveryStatus(func(dest ...any) error {
+				*dest[0].(*string) = "AppDB"
+				*dest[1].(*string) = tc.logLSN
+				*dest[2].(*string) = tc.baseLSN
+				*dest[3].(*bool) = tc.known
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.DatabaseName != "AppDB" || st.LogBackupChainStarted != tc.wantChain ||
+				st.HasDifferentialBase != tc.wantHas || st.DifferentialBaseKnown != tc.known {
+				t.Errorf("got %+v, want chain %v, has base %v, known %v", st, tc.wantChain, tc.wantHas, tc.known)
+			}
+		})
+	}
+}
