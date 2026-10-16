@@ -22,14 +22,24 @@ import (
 // It is also the handle file writes go through: Alter and Drop address the
 // file by Name alone, so Database.FileRef is enough for either.
 type DatabaseFileInfo struct {
-	db              *Database
-	FileID          int
-	Name            string
-	PhysicalName    string
-	Type            string // "ROWS", "LOG", or "FILESTREAM" (sys.database_files.type_desc)
-	FileGroup       string // "" for log files, which don't belong to one
-	State           string // e.g. "ONLINE"
-	SizeKB          int64
+	db           *Database
+	FileID       int
+	Name         string
+	PhysicalName string
+	Type         string // "ROWS", "LOG", or "FILESTREAM" (sys.database_files.type_desc)
+	FileGroup    string // "" for log files, which don't belong to one
+	State        string // e.g. "ONLINE"
+	// SizeKB is the file's catalog size. For a database snapshot's sparse
+	// file that is a ceiling, not a footprint: the source file's size when
+	// the snapshot was taken, the most the sparse file can grow to.
+	// SizeOnDiskKB is what it occupies.
+	SizeKB int64
+	// SizeOnDiskKB is the space the file occupies on disk
+	// (sys.dm_io_virtual_file_stats.size_on_disk_bytes), filled by
+	// Server.DatabaseFiles only. 0 means unknown: Database.Files does not
+	// read it, the login lacks VIEW SERVER STATE (VIEW SERVER PERFORMANCE
+	// STATE from 2022), or the database is not online.
+	SizeOnDiskKB    int64
 	MaxSizeKB       int64 // -1 = unlimited
 	GrowthKB        int64 // 0 when IsPercentGrowth is true
 	GrowthPercent   int   // 0 when IsPercentGrowth is false
@@ -87,22 +97,37 @@ ORDER  BY df.type_desc, df.file_id`
 // A database the login cannot see reads as no rows rather than an error, the
 // way metadata visibility answers everywhere else.
 func (s *Server) DatabaseFiles(ctx context.Context, database string) ([]*DatabaseFileInfo, error) {
-	const q = `
+	// The DMV is refused outright without VIEW SERVER STATE (Msg 300), which
+	// would cost the whole read for one column, so the batch asks first and
+	// reads NULL instead. A DMV's permission is checked when its statement
+	// runs, so the branch not taken costs nothing. HAS_PERMS_BY_NAME answers
+	// NULL for the 2022 permission name on an older server.
+	const cols = `
 SELECT mf.file_id, mf.name, mf.physical_name, mf.type_desc, mf.state_desc,
-       CAST(mf.size AS bigint) * 8, mf.max_size, mf.growth, mf.is_percent_growth
-FROM   sys.master_files mf
+       CAST(mf.size AS bigint) * 8, mf.max_size, mf.growth, mf.is_percent_growth, `
+	const from = `
+FROM   sys.master_files mf`
+	const where = `
 WHERE  mf.database_id = DB_ID(@p1)
 ORDER  BY mf.type_desc, mf.file_id`
+	const q = `
+IF HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW SERVER STATE') = 1
+   OR HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW SERVER PERFORMANCE STATE') = 1` +
+		cols + `vfs.size_on_disk_bytes / 1024` + from + `
+OUTER  APPLY sys.dm_io_virtual_file_stats(mf.database_id, mf.file_id) vfs` + where + `
+ELSE` + cols + `CAST(NULL AS bigint)` + from + where
 
 	dbRef := s.DatabaseRef(database)
 	rows, err := s.query(ctx, q, database)
 	return scanRows(rows, err, fmt.Sprintf("list files in %q", database), func(scan func(...any) error) (*DatabaseFileInfo, error) {
 		f := &DatabaseFileInfo{db: dbRef}
 		var maxSizePages, growthRaw int64
+		var onDiskKB sql.NullInt64
 		if err := scan(&f.FileID, &f.Name, &f.PhysicalName, &f.Type, &f.State,
-			&f.SizeKB, &maxSizePages, &growthRaw, &f.IsPercentGrowth); err != nil {
+			&f.SizeKB, &maxSizePages, &growthRaw, &f.IsPercentGrowth, &onDiskKB); err != nil {
 			return nil, err
 		}
+		f.SizeOnDiskKB = onDiskKB.Int64
 		f.MaxSizeKB, f.GrowthKB, f.GrowthPercent = normalizeFileGrowth(maxSizePages, growthRaw, f.IsPercentGrowth)
 		return f, nil
 	})

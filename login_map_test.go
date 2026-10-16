@@ -96,11 +96,11 @@ func (c *mapConn) QueryContext(_ context.Context, q string, args []driver.NamedV
 	case strings.Contains(rest, "FROM sys.databases") && strings.Contains(rest, "WHERE name = @p1"):
 		name, _ := arg().(string)
 		if !mapLog.databases[name] {
-			return &detRows{cols: make([]string, 10)}, nil
+			return &detRows{cols: make([]string, 11)}, nil
 		}
-		return &detRows{cols: make([]string, 10), rows: [][]driver.Value{{
+		return &detRows{cols: make([]string, 11), rows: [][]driver.Value{{
 			name, int64(7), "ONLINE", "FULL", int64(160), "SQL_Latin1_General_CP1_CI_AS",
-			"DATABASE_DEFAULT", false, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), int64(0),
+			"DATABASE_DEFAULT", false, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), int64(0), false,
 		}}}, nil
 	case strings.Contains(rest, "SELECT sid, type_desc FROM sys.server_principals"):
 		name, _ := arg().(string)

@@ -44,6 +44,15 @@ type Database struct {
 	// snapshot out of the user-database list — Server.Databases returns it
 	// like any other row, because the catalog does.
 	SourceDatabaseID int
+
+	// IsDistributor is sys.databases.is_distributor: this is a replication
+	// Distributor's distribution database. It is not one of the four
+	// built-ins, so IsSystem answers false for it, but SSMS lists it under
+	// System Databases and it is dropped with sp_dropdistributiondb, not
+	// DROP DATABASE — a caller building a tree or offering destructive
+	// actions wants IsSystem() || IsDistributor. False on a DatabaseRef
+	// handle, like every other field.
+	IsDistributor bool
 }
 
 // systemDatabaseMaxID is the highest database_id SQL Server permanently

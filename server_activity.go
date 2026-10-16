@@ -229,10 +229,46 @@ type RequestActivity struct {
 	ActiveRequests    int
 	RunnableRequests  int
 	SuspendedRequests int
-	// BlockedRequests are requests waiting on another session
-	// (blocking_session_id set).
+	// BlockedRequests are requests waiting on another session, by the
+	// sessionBlockerJoin rule — a parallel request counts too.
 	BlockedRequests int
 }
+
+// sessionBlockerJoin derives the session a request is blocked by, for every
+// read that reports one (RequestActivity, BlockedRequests, ActiveSessions) so
+// they cannot drift. It needs sys.dm_exec_requests in scope as r.
+//
+// dm_exec_requests.blocking_session_id names the blocker of the request's own
+// task only. A request running a parallel plan waits on its workers
+// (CXCONSUMER/CXPACKET, blocking_session_id 0) while the lock wait sits on a
+// worker task — and sysprocesses puts that on an ecid > 0 row with a zero
+// sql_handle. sys.dm_os_waiting_tasks is the one view that names the blocker
+// for every task, so the blocker is the longest-waiting task's whose blocker
+// is another session, falling back to the request's own column: that keeps
+// the negative ids (-2 orphaned DTC, -3 deferred recovery, -4 latch owner) a
+// worker never reports. The column's own session id — an exchange wait on
+// some builds — is not a blocker and reads 0. The wait reported with it is that task's, not the
+// coordinator's exchange wait.
+//
+// The waiting tasks are ranked once in a derived table, not per request in
+// an APPLY: an activity monitor reads this every few seconds, and each APPLY
+// would scan the DMV again.
+const sessionBlockerJoin = `
+LEFT   JOIN (SELECT session_id, blocking_session_id, wait_type, wait_duration_ms,
+                    ROW_NUMBER() OVER (PARTITION BY session_id
+                                       ORDER BY wait_duration_ms DESC, blocking_session_id) AS rn
+             FROM   sys.dm_os_waiting_tasks
+             WHERE  blocking_session_id > 0
+               AND  blocking_session_id <> session_id) AS wb
+         ON wb.session_id = r.session_id AND wb.rn = 1`
+
+// The columns sessionBlockerJoin derives: blocker, wait type and wait time,
+// zero values for a session with no request.
+const (
+	sessionBlockerID       = `COALESCE(wb.blocking_session_id, NULLIF(r.blocking_session_id, r.session_id), 0)`
+	sessionBlockerWaitType = `COALESCE(wb.wait_type, r.wait_type, N'')`
+	sessionBlockerWaitMS   = `COALESCE(wb.wait_duration_ms, r.wait_time, 0)`
+)
 
 // RequestActivity counts the user sessions and the requests they are running.
 func (s *Server) RequestActivity(ctx context.Context) (RequestActivity, error) {
@@ -242,10 +278,10 @@ SELECT COUNT(DISTINCT s.session_id),
        COUNT(r.session_id),
        ISNULL(SUM(CASE WHEN r.status = 'runnable' THEN 1 ELSE 0 END), 0),
        ISNULL(SUM(CASE WHEN r.status = 'suspended' THEN 1 ELSE 0 END), 0),
-       ISNULL(SUM(CASE WHEN r.blocking_session_id <> 0 THEN 1 ELSE 0 END), 0)
+       ISNULL(SUM(CASE WHEN `+sessionBlockerID+` <> 0 THEN 1 ELSE 0 END), 0)
 FROM   sys.dm_exec_sessions AS s
 LEFT   JOIN sys.dm_exec_requests AS r
-         ON r.session_id = s.session_id AND r.session_id <> @@SPID
+         ON r.session_id = s.session_id AND r.session_id <> @@SPID`+sessionBlockerJoin+`
 WHERE  s.is_user_process = 1`, nil,
 		&a.UserSessions, &a.ActiveRequests, &a.RunnableRequests, &a.SuspendedRequests, &a.BlockedRequests)
 	if err != nil {
@@ -257,7 +293,9 @@ WHERE  s.is_user_process = 1`, nil,
 // BlockedRequest is one request waiting on another session, as
 // BlockedRequests reports it.
 type BlockedRequest struct {
-	SessionID  int
+	SessionID int
+	// WaitType and WaitTimeMS are the wait on the blocker — a parallel
+	// request's blocked worker's, not its own exchange wait.
 	WaitType   string
 	WaitTimeMS int64
 	// BlockingSessionID is the session it waits on directly, which may itself
@@ -271,7 +309,7 @@ type BlockedRequest struct {
 }
 
 // BlockedRequests returns the requests of one client process that are blocked
-// by another session, longest wait first. The process is the one whose
+// by another session (sessionBlockerJoin), longest wait first. The process is the one whose
 // sessions report clientPID as their host_process_id from the caller's own
 // host (HOST_NAME()), so a client finds its own pooled connections waiting
 // with its process id — go-mssqldb sends os.Getpid() at login. The reading
@@ -284,16 +322,19 @@ type BlockedRequest struct {
 // two apart.
 func (s *Server) BlockedRequests(ctx context.Context, clientPID int) ([]BlockedRequest, error) {
 	const q = `
-SELECT r.session_id, ISNULL(r.wait_type, N''), r.wait_time, r.blocking_session_id,
+SELECT r.session_id, x.wait_type, x.wait_ms, x.blocker,
        ISNULL(b.login_name, N''), ISNULL(b.host_name, N''), ISNULL(b.program_name, N'')
 FROM   sys.dm_exec_requests AS r
-JOIN   sys.dm_exec_sessions AS s ON s.session_id = r.session_id
-LEFT   JOIN sys.dm_exec_sessions AS b ON b.session_id = r.blocking_session_id
-WHERE  r.blocking_session_id > 0
+JOIN   sys.dm_exec_sessions AS s ON s.session_id = r.session_id` + sessionBlockerJoin + `
+CROSS  APPLY (SELECT ` + sessionBlockerID + ` AS blocker,
+                     ` + sessionBlockerWaitType + ` AS wait_type,
+                     ` + sessionBlockerWaitMS + ` AS wait_ms) AS x
+LEFT   JOIN sys.dm_exec_sessions AS b ON b.session_id = x.blocker
+WHERE  x.blocker > 0
   AND  r.session_id <> @@SPID
   AND  s.host_process_id = @p1
   AND  s.host_name = HOST_NAME()
-ORDER  BY r.wait_time DESC, r.session_id`
+ORDER  BY x.wait_ms DESC, r.session_id`
 
 	rows, err := s.query(ctx, q, clientPID)
 	return scanRows(rows, err, "blocked requests", func(scan func(...any) error) (BlockedRequest, error) {

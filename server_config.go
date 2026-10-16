@@ -467,17 +467,21 @@ func (s *Server) Languages(ctx context.Context) ([]*Language, error) {
 
 // ActiveSession holds information about one session from sys.dm_exec_sessions.
 type ActiveSession struct {
-	SessionID         int
-	LoginName         string
-	HostName          string
-	ProgramName       string
-	DatabaseName      string
-	Status            string
-	CPUTime           int64
-	MemoryUsage       int64
-	TotalElapsedMS    int64
-	LastRequestStart  string
-	CommandText       string
+	SessionID        int
+	LoginName        string
+	HostName         string
+	ProgramName      string
+	DatabaseName     string
+	Status           string
+	CPUTime          int64
+	MemoryUsage      int64
+	TotalElapsedMS   int64
+	LastRequestStart string
+	CommandText      string
+	// BlockingSessionID is the session a request of this one is blocked by,
+	// 0 for none — a parallel request's blocked worker counts
+	// (sessionBlockerJoin). WaitType and WaitTimeMS are that worker's wait
+	// when it is one, else the request's.
 	BlockingSessionID int
 	WaitType          string
 	WaitTimeMS        int64
@@ -512,11 +516,11 @@ SELECT s.session_id, ISNULL(s.login_name, ''), ISNULL(s.host_name, ''), ISNULL(s
        s.cpu_time, s.memory_usage, s.total_elapsed_time,
        CONVERT(VARCHAR(30), s.last_request_start_time, 121),
        ISNULL(SUBSTRING(t.text, 1, 512), ''),
-       ISNULL(r.blocking_session_id, 0),
-       ISNULL(r.wait_type, ''),
-       ISNULL(r.wait_time, 0)
+       `+sessionBlockerID+`,
+       `+sessionBlockerWaitType+`,
+       `+sessionBlockerWaitMS+`
 FROM   sys.dm_exec_sessions s
-LEFT   JOIN sys.dm_exec_requests r ON r.session_id = s.session_id
+LEFT   JOIN sys.dm_exec_requests r ON r.session_id = s.session_id`+sessionBlockerJoin+`
 OUTER  APPLY sys.dm_exec_sql_text(r.sql_handle) t
 WHERE  s.session_id != @@SPID %s
 ORDER  BY s.session_id`, sysFilter)

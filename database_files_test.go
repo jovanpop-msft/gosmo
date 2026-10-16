@@ -205,3 +205,48 @@ func TestFileSizesAreSummedInBigint(t *testing.T) {
 		}
 	}
 }
+
+// TestDatabaseFilesReadsSizeOnDisk pins the column a snapshot's real size
+// comes from: sys.master_files.size is the sparse file's ceiling, so the
+// footprint must come from dm_io_virtual_file_stats — and without the right
+// to read it, the batch must fall back to NULL (read as 0, "unknown") rather
+// than let Msg 300 fail the whole file list.
+func TestDatabaseFilesReadsSizeOnDisk(t *testing.T) {
+	cols := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	rows := [][]driver.Value{
+		{int64(1), "snap", `C:\data\snap.ss`, "ROWS", "ONLINE", int64(65536), int64(-1), int64(8192), false, int64(128)},
+		{int64(3), "snap2", `C:\data\snap2.ss`, "ROWS", "ONLINE", int64(8192), int64(-1), int64(8192), false, nil},
+	}
+	d := qsRecDB(t, 17, cols, rows)
+
+	files, err := d.server.DatabaseFiles(context.Background(), "snap")
+	if err != nil {
+		t.Fatalf("DatabaseFiles: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2", len(files))
+	}
+	if f := files[0]; f.SizeKB != 65536 || f.SizeOnDiskKB != 128 {
+		t.Errorf("snap: SizeKB %d, SizeOnDiskKB %d; want 65536 and 128", f.SizeKB, f.SizeOnDiskKB)
+	}
+	if f := files[1]; f.SizeOnDiskKB != 0 {
+		t.Errorf("snap2: SizeOnDiskKB = %d for a NULL reading, want 0 (unknown)", f.SizeOnDiskKB)
+	}
+
+	sql := strings.Join(strings.Fields(qsRec.last(t).sql), " ")
+	for _, want := range []string{
+		"OUTER APPLY sys.dm_io_virtual_file_stats(mf.database_id, mf.file_id)",
+		"size_on_disk_bytes / 1024",
+		"HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW SERVER STATE') = 1",
+		"HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW SERVER PERFORMANCE STATE') = 1",
+		"ELSE",
+		"CAST(NULL AS bigint)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("DatabaseFiles SQL lacks %q:\n%s", want, sql)
+		}
+	}
+	if strings.Count(sql, "WHERE mf.database_id = DB_ID(@p1)") != 2 {
+		t.Errorf("both branches must filter to the one database:\n%s", sql)
+	}
+}

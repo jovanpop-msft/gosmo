@@ -712,7 +712,7 @@ func (s *Server) databaseSelect() string {
 	return `
 	SELECT name, database_id, state_desc, recovery_model_desc,
 	       compatibility_level, collation_name, ` + catalogCollationExpr(s.serverMajorVersion()) + `,
-	       is_read_only, create_date, ISNULL(source_database_id, 0)
+	       is_read_only, create_date, ISNULL(source_database_id, 0), is_distributor
 	FROM sys.databases`
 }
 
@@ -724,7 +724,7 @@ func scanDatabase(s *Server, scan func(...any) error) (*Database, error) {
 	if err := scan(
 		&d.Name, &d.ID, &state, &recovery,
 		&compatLevel, &collation, &catalogCollation, &d.IsReadOnly, &d.CreateDate,
-		&d.SourceDatabaseID,
+		&d.SourceDatabaseID, &d.IsDistributor,
 	); err != nil {
 		return nil, err
 	}

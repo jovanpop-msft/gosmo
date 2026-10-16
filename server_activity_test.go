@@ -306,3 +306,63 @@ func TestBlockedRequestsScansEveryColumnAndPassesThePID(t *testing.T) {
 		t.Errorf("args = %+v, want the client PID 4242", c.args)
 	}
 }
+
+// TestBlockerReadsUseTheWaitingTasks pins the parallel-blocking rule in each
+// read that reports a blocker: a request running a parallel plan waits on its
+// workers (blocking_session_id 0), and only sys.dm_os_waiting_tasks names the
+// session a worker's lock wait is on. Spelled out literally, so the test fails
+// when a read goes back to dm_exec_requests alone.
+func TestBlockerReadsUseTheWaitingTasks(t *testing.T) {
+	norm := func(q string) string { return strings.Join(strings.Fields(q), " ") }
+	common := []string{
+		"FROM sys.dm_os_waiting_tasks WHERE blocking_session_id > 0 AND blocking_session_id <> session_id",
+		"ORDER BY wait_duration_ms DESC, blocking_session_id",
+		"ON wb.session_id = r.session_id AND wb.rn = 1",
+	}
+
+	s, c := activityServer(t, activityReply{key: "dm_exec_requests", cols: cols(5), rows: [][]driver.Value{
+		{int64(1), int64(1), int64(0), int64(1), int64(1)},
+	}})
+	if _, err := s.RequestActivity(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reqActivity := norm(c.query)
+
+	s, c = activityServer(t, activityReply{key: "dm_exec_requests", cols: cols(7)})
+	if _, err := s.BlockedRequests(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	blocked := norm(c.query)
+
+	d := qsRecDB(t, 17, nil, nil)
+	if _, err := d.server.ActiveSessions(t.Context(), AllSessions); err != nil {
+		t.Fatal(err)
+	}
+	sessions := norm(qsRec.last(t).sql)
+
+	for _, tc := range []struct {
+		read, q string
+		want    []string
+	}{
+		{"RequestActivity", reqActivity, []string{
+			"CASE WHEN COALESCE(wb.blocking_session_id, NULLIF(r.blocking_session_id, r.session_id), 0) <> 0 THEN 1",
+		}},
+		{"BlockedRequests", blocked, []string{
+			"COALESCE(wb.blocking_session_id, NULLIF(r.blocking_session_id, r.session_id), 0) AS blocker",
+			// The coordinator's own wait is the exchange wait; the wait time
+			// shown is the blocked worker's.
+			"COALESCE(wb.wait_duration_ms, r.wait_time, 0) AS wait_ms",
+			"WHERE x.blocker > 0",
+			"ORDER BY x.wait_ms DESC",
+		}},
+		{"ActiveSessions", sessions, []string{
+			"COALESCE(wb.blocking_session_id, NULLIF(r.blocking_session_id, r.session_id), 0), COALESCE(wb.wait_type, r.wait_type, N''), COALESCE(wb.wait_duration_ms, r.wait_time, 0)",
+		}},
+	} {
+		for _, w := range append(common, tc.want...) {
+			if !strings.Contains(tc.q, w) {
+				t.Errorf("%s lacks %q:\n%s", tc.read, w, tc.q)
+			}
+		}
+	}
+}

@@ -56,6 +56,16 @@ func TestLiveReplicationInfo(t *testing.T) {
 	if info.DistributorDetailsHidden {
 		t.Error("DistributorDetailsHidden for sysadmin")
 	}
+	// Database.IsDistributor marks the distribution database, which
+	// IsSystem (the four built-ins) does not.
+	if dist, err := srv.DatabaseByName(ctx, "distribution"); err != nil {
+		t.Errorf("DatabaseByName(distribution): %v", err)
+	} else if !dist.IsDistributor || dist.IsSystem() {
+		t.Errorf("distribution: IsDistributor=%v IsSystem=%v, want true/false", dist.IsDistributor, dist.IsSystem())
+	}
+	if m, err := srv.DatabaseByName(ctx, "master"); err != nil || m.IsDistributor {
+		t.Errorf("master: IsDistributor=%v err=%v, want false", m != nil && m.IsDistributor, err)
+	}
 	if !flags[replFixtureTranDB].Readable || !flags[replFixtureMergeDB].Readable {
 		t.Errorf("published databases not Readable to sysadmin: %+v", info.Databases)
 	}
