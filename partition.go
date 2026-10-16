@@ -381,6 +381,11 @@ ORDER  BY p.partition_number`
 // (nonclustered) index's row data, LOBKB is off-row large-object storage,
 // and UnusedKB is reserved-but-not-yet-used space within already allocated
 // extents.
+//
+// The four parts never overlap, so they sum to ReservedKB: each allocation
+// unit counts once, by type first. LOBKB takes every LOB_DATA unit, a
+// nonclustered index's included varchar(max) columns as well as the base
+// table's, and DataKB and IndexKB take only IN_ROW_DATA and ROW_OVERFLOW_DATA.
 type TableSpaceInfo struct {
 	ReservedKB int64
 	DataKB     int64
@@ -399,7 +404,7 @@ func (t *Table) SpaceUsed(ctx context.Context) (*TableSpaceInfo, error) {
 SELECT
     SUM(a.total_pages) * 8 AS reserved_kb,
     SUM(CASE WHEN i.index_id IN (0,1) AND a.type IN (1,3) THEN a.used_pages ELSE 0 END) * 8 AS data_kb,
-    SUM(CASE WHEN i.index_id > 1 THEN a.used_pages ELSE 0 END) * 8 AS index_kb,
+    SUM(CASE WHEN i.index_id > 1 AND a.type IN (1,3) THEN a.used_pages ELSE 0 END) * 8 AS index_kb,
     SUM(CASE WHEN a.type = 2 THEN a.used_pages ELSE 0 END) * 8 AS lob_kb,
     SUM(a.total_pages - a.used_pages) * 8 AS unused_kb,
     (SELECT TOP 1 fg.name
@@ -448,7 +453,7 @@ SELECT
     p.object_id,
     SUM(a.total_pages) * 8 AS reserved_kb,
     SUM(CASE WHEN i.index_id IN (0,1) AND a.type IN (1,3) THEN a.used_pages ELSE 0 END) * 8 AS data_kb,
-    SUM(CASE WHEN i.index_id > 1 THEN a.used_pages ELSE 0 END) * 8 AS index_kb,
+    SUM(CASE WHEN i.index_id > 1 AND a.type IN (1,3) THEN a.used_pages ELSE 0 END) * 8 AS index_kb,
     SUM(CASE WHEN a.type = 2 THEN a.used_pages ELSE 0 END) * 8 AS lob_kb,
     SUM(a.total_pages - a.used_pages) * 8 AS unused_kb,
     MIN(fg.name) AS filegroup

@@ -218,13 +218,13 @@ func TestHostCPUReadsTheNewestRecordOrZero(t *testing.T) {
 }
 
 func TestTempDBReadsConvertPagesToMB(t *testing.T) {
-	s, _ := activityServer(t,
+	s, c := activityServer(t,
 		activityReply{key: "SUM(CAST(total_page_count", cols: cols(6), rows: [][]driver.Value{
 			{int64(1280), int64(640), int64(128), int64(256), int64(64), int64(32)},
 		}},
-		activityReply{key: "tempdb.sys.database_files", cols: cols(7), rows: [][]driver.Value{
+		activityReply{key: "FILEPROPERTY(name, 'SpaceUsed')", cols: cols(7), rows: [][]driver.Value{
 			{int64(1), "tempdev", "ROWS", int64(1024), int64(256), int64(8192), false},
-			{int64(2), "templog", "LOG", int64(512), int64(0), int64(10), true},
+			{int64(2), "templog", "LOG", int64(512), int64(64), int64(10), true},
 		}},
 		activityReply{key: "tempdb.sys.objects", cols: cols(5), rows: [][]driver.Value{
 			{int64(1), int64(2), int64(128), int64(64), int64(99)},
@@ -249,8 +249,12 @@ func TestTempDBReadsConvertPagesToMB(t *testing.T) {
 	}
 	if len(files) != 2 ||
 		files[0] != (TempDBFile{FileID: 1, Name: "tempdev", Type: "ROWS", SizeMB: 8, UsedMB: 2, GrowthMB: 64}) ||
-		files[1] != (TempDBFile{FileID: 2, Name: "templog", Type: "LOG", SizeMB: 4, GrowthMB: 10, PercentGrowth: true}) {
+		files[1] != (TempDBFile{FileID: 2, Name: "templog", Type: "LOG", SizeMB: 4, UsedMB: 0.5, GrowthMB: 10, PercentGrowth: true}) {
 		t.Errorf("TempDBFiles = %+v (a percentage growth must stay a percentage)", files)
+	}
+	// FILEPROPERTY answers for the current database only.
+	if q := c.query; !strings.HasPrefix(q, "USE [tempdb];") {
+		t.Errorf("TempDBFiles ran %q, want it in tempdb", q)
 	}
 
 	objs, err := s.TempDBObjects(ctx)
@@ -259,6 +263,11 @@ func TestTempDBReadsConvertPagesToMB(t *testing.T) {
 	}
 	if len(objs) != 1 || objs[0] != (TempDBObjects{Kind: TempDBGlobalTemp, Count: 2, ReservedMB: 1, UsedMB: 0.5, Rows: 99}) {
 		t.Errorf("TempDBObjects = %+v", objs)
+	}
+	// Every index has its own partition rows; only the heap or clustered
+	// index's count the table's rows.
+	if !strings.Contains(c.query, "SUM(CASE WHEN index_id < 2 THEN row_count ELSE 0 END)") {
+		t.Errorf("TempDBObjects sums rows over every index:\n%s", c.query)
 	}
 
 	sess, err := s.TempDBSessions(ctx)

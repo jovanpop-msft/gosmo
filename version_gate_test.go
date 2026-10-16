@@ -215,8 +215,8 @@ func TestTableDetailSelectGatesTheLedgerColumn(t *testing.T) {
 		if got := strings.Contains(q, "ledger_type_desc"); got != c.wantNamed {
 			t.Errorf("major %d names ledger_type_desc = %v, want %v", c.major, got, c.wantNamed)
 		}
-		if got := len(selectExprs(t, selectList(t, q))); got != 10 {
-			t.Errorf("major %d selects %d expressions, want 10 — Detail scans 10 destinations", c.major, got)
+		if got := len(selectExprs(t, selectList(t, q))); got != 11 {
+			t.Errorf("major %d selects %d expressions, want 11 — Detail scans 11 destinations", c.major, got)
 		}
 	}
 }

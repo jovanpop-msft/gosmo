@@ -57,8 +57,8 @@ FROM   tempdb.sys.dm_db_file_space_usage`, nil, &total, &free, &version, &user, 
 	}, nil
 }
 
-// TempDBFile is one tempdb file. A log file's UsedMB is zero: its allocation
-// is not in dm_db_file_space_usage.
+// TempDBFile is one tempdb file. UsedMB is the file's used space, its log
+// included.
 type TempDBFile struct {
 	FileID int
 	Name   string
@@ -73,18 +73,22 @@ type TempDBFile struct {
 
 // TempDBFiles lists tempdb's files, data files first, each in file_id order.
 //
-// It reads tempdb.sys.database_files, not sys.master_files: master_files has
-// the configured size tempdb is recreated at on restart, database_files the
-// size it has actually grown to.
+// It reads tempdb's sys.database_files, not sys.master_files: master_files
+// has the configured size tempdb is recreated at on restart, database_files
+// the size it has actually grown to.
+//
+// Used space is FILEPROPERTY(name, 'SpaceUsed'), which answers for the
+// current database only, so this read runs in tempdb (USE), unlike the others
+// in this file. dm_db_file_space_usage, which they use, has rows for data
+// files only: joined to it, the log read as empty however full it was.
 func (s *Server) TempDBFiles(ctx context.Context) ([]TempDBFile, error) {
-	rows, err := s.query(ctx, `
-SELECT df.file_id, df.name, df.type_desc,
-       CAST(df.size AS bigint),
-       CAST(ISNULL(fsu.total_page_count - fsu.unallocated_extent_page_count, 0) AS bigint),
-       df.growth, df.is_percent_growth
-FROM   tempdb.sys.database_files df
-LEFT   JOIN tempdb.sys.dm_db_file_space_usage fsu ON fsu.file_id = df.file_id
-ORDER  BY df.type_desc DESC, df.file_id`)
+	rows, err := s.DatabaseRef("tempdb").query(ctx, `
+SELECT file_id, name, type_desc,
+       CAST(size AS bigint),
+       CAST(ISNULL(FILEPROPERTY(name, 'SpaceUsed'), 0) AS bigint),
+       growth, is_percent_growth
+FROM   sys.database_files
+ORDER  BY type_desc DESC, file_id`)
 	return scanRows(rows, err, "list tempdb files", func(scan func(...any) error) (TempDBFile, error) {
 		var f TempDBFile
 		var sizePages, usedPages, growth int64
@@ -119,7 +123,9 @@ const (
 	TempDBSystem
 )
 
-// TempDBObjects is one kind's footprint in tempdb.
+// TempDBObjects is one kind's footprint in tempdb. ReservedMB and UsedMB
+// cover every index; Rows counts each table's rows once, from its heap or
+// clustered index.
 type TempDBObjects struct {
 	Kind       TempDBObjectKind
 	Count      int
@@ -133,7 +139,8 @@ type TempDBObjects struct {
 func (s *Server) TempDBObjects(ctx context.Context) ([]TempDBObjects, error) {
 	rows, err := s.query(ctx, `
 SELECT kind, COUNT(DISTINCT object_id),
-       SUM(reserved_page_count), SUM(used_page_count), SUM(row_count)
+       SUM(reserved_page_count), SUM(used_page_count),
+       SUM(CASE WHEN index_id < 2 THEN row_count ELSE 0 END)
 FROM (
     SELECT o.object_id,
            CASE WHEN o.type = 'IT' THEN 3
@@ -141,7 +148,7 @@ FROM (
                 WHEN o.name LIKE '##%' THEN 1
                 WHEN o.name LIKE '#%' THEN 0
                 ELSE 2 END AS kind,
-           ps.reserved_page_count, ps.used_page_count, ps.row_count
+           ps.index_id, ps.reserved_page_count, ps.used_page_count, ps.row_count
     FROM   tempdb.sys.objects o
     JOIN   tempdb.sys.dm_db_partition_stats ps ON ps.object_id = o.object_id
 ) x

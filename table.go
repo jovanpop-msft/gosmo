@@ -88,16 +88,20 @@ func (t *Table) Database() *Database { return t.db }
 // and the scripter, so it stays lean) — SSMS's Table Properties > General
 // page's "Object details" and "Dependencies" sections.
 type TableDetail struct {
-	SchemaOwner    string
-	LockEscalation string // e.g. "TABLE", "AUTO", "DISABLE"
-	UsesAnsiNulls  bool
-	IsReplicated   bool
-	IsTrackedByCDC bool
-	TemporalType   string // e.g. "NON_TEMPORAL_TABLE", "SYSTEM_VERSIONED_TEMPORAL_TABLE"
-	Durability     string // "SCHEMA_AND_DATA" or "SCHEMA_ONLY" — memory-optimized tables only
-	LedgerType     string // e.g. "NON_LEDGER_TABLE", "APPEND_ONLY_LEDGER_TABLE"
-	PrimaryKeyName string // "" if the table has no primary key
-	DataSpace      string // filegroup (or partition scheme) backing the heap/clustered index
+	// Owner is the table's owner: the principal named by ALTER
+	// AUTHORIZATION ON OBJECT:: when one was set (sys.tables.principal_id),
+	// otherwise its schema's owner, which OwnedBySchemaOwner then reports.
+	Owner              string
+	OwnedBySchemaOwner bool
+	LockEscalation     string // e.g. "TABLE", "AUTO", "DISABLE"
+	UsesAnsiNulls      bool
+	IsReplicated       bool
+	IsTrackedByCDC     bool
+	TemporalType       string // e.g. "NON_TEMPORAL_TABLE", "SYSTEM_VERSIONED_TEMPORAL_TABLE"
+	Durability         string // "SCHEMA_AND_DATA" or "SCHEMA_ONLY" — memory-optimized tables only
+	LedgerType         string // e.g. "NON_LEDGER_TABLE", "APPEND_ONLY_LEDGER_TABLE"
+	PrimaryKeyName     string // "" if the table has no primary key
+	DataSpace          string // filegroup (or partition scheme) backing the heap/clustered index
 }
 
 // Detail returns TableDetail for the table.
@@ -108,7 +112,7 @@ func (t *Table) Detail(ctx context.Context) (*TableDetail, error) {
 	d := &TableDetail{}
 	if err := t.db.queryRow(ctx, func(row *sql.Row) error {
 		return row.Scan(
-			&d.SchemaOwner, &d.LockEscalation, &d.UsesAnsiNulls,
+			&d.Owner, &d.OwnedBySchemaOwner, &d.LockEscalation, &d.UsesAnsiNulls,
 			&d.IsReplicated, &d.IsTrackedByCDC, &d.TemporalType,
 			&d.Durability, &d.LedgerType, &d.PrimaryKeyName, &d.DataSpace,
 		)
@@ -127,7 +131,8 @@ func (t *Table) detailSelect() string {
 	// substitute.
 	// https://learn.microsoft.com/sql/relational-databases/security/ledger/ledger-overview
 	return `
-SELECT owner.name, t.lock_escalation_desc, t.uses_ansi_nulls,
+SELECT owner.name, CAST(CASE WHEN t.principal_id IS NULL THEN 1 ELSE 0 END AS bit),
+       t.lock_escalation_desc, t.uses_ansi_nulls,
        t.is_replicated, t.is_tracked_by_cdc, t.temporal_type_desc,
        t.durability_desc,
        ` + colSince(t.db.serverMajorVersion(), SQLServer2022, "t.ledger_type_desc", "CAST('NON_LEDGER_TABLE' AS nvarchar(60))") + `,
@@ -138,7 +143,8 @@ SELECT owner.name, t.lock_escalation_desc, t.uses_ansi_nulls,
                WHERE i.object_id = t.object_id AND i.index_id IN (0,1)), '')
 FROM   sys.tables t
 JOIN   sys.schemas s ON s.schema_id = t.schema_id
-JOIN   sys.database_principals owner ON owner.principal_id = s.principal_id
+JOIN   sys.database_principals owner
+       ON owner.principal_id = COALESCE(t.principal_id, s.principal_id)
 WHERE  t.object_id = @p1`
 }
 
