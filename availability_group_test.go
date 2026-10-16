@@ -2,6 +2,8 @@ package gosmo
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -332,7 +334,7 @@ func TestAddReplicaMatchesTheCreateReplicaClause(t *testing.T) {
 	// The same spec inside a CREATE must produce the identical WITH body.
 	req := baseCreateRequest()
 	req.Replicas = []AvailabilityReplicaSpec{spec}
-	stmt, err := req.createStatement()
+	stmt, err := req.createStatement(0)
 	if err != nil {
 		t.Fatalf("createStatement: %v", err)
 	}
@@ -517,8 +519,7 @@ func TestOperationsRejectEmptyNames(t *testing.T) {
 // one thing about it, so the diff in the expected statement is the assertion.
 func baseCreateRequest() CreateAvailabilityGroupRequest {
 	return CreateAvailabilityGroupRequest{
-		Name:                                    "AAG1",
-		RequiredSynchronizedSecondariesToCommit: -1,
+		Name: "AAG1",
 		Replicas: []AvailabilityReplicaSpec{
 			{ServerName: "ubusql1", EndpointURL: "tcp://ubusql1:5022", BackupPriority: -1},
 			{ServerName: "ubusql2", EndpointURL: "tcp://ubusql2:5022", BackupPriority: -1},
@@ -541,11 +542,11 @@ func TestCreateAvailabilityGroupStatement(t *testing.T) {
 			"CREATE AVAILABILITY GROUP [AAG1] WITH (CLUSTER_TYPE = EXTERNAL)" + bothReplicas},
 		{"databases", func(r *CreateAvailabilityGroupRequest) { r.Databases = []string{"testdb_1", "odd]db"} },
 			"CREATE AVAILABILITY GROUP [AAG1] FOR DATABASE [testdb_1], [odd]]db]" + strings.TrimPrefix(bothReplicas, " FOR")},
-		// Zero is a legitimate value here, so the "omit" sentinel has to be
-		// negative — writing 0 when the caller meant "leave it alone" would
-		// turn off a guarantee the cluster may depend on.
+		// Zero is a legitimate value here, so "omit" has to be nil — writing 0
+		// when the caller meant "leave it alone" would turn off a guarantee
+		// the cluster may depend on.
 		{"required synchronized secondaries zero", func(r *CreateAvailabilityGroupRequest) {
-			r.RequiredSynchronizedSecondariesToCommit = 0
+			r.RequiredSynchronizedSecondariesToCommit = new(0)
 		},
 			"CREATE AVAILABILITY GROUP [AAG1] WITH (REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = 0)" + bothReplicas},
 		{"every group option", func(r *CreateAvailabilityGroupRequest) {
@@ -564,7 +565,7 @@ func TestCreateAvailabilityGroupStatement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := baseCreateRequest()
 			tt.edit(&req)
-			got, err := req.createStatement()
+			got, err := req.createStatement(0)
 			if err != nil {
 				t.Fatalf("createStatement: %v", err)
 			}
@@ -586,7 +587,7 @@ func TestCreateAvailabilityGroupReplicaClause(t *testing.T) {
 		PrimaryRoleAllowConnections: "READ_WRITE", SecondaryRoleAllowConnections: "ALL",
 		ReadOnlyRoutingURL: "TCP://ubusql2:1433",
 	}}
-	got, err := req.createStatement()
+	got, err := req.createStatement(0)
 	if err != nil {
 		t.Fatalf("createStatement: %v", err)
 	}
@@ -617,15 +618,100 @@ func TestCreateAvailabilityGroupStatementRejects(t *testing.T) {
 		},
 		"bad seeding mode":    func(r *CreateAvailabilityGroupRequest) { r.Replicas[0].SeedingMode = "SOMETIMES" },
 		"backup priority 101": func(r *CreateAvailabilityGroupRequest) { r.Replicas[0].BackupPriority = 101 },
+		"negative required sync": func(r *CreateAvailabilityGroupRequest) {
+			r.RequiredSynchronizedSecondariesToCommit = new(-1)
+		},
 	}
 	for name, edit := range tests {
 		t.Run(name, func(t *testing.T) {
 			req := baseCreateRequest()
 			edit(&req)
-			if got, err := req.createStatement(); err == nil {
+			if got, err := req.createStatement(0); err == nil {
 				t.Errorf("accepted, produced %s", got)
 			}
 		})
+	}
+}
+
+// Each clause a later version added is written only from that version on. Below
+// it a value the old server can only mean anyway (WSFC, zero required sync) is
+// dropped, and one it cannot express is refused with ErrUnsupportedVersion
+// before any text exists — the server's own answer is "Incorrect syntax near"
+// a keyword the caller never typed.
+func TestCreateAvailabilityGroupStatementByVersion(t *testing.T) {
+	const replicas = " FOR REPLICA ON N'ubusql1' WITH (ENDPOINT_URL = N'tcp://ubusql1:5022', AVAILABILITY_MODE = SYNCHRONOUS_COMMIT, FAILOVER_MODE = %s)," +
+		" N'ubusql2' WITH (ENDPOINT_URL = N'tcp://ubusql2:5022', AVAILABILITY_MODE = SYNCHRONOUS_COMMIT, FAILOVER_MODE = MANUAL)"
+	manual := fmt.Sprintf(replicas, "MANUAL")
+
+	tests := []struct {
+		name  string
+		major int
+		edit  func(*CreateAvailabilityGroupRequest)
+		want  string // "" means refused with ErrUnsupportedVersion
+	}{
+		{"2016 WSFC drops the clause", 13, func(r *CreateAvailabilityGroupRequest) { r.ClusterType = "wsfc" },
+			"CREATE AVAILABILITY GROUP [AAG1]" + manual},
+		{"2016 EXTERNAL refused", 13, func(r *CreateAvailabilityGroupRequest) { r.ClusterType = "EXTERNAL" }, ""},
+		{"2016 NONE refused", 13, func(r *CreateAvailabilityGroupRequest) { r.ClusterType = "NONE" }, ""},
+		{"2016 required sync zero dropped", 13, func(r *CreateAvailabilityGroupRequest) {
+			r.RequiredSynchronizedSecondariesToCommit = new(0)
+		}, "CREATE AVAILABILITY GROUP [AAG1]" + manual},
+		{"2016 required sync one refused", 13, func(r *CreateAvailabilityGroupRequest) {
+			r.RequiredSynchronizedSecondariesToCommit = new(1)
+		}, ""},
+		{"2016 failover mode EXTERNAL refused", 13, func(r *CreateAvailabilityGroupRequest) {
+			r.Replicas[0].FailoverMode = "external"
+		}, ""},
+		{"2016 contained refused", 13, func(r *CreateAvailabilityGroupRequest) { r.Contained = true }, ""},
+		{"2016 keeps the 2016 options", 13, func(r *CreateAvailabilityGroupRequest) {
+			r.ClusterType = "WSFC"
+			r.DBFailover = true
+			r.DTCSupport = true
+			r.Basic = true
+		}, "CREATE AVAILABILITY GROUP [AAG1] WITH (DB_FAILOVER = ON, DTC_SUPPORT = PER_DB, BASIC)" + manual},
+		{"2017 writes cluster type and required sync", 14, func(r *CreateAvailabilityGroupRequest) {
+			r.ClusterType = "EXTERNAL"
+			r.RequiredSynchronizedSecondariesToCommit = new(0)
+			r.Replicas[0].FailoverMode = "EXTERNAL"
+		}, "CREATE AVAILABILITY GROUP [AAG1] WITH (CLUSTER_TYPE = EXTERNAL, REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = 0)" +
+			fmt.Sprintf(replicas, "EXTERNAL")},
+		{"2017 WSFC is written", 14, func(r *CreateAvailabilityGroupRequest) { r.ClusterType = "WSFC" },
+			"CREATE AVAILABILITY GROUP [AAG1] WITH (CLUSTER_TYPE = WSFC)" + manual},
+		{"2019 contained refused", 15, func(r *CreateAvailabilityGroupRequest) { r.Contained = true }, ""},
+		{"2022 contained", 16, func(r *CreateAvailabilityGroupRequest) { r.Contained = true },
+			"CREATE AVAILABILITY GROUP [AAG1] WITH (CONTAINED)" + manual},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := baseCreateRequest()
+			tt.edit(&req)
+			got, err := req.createStatement(tt.major)
+			if tt.want == "" {
+				if !errors.Is(err, ErrUnsupportedVersion) {
+					t.Errorf("got %q, %v; want an ErrUnsupportedVersion refusal", got, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("createStatement: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// Below 2017 the setter refuses rather than sending a SET the server cannot
+// parse.
+func TestSetRequiredSyncRefusedBefore2017(t *testing.T) {
+	ag := &AvailabilityGroup{server: &Server{info: &ServerInfo{VersionMajor: 13}}, Name: "AAG1"}
+	ctx, script := WithScript(context.Background())
+	if err := ag.SetRequiredSynchronizedSecondariesToCommit(ctx, 1); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Errorf("err = %v, want ErrUnsupportedVersion", err)
+	}
+	if len(script.Statements()) != 0 {
+		t.Errorf("emitted %q", script.Statements())
 	}
 }
 

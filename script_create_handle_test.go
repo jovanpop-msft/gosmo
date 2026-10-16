@@ -106,7 +106,7 @@ func TestScriptedCreatesReturnANamedHandle(t *testing.T) {
 	// join that follows a scripted create has to name it back, and under
 	// EXTERNAL or NONE there is no metadata anywhere to read it from.
 	ag, err := srv.CreateAvailabilityGroup(ctx, CreateAvailabilityGroupRequest{
-		Name: "AA]G1", ClusterType: "external", RequiredSynchronizedSecondariesToCommit: -1,
+		Name: "AA]G1", ClusterType: "external",
 		Replicas: []AvailabilityReplicaSpec{
 			{ServerName: "ubusql1", EndpointURL: "tcp://ubusql1:5022", BackupPriority: -1},
 		},

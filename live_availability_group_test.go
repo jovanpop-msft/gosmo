@@ -909,9 +909,8 @@ func TestLiveAvailabilityGroupCreate(t *testing.T) {
 	defer liveDropGroupEverywhere(t, ctx, name, srv, peer)
 
 	req := CreateAvailabilityGroupRequest{
-		Name:                                    name,
-		ClusterType:                             "NONE",
-		RequiredSynchronizedSecondariesToCommit: -1,
+		Name:        name,
+		ClusterType: "NONE",
 		Replicas: []AvailabilityReplicaSpec{
 			{
 				ServerName: srv.Name(), EndpointURL: primaryEP.URL(),

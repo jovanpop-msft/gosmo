@@ -314,7 +314,7 @@ func (ag *AvailabilityGroup) SetDTCSupport(ctx context.Context, perDB bool) erro
 
 // SetRequiredSynchronizedSecondariesToCommit sets how many synchronous
 // secondaries must acknowledge a transaction before it commits on the primary.
-// SQL Server 2017+.
+// SQL Server 2017+; refused with ErrUnsupportedVersion below that.
 //
 // Raising it above the number of healthy synchronous secondaries stops the
 // primary accepting writes, which is the intended trade for guaranteed
@@ -323,6 +323,9 @@ func (ag *AvailabilityGroup) SetDTCSupport(ctx context.Context, perDB bool) erro
 func (ag *AvailabilityGroup) SetRequiredSynchronizedSecondariesToCommit(ctx context.Context, n int) error {
 	if n < 0 {
 		return invalidf("gosmo: set required synchronized secondaries to commit: %d is negative", n)
+	}
+	if m := ag.server.serverMajorVersion(); m != 0 && m < int(SQLServer2017) {
+		return unsupportedVersionf("gosmo: set required synchronized secondaries to commit: requires SQL Server 2017 or later")
 	}
 	if err := ag.alterSet(ctx, fmt.Sprintf("REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = %d", n)); err != nil {
 		return fmt.Errorf("gosmo: set required synchronized secondaries to commit of availability group %q: %w", ag.Name, err)

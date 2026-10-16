@@ -138,6 +138,16 @@ type Scripter struct {
 // Database returns the database the scripter scripts.
 func (sc *Scripter) Database() *Database { return sc.db }
 
+// DatabaseContext is the batch that puts a script into the scripter's
+// database: "USE [db];" and a GO, as SSMS opens every script of a
+// database-scoped object. The Script* methods leave it out, so a caller
+// joining several scripts writes it once; one handing a script to a reader —
+// a file, the clipboard — prefixes it, or the script runs in whatever database
+// the reader's session is in, and a DROP drops that database's namesake.
+//
+// ScriptDatabase needs none: it switches to master itself.
+func (sc *Scripter) DatabaseContext() string { return scriptUse(sc.db.Name) }
+
 // NewScripter creates a Scripter for the given database.
 func NewScripter(db *Database, opts ScriptOptions) *Scripter {
 	return &Scripter{db: db, opts: opts}

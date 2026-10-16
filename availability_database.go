@@ -134,6 +134,77 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 	})
 }
 
+// -- Candidates -----------------------------------------------------------------
+
+// AvailabilityDatabaseCandidate is one database with every fact SQL Server
+// checks before it lets the database into an availability group (CREATE
+// AVAILABILITY GROUP ... FOR DATABASE, or ADD DATABASE) — so a caller can say
+// which are refused, and why, instead of offering them and relaying the error.
+//
+// Each refusal below was driven on SQL Server 2025 except mirroring, which is
+// from the documentation:
+//
+//   - not FULL recovery, or no log backup chain (LogBackupChainStarted): Msg
+//     1475, which is also the answer for a RESTRICTED_USER database lacking a
+//     backup — RESTRICTED_USER itself is accepted;
+//   - read-only, which every database snapshot is: Msg 1466;
+//   - AUTO_CLOSE on: Msg 1469;
+//   - SINGLE_USER: Msg 1488;
+//   - a database mirroring partner.
+//
+// Membership of a group is not here: the groups' own database lists say which
+// group, which is what a caller shows.
+type AvailabilityDatabaseCandidate struct {
+	Name          string
+	ID            int
+	State         string // state_desc: ONLINE, RESTORING, ...
+	RecoveryModel RecoveryModel
+
+	IsReadOnly    bool   // true of every snapshot as well
+	IsSnapshot    bool   // source_database_id is set
+	UserAccess    string // user_access_desc: MULTI_USER, SINGLE_USER or RESTRICTED_USER
+	IsAutoCloseOn bool
+	IsMirrored    bool // a database mirroring session is configured
+
+	// LogBackupChainStarted is DatabaseRecoveryStatus.LogBackupChainStarted:
+	// a full backup taken since the database entered FULL recovery.
+	LogBackupChainStarted bool
+}
+
+// IsSystem reports one of the four system databases, as Database.IsSystem.
+func (c *AvailabilityDatabaseCandidate) IsSystem() bool {
+	return c.ID > 0 && c.ID <= systemDatabaseMaxID
+}
+
+// AvailabilityDatabaseCandidates returns every database on the instance with
+// the facts AvailabilityDatabaseCandidate lists, in one read, ordered by name.
+// Run it against the instance that will be (or is) the primary.
+func (s *Server) AvailabilityDatabaseCandidates(ctx context.Context) ([]*AvailabilityDatabaseCandidate, error) {
+	const q = `
+SELECT d.name, d.database_id, d.state_desc, d.recovery_model_desc,
+       d.is_read_only, CAST(CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END AS bit),
+       d.user_access_desc, d.is_auto_close_on,
+       CAST(CASE WHEN m.mirroring_guid IS NULL THEN 0 ELSE 1 END AS bit),
+       CAST(CASE WHEN rs.last_log_backup_lsn IS NULL THEN 0 ELSE 1 END AS bit)
+FROM   sys.databases d
+LEFT   JOIN sys.database_mirroring m ON m.database_id = d.database_id
+LEFT   JOIN sys.database_recovery_status rs ON rs.database_id = d.database_id
+ORDER  BY d.name`
+
+	rows, err := s.query(ctx, q)
+	return scanRows(rows, err, "availability database candidates", func(scan func(...any) error) (*AvailabilityDatabaseCandidate, error) {
+		c := &AvailabilityDatabaseCandidate{}
+		var state, recovery, access sql.NullString
+		if err := scan(&c.Name, &c.ID, &state, &recovery,
+			&c.IsReadOnly, &c.IsSnapshot, &access, &c.IsAutoCloseOn,
+			&c.IsMirrored, &c.LogBackupChainStarted); err != nil {
+			return nil, err
+		}
+		c.State, c.RecoveryModel, c.UserAccess = state.String, RecoveryModel(recovery.String), access.String
+		return c, nil
+	})
+}
+
 // -- Databases in the group ------------------------------------------------
 
 // AddDatabase adds a database on the primary to the availability group.

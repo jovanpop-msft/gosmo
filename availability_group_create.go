@@ -82,6 +82,10 @@ type CreateAvailabilityGroupRequest struct {
 	// ClusterType is WSFC, EXTERNAL or NONE. Empty omits the clause, which
 	// means WSFC — and fails on an instance with no Windows cluster under it,
 	// so Linux callers must set this.
+	//
+	// The clause is SQL Server 2017+. Below that WSFC is the only kind there
+	// is: WSFC is accepted and written as no clause, EXTERNAL and NONE are
+	// refused with ErrUnsupportedVersion.
 	ClusterType ClusterType
 
 	// AutomatedBackupPreference is PRIMARY, SECONDARY_ONLY, SECONDARY or NONE.
@@ -100,16 +104,22 @@ type CreateAvailabilityGroupRequest struct {
 	// DTCSupport requests DTC_SUPPORT = PER_DB.
 	DTCSupport bool
 
-	// RequiredSynchronizedSecondariesToCommit is SQL Server 2017+. Negative
-	// omits the clause; zero is a legitimate value and is written.
-	RequiredSynchronizedSecondariesToCommit int
+	// RequiredSynchronizedSecondariesToCommit is SQL Server 2017+. Nil omits
+	// the clause; zero is a legitimate value and is written — writing 0 when
+	// the caller meant "leave it alone" would turn off a guarantee the cluster
+	// may depend on, which is why this is a pointer and not "zero omits".
+	//
+	// Below 2017 nil and zero are both omitted (zero is all that server can
+	// mean) and a positive value is refused with ErrUnsupportedVersion.
+	RequiredSynchronizedSecondariesToCommit *int
 
 	// Basic creates a Basic availability group (Standard edition): one
 	// database, two replicas, no readable secondary.
 	Basic bool
 
 	// Contained creates a contained availability group, which carries its own
-	// master and msdb. SQL Server 2022+.
+	// master and msdb. SQL Server 2022+; refused with ErrUnsupportedVersion
+	// below that.
 	Contained bool
 
 	// Databases are the databases to include. May be empty — a group with no
@@ -188,14 +198,22 @@ func (spec AvailabilityReplicaSpec) withClause() (string, error) {
 	return strings.Join(parts, ", "), nil
 }
 
-// createStatement builds the whole CREATE AVAILABILITY GROUP statement.
-func (req CreateAvailabilityGroupRequest) createStatement() (string, error) {
+// createStatement builds the whole CREATE AVAILABILITY GROUP statement for an
+// instance of the given major version.
+//
+// major gates the clauses later versions added — CLUSTER_TYPE, FAILOVER_MODE =
+// EXTERNAL and REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT (2017), CONTAINED
+// (2022). The server's own answer to any of them on an older instance is a bare
+// "Incorrect syntax near", naming nothing the caller chose. 0 means unknown and
+// is treated as newest, the convention of every version gate here.
+func (req CreateAvailabilityGroupRequest) createStatement(major int) (string, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return "", invalidf("availability group has no name")
 	}
 	if len(req.Replicas) == 0 {
 		return "", invalidf("availability group %q has no replicas", req.Name)
 	}
+	before := func(v ServerVersion) bool { return major != 0 && major < int(v) }
 
 	var options []string
 	if req.ClusterType != "" {
@@ -203,7 +221,12 @@ func (req CreateAvailabilityGroupRequest) createStatement() (string, error) {
 		if !clusterTypes[clusterType] {
 			return "", invalidf("unrecognized cluster type %q", req.ClusterType)
 		}
-		options = append(options, "CLUSTER_TYPE = "+string(clusterType))
+		switch {
+		case !before(SQLServer2017):
+			options = append(options, "CLUSTER_TYPE = "+string(clusterType))
+		case clusterType != ClusterTypeWSFC:
+			return "", unsupportedVersionf("cluster type %s requires SQL Server 2017 or later; before it every availability group is WSFC", clusterType)
+		}
 	}
 	if req.AutomatedBackupPreference != "" {
 		pref := upperKeyword(req.AutomatedBackupPreference)
@@ -227,14 +250,23 @@ func (req CreateAvailabilityGroupRequest) createStatement() (string, error) {
 	if req.DTCSupport {
 		options = append(options, "DTC_SUPPORT = PER_DB")
 	}
-	if req.RequiredSynchronizedSecondariesToCommit >= 0 {
-		options = append(options, fmt.Sprintf("REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = %d",
-			req.RequiredSynchronizedSecondariesToCommit))
+	if n := req.RequiredSynchronizedSecondariesToCommit; n != nil {
+		switch {
+		case *n < 0:
+			return "", invalidf("required synchronized secondaries to commit %d is negative", *n)
+		case !before(SQLServer2017):
+			options = append(options, fmt.Sprintf("REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = %d", *n))
+		case *n > 0:
+			return "", unsupportedVersionf("required synchronized secondaries to commit requires SQL Server 2017 or later")
+		}
 	}
 	if req.Basic {
 		options = append(options, "BASIC")
 	}
 	if req.Contained {
+		if before(SQLServer2022) {
+			return "", unsupportedVersionf("a contained availability group requires SQL Server 2022 or later")
+		}
 		options = append(options, "CONTAINED")
 	}
 
@@ -263,6 +295,9 @@ func (req CreateAvailabilityGroupRequest) createStatement() (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if before(SQLServer2017) && upperKeyword(spec.FailoverMode) == FailoverExternal {
+			return "", unsupportedVersionf("replica %q: failover mode EXTERNAL requires SQL Server 2017 or later", spec.ServerName)
+		}
 		replicas = append(replicas, fmt.Sprintf("%s WITH (%s)", QuoteLiteral(spec.ServerName), with))
 	}
 	return stmt + " REPLICA ON " + strings.Join(replicas, ", "), nil
@@ -289,7 +324,7 @@ var clusterTypes = map[ClusterType]bool{ClusterTypeWSFC: true, ClusterTypeExtern
 // own it leaves a group whose secondaries are all disconnected, because none of
 // them has joined yet.
 func (s *Server) CreateAvailabilityGroup(ctx context.Context, req CreateAvailabilityGroupRequest) (*AvailabilityGroup, error) {
-	stmt, err := req.createStatement()
+	stmt, err := req.createStatement(s.serverMajorVersion())
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create availability group: %w", err)
 	}

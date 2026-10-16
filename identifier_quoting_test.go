@@ -395,3 +395,13 @@ func TestFragmentationModeNormalize(t *testing.T) {
 		t.Errorf("FragmentationStats with a bad mode: err = %v", err)
 	}
 }
+
+// TestScripterDatabaseContextQuotesTheName pins the USE batch a script handed
+// to a reader opens with: bracket-quoted (a ] doubled) and followed by GO, so
+// a CREATE SCHEMA or CREATE PROCEDURE after it opens a batch of its own.
+func TestScripterDatabaseContextQuotesTheName(t *testing.T) {
+	got := NewScripter(&Database{Name: "Sales]Q1"}, DefaultScriptOptions()).DatabaseContext()
+	if want := "USE [Sales]]Q1];\nGO\n"; got != want {
+		t.Errorf("DatabaseContext() = %q, want %q", got, want)
+	}
+}
