@@ -3,6 +3,7 @@ package gosmo
 import (
 	"cmp"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -365,6 +366,20 @@ func dsnHost(opts ConnectionOptions) (host, instance string, err error) {
 		return "", "", invalidf("gosmo: ConnectionOptions.Port %d out of range 0-65535", opts.Port)
 	}
 	host, instance, port := opts.address()
+	if _, _, p, written := splitServerAddressPort(server); written && (p < 1 || p > 65535) {
+		return "", "", invalidf("gosmo: server %q: port %d out of range 1-65535", server, p)
+	}
+	// A suffix that is not a plain port stays in host/instance (see
+	// ParseServerAddress); dialled as it is, "host,-5" would reach 1433.
+	if strings.ContainsRune(host, ',') || strings.ContainsRune(instance, ',') {
+		return "", "", invalidf("gosmo: server %q: the port after the comma must be digits only (host,1433)", server)
+	}
+	if h := strings.Trim(host, "[]"); strings.ContainsRune(h, ':') {
+		if _, err := netip.ParseAddr(h); err != nil {
+			return "", "", invalidf("gosmo: server %q: %q is neither a host nor an IPv6 address; "+
+				"a port is written host:1433 or host,1433, digits only", server, host)
+		}
+	}
 	if strings.EqualFold(host, "(localdb)") {
 		return "", "", invalidf("gosmo: server %q: LocalDB ((localdb)\\...) answers on shared memory or named pipes only, "+
 			"which are not supported; connect over TCP — host, host\\instance or host,port", server)

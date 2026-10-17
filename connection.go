@@ -395,9 +395,10 @@ func (o ConnectionOptions) address() (host, instance string, port int) {
 // that may already carry its own) can reuse the same parsing buildDSN
 // relies on, instead of duplicating it.
 //
-// A malformed trailing port (non-numeric) is left as part of host rather
-// than rejected outright — the caller surfaces connection failures via
-// the driver's own error, not a separate parse error here.
+// A malformed trailing port (anything but ASCII digits, so "-5" and "+1500"
+// too) is left as part of host rather than rejected here; Connect and
+// ConnectionString refuse such an address, and a port outside 0-65535 or a
+// written port 0, which parse as numbers, the same way.
 //
 // A leading "tcp:" protocol prefix — the form the Azure Portal's ADO.NET
 // connection string shows, "tcp:x.database.windows.net,1433", and SSMS
@@ -422,6 +423,30 @@ func ParseServerAddress(server string) (host, instance string, port int) {
 // splitServerAddress is ParseServerAddress before the local-machine aliases
 // are resolved.
 func splitServerAddress(server string) (host, instance string, port int) {
+	host, instance, port, _ = splitServerAddressPort(server)
+	return host, instance, port
+}
+
+// parsePort reads s as a port: ASCII digits only, so a sign ("-5", "+1500")
+// that strconv.Atoi would take is not one. ok is false for anything else,
+// including a value too large for an int.
+func parsePort(s string) (port int, ok bool) {
+	if s == "" {
+		return 0, false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	p, err := strconv.Atoi(s)
+	return p, err == nil
+}
+
+// splitServerAddressPort is splitServerAddress plus whether the address wrote
+// a port at all, which port 0 alone cannot say: "host,0" wrote one, "host"
+// did not. dsnHost refuses the former.
+func splitServerAddressPort(server string) (host, instance string, port int, written bool) {
 	if proto, rest := splitProtocolPrefix(server); proto == "tcp" {
 		server = rest
 	}
@@ -429,12 +454,12 @@ func splitServerAddress(server string) (host, instance string, port int) {
 		host, instance = server[:i], server[i+1:]
 		// host\instance,port — the port trails the instance name.
 		if j := strings.IndexByte(instance, ','); j >= 0 {
-			if p, err := strconv.Atoi(instance[j+1:]); err == nil {
-				port = p
+			if p, ok := parsePort(instance[j+1:]); ok {
+				port, written = p, true
 				instance = instance[:j]
 			}
 		}
-		return host, instance, port
+		return host, instance, port, written
 	}
 
 	sep := strings.LastIndexByte(server, ',')
@@ -451,12 +476,12 @@ func splitServerAddress(server string) (host, instance string, port int) {
 		}
 	}
 	if sep < 0 {
-		return server, "", 0
+		return server, "", 0, false
 	}
-	if p, err := strconv.Atoi(server[sep+1:]); err == nil {
-		return server[:sep], "", p
+	if p, ok := parsePort(server[sep+1:]); ok {
+		return server[:sep], "", p, true
 	}
-	return server, "", 0
+	return server, "", 0, false
 }
 
 // splitProtocolPrefix splits a SQL Server protocol prefix — tcp:, np:, lpc:,

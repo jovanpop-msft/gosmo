@@ -124,6 +124,12 @@ func TestParseServerAddress(t *testing.T) {
 		{"tcp:x.database.windows.net,1433", "x.database.windows.net", "", 1433},
 		{`Tcp:myserver\SQLEXPRESS`, "myserver", "SQLEXPRESS", 0},
 		{"tcp:1433", "tcp", "", 1433},
+		// Out-of-range numbers parse; dsnHost refuses them. A signed or
+		// non-digit suffix is no port and stays in the host.
+		{"host,99999", "host", "", 99999},
+		{"host,-5", "host,-5", "", 0},
+		{"host:+1500", "host:+1500", "", 0},
+		{`host\i,-5`, "host", "i,-5", 0},
 	}
 	for _, c := range cases {
 		host, instance, port := ParseServerAddress(c.server)
@@ -853,5 +859,25 @@ func TestKillDatabaseSessionsBatchWaitsForEverySessionItKills(t *testing.T) {
 	}
 	if !strings.Contains(databaseSessionPredicate, "dm_tran_locks") {
 		t.Error("databaseSessionPredicate no longer covers sessions holding a database lock")
+	}
+}
+
+func TestDSNHostRefusesBadEmbeddedPort(t *testing.T) {
+	bad := []string{"host,99999", `host\i,70000`, "host,65536", "host,0", "host:0",
+		"host,-5", "host:+1500", `host\i,-5`, "tcp:host,99999"}
+	for _, server := range bad {
+		if _, _, err := dsnHost(ConnectionOptions{Server: server}); err == nil {
+			t.Errorf("dsnHost(%q): no error", server)
+		}
+	}
+	good := map[string]string{
+		"host,1": "host:1", `host\i,65535`: "host:65535", "host": "host",
+		"[fe80::1]:1500": "[fe80::1]:1500", "fe80::1%eth0,1500": "[fe80::1%eth0]:1500",
+	}
+	for server, want := range good {
+		got, _, err := dsnHost(ConnectionOptions{Server: server})
+		if err != nil || got != want {
+			t.Errorf("dsnHost(%q) = %q, %v; want %q", server, got, err, want)
+		}
 	}
 }
