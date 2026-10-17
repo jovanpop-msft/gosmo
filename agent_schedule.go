@@ -230,7 +230,8 @@ type CreateScheduleRequest struct {
 	ActiveStartDate time.Time
 	// ActiveEndDate means "no end date" if the zero Time.
 	ActiveEndDate time.Time
-	// ActiveStartTime and ActiveEndTime are HHMMSS integers.
+	// ActiveStartTime and ActiveEndTime are HHMMSS integers. A zero
+	// ActiveEndTime is sent as 0, which msdb stores as 235959 (end of day).
 	ActiveStartTime int
 	ActiveEndTime   int
 	OwnerLoginName  string

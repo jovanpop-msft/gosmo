@@ -314,6 +314,11 @@ func (o *Operator) Alter(ctx context.Context, ch OperatorChanges) error {
 // it is active over, plus the daily HHMMSS time-of-day window it may fire
 // within. It is what Schedule.SetActiveRange takes as four arguments, in
 // the form ScheduleChanges carries. A zero EndDate means "no end date".
+//
+// A zero StartDate or EndTime is sent as 0, which msdb treats as "unchanged"
+// and "end of day (235959)" respectively (probed on SQL Server 2025); after
+// Alter the cached Schedule fields hold the zero values, not what msdb kept,
+// so reload the schedule to read them back.
 type ScheduleActiveRange struct {
 	StartDate time.Time
 	EndDate   time.Time
