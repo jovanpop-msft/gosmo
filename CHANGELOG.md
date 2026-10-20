@@ -4,15 +4,69 @@ All notable changes to gosmo are documented here, newest first, from
 `v0.0.4` onward — this is the history. `RELEASE.md` carries the current
 release only, as a short summary of the entry below it.
 
-## Unreleased
+## v0.1.0
+
+The first minor release. Scripting is broader (extended properties, indexed
+views, login server roles, database layout), the `tsql` sub-package makes the
+T-SQL text layer usable without the driver, and every remaining boolean
+"mode" parameter becomes a named type. Those type changes are the breaking
+ones; each **Migrating** note says what a caller rewrites.
 
 ### Added
 
 - **Package `tsql`** (`github.com/radix29/gosmo/tsql`) — the T-SQL text layer as a leaf package that imports only the standard library, so a consumer that builds or reads T-SQL text without connecting need not link the mssql driver. It holds `QuoteName`, `QuoteLiteral`, `QuoteAnsiLiteral` and `UnquoteName`; `CommentSafe` and `BlockCommentSafe` (a name kept from ending a `--` or `/* */` comment); and `Spans`, the lexical scanner behind every script-text rewrite, which splits text into code, comments, literals and quoted identifiers (`Span`, `SpanKind`, `Unescape`). `TestImportsOnlyStdlib` keeps the package a leaf, and `TestTSQLQuoterParity` pins its quoting to the driver's `TSQLQuoter`.
+- **Extended properties in scripts** (`scripter_extended_properties.go`) — `ScriptOptions.ExtendedProperties` (on in `DefaultScriptOptions`, as in SSMS) appends one `sp_addextendedproperty` per property to the table, view, procedure, function and trigger scripts (the object's own, and its columns', parameters', indexes' and constraints'), and to the schema, database, user, role, type, sequence, synonym, XML schema collection, partition function/scheme and DDL trigger scripts. A value keeps its `sql_variant` base type; the statements are guarded by `fn_listextendedproperty` under `IncludeIfNotExists`.
+- **`Database.EncryptionKey`** — the transparent-data-encryption key (`DatabaseEncryptionKey`: algorithm, length, state, and the server certificate or asymmetric key protecting it) from `sys.dm_database_encryption_keys`; `ErrNotFound` when there is none.
+- **`Server.AvailabilityDatabaseCandidates`** — every database with each fact SQL Server checks before it joins an availability group (`AvailabilityDatabaseCandidate`: recovery model, log backup chain, read-only, snapshot, access mode, auto-close, mirroring), so a caller says which are refused and why.
+- **`DatabaseRecoveryStatus` differential base** — `DifferentialBaseLSN`, `DifferentialBaseKnown` and `HasDifferentialBase` say whether a differential backup has a base (Msg 3035 otherwise); `Database.RecoverFromRestoring` brings a RESTORING database online.
+- **`Database.IsDistributor`**, **`DatabaseFileInfo.SizeOnDiskKB`** (a snapshot's sparse-file footprint, filled by `Server.DatabaseFiles`) and **`DatabaseFileInfo.Shrink`**.
+- **Database options** — `DBChaining`, `ForcedParameterization`, `DateCorrelation`, `HonorBrokerPriority`, `DelayedDurability`, `TargetRecoveryTimeSeconds`, `AcceleratedDatabaseRecovery` and `IsLedger` on `DatabaseOptions`; `DatabaseOption.NeedsExclusiveAccess`; `Database.PersistentVersionStoreFileGroup`; `QueryStoreIntervalMinutes`.
+- **Permissions** — `SecurableClass.HasColumns`, `SchemaScoped` and `ColumnPermissionNames`; `PermissionsForPrincipal` and `FindSecurables` cover every securable class, types and certificates included.
+- **Tables and columns** — `TableDetail.Owner` and `OwnedBySchemaOwner`; `Column.Collation` on create and alter; `Column.BoundRule`/`BoundDefault` (legacy bindings) on columns and user-defined types; `ServerTrigger`, `StoredProcedure` and `UserDefinedFunction` carry `UsesANSINulls`, `UsesQuotedIdentifier` and `IsCLR`.
+- **Backup and login** — `VerifyOptions` (file number, checksum) for `VerifyBackup`; `ServerInfo.SupportsBackupCompression`; `ChangePasswordOptions.CheckPolicy` and `CheckExpiration`; `Scripter.DatabaseContext`.
+- **Named modes** — `Termination`-style types replace booleans: `DeviceFileMode`, `MailProfileDefault`, `ScopedConfigReplica`, `FullTextRepopulation`, `MasterKeyRegenerateMode`, `ReplSessionFilter`, `ReconfigureMode`, `SessionScope`, `SignatureKind` and `TableDropMode`.
 
 ### Changed
 
+- **Breaking: boolean mode parameters are named types.** **Migrating:**
+  - `Database.Drop`/`Rename(…, force)` → `term Termination` (`TerminationRollbackImmediate` for `true`);
+  - `Table.Drop(ctx, cascade)` → `DropTableOnly` / `DropTableCascade`;
+  - `BackupDevice.Drop(ctx, deleteFile)` → `KeepDeviceFile` / `DeleteDeviceFile`;
+  - `Server.ActiveSessions(ctx, includeSystem)` → `UserSessionsOnly` / `AllSessions`;
+  - `Server.Reconfigure(ctx, override)` → `ReconfigureChecked` / `ReconfigureOverride`;
+  - `SetDatabaseScopedConfig(…, forSecondary)` → `ScopedConfigPrimary` / `ScopedConfigSecondary`;
+  - `AddSignature`/`DropSignature(…, counter)` → `PlainSignature` / `CounterSignature`;
+  - `MasterKey.Regenerate(…, force, …)` → `MasterKeyRegenerate` / `MasterKeyForceRegenerate`;
+  - `FullTextIndex.AddColumn`/`DropColumn(…, noPopulation)` → `FullTextRepopulate` / `FullTextNoPopulation`;
+  - `ReplicationAgent.Sessions(ctx, hours, errorsOnly)` → `AllReplSessions` / `FailedReplSessions`;
+  - `MailProfile.Grant`/`SetGrantDefault(…, isDefault)` → `MailNotDefaultProfile` / default.
+- **Breaking: `VerifyBackup(ctx, opts VerifyOptions, targets...)`** takes the options first. **Migrating:** pass `VerifyOptions{}`.
+- **Breaking: `SecurableRef.Type` and `PrincipalSecurable.SecurableType` are `SecurableClass`**, not strings.
+- **Breaking: `AvailabilityGroup.RequiredSynchronizedSecondariesToCommit` is `*int`** — nil where the server has no such column.
+- **Breaking: `TableDetail.SchemaOwner` is `Owner`** with `OwnedBySchemaOwner`.
 - **`QuoteName`, `QuoteLiteral`, `QuoteAnsiLiteral` and `UnquoteName` forward to `tsql`.** Same signatures and output; existing callers need no change.
+- **A forced `Drop`, `Rename` or `Detach` restores the access mode the database had** (MULTI_USER or RESTRICTED_USER) instead of forcing MULTI_USER; a database that refuses SINGLE_USER (RESTORING, RECOVERY_PENDING, OFFLINE) is dropped as it is and one in STANDBY has its sessions killed.
+- **`ScriptLogin` adds `ALTER SERVER ROLE … ADD MEMBER`**; `ScriptUser` scripts an orphaned user under a comment; `ScriptView` scripts an indexed view's indexes, clustered first; `ScriptTable` leaves sparse columns out of a column-set table's DML.
+- **`CreateDatabase`** places a file given without a path in the server's default data or log directory.
+- **Index operations are refused before they run** when the index kind cannot take them, and Query Store intervals outside the server's allowed list, and a CHECK_POLICY/CHECK_EXPIRATION combination SQL Server rejects, are `ErrInvalidRequest`.
+- **A server address with a bad port** is refused with a message naming it; `.` and `(local)` resolve to `localhost`, and `(localdb)\…` is refused.
+- Dependencies: `shopspring/decimal` v1.6.0.
+
+### Fixed
+
+- **A panic in an `InTransaction` callback** now rolls back and keeps unwinding as the same panic, not as an error.
+- **A read with arguments inside a transaction** left the session in another database; the `USE` is sent even when the session is already there.
+- **Forced drop** failed for databases that cannot be set SINGLE_USER (RESTORING Msg 5052, RECOVERY_PENDING Msg 5181); the drop never ran. A detach no longer leaves a RESTRICTED_USER database MULTI_USER.
+- **Snapshot file names** collided for data files differing only by extension (`db.mdf`, `db.ndf`); the extension is kept in the stem.
+- **Table space split** double-counted LOB data of nonclustered indexes; the four parts now sum to `ReservedKB`. **tempdb file usage** read the configured size instead of the grown one.
+- **`ALTER COLUMN` reset a string column's collation** to the database default when none was given; it keeps the current one.
+- **`ENCRYPTION = DISABLED ALGORITHM`** was emitted for a disabled column encryption, a syntax error (Msg 102).
+- **Permission reports** missed types, certificates and other securable classes; **dependencies** of an unqualified name resolved to the wrong schema and are flagged `IsCallerDependent`.
+- **Scripts replayed wrongly:** scoped configuration values of non-text types were quoted as text; an index on a different filegroup than its table lost its `ON` clause; masking functions containing quotes; server triggers lost `ANSI_NULLS`/`QUOTED_IDENTIFIER`; a renamed module scripted its old name.
+- **Setting a server option** left "show advanced options" on, or wrote 0 over a pending 1; the configured value is restored.
+- **Password policy** statements were sent that SQL Server rejects (`CHECK_EXPIRATION` without `CHECK_POLICY`, `MUST_CHANGE` without both); they are refused before the statement.
+- **A schedule's zero start/end date and time** documented and handled as msdb reads them.
+- **Float16 vectors** in concatenated dynamic-SQL literals are now noted in the script.
 
 ## v0.0.17
 

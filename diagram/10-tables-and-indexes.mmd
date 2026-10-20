@@ -34,7 +34,7 @@ classDiagram
         +Detail() *TableDetail
         +SpaceUsed() *TableSpaceInfo
         +Truncate() error
-        +Drop(cascade) error
+        +Drop(mode TableDropMode) error
         +Rename(newName) error
         +Transfer(targetSchema) error
         +FragmentationStats(mode) []*IndexFragmentation
@@ -69,6 +69,8 @@ classDiagram
         +IsRowGUID bool
         +IsPrimaryKey bool
         +Collation string
+        +BoundRule string
+        +BoundDefault string
         +TypeSchema string
         +IsUserDefinedType bool
         +IsPersisted bool

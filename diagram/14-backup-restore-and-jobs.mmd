@@ -90,7 +90,7 @@ classDiagram
         +Name string
         +Type string
         +PhysicalName string
-        +Drop(deleteFile) error
+        +Drop(file DeviceFileMode) error
         +Headers() []*BackupHeader
         +Target() BackupTarget
         No Alter: sp_addumpdevice and

@@ -12,6 +12,7 @@ classDiagram
         +FileGroup string
         +State string
         +SizeKB int64
+        +SizeOnDiskKB int64
         +MaxSizeKB int64
         +GrowthKB int64
         +GrowthPercent int
@@ -19,6 +20,7 @@ classDiagram
         +Database() *Database
         +IsPrimaryFile() bool
         +Alter(m) error
+        +Shrink(targetKB) int64
         +Drop() error
     }
 
@@ -54,6 +56,14 @@ classDiagram
         +DefaultCursor string
         +SnapshotIsolation string
         +AutoClose bool
+        +DBChaining bool
+        +ForcedParameterization bool
+        +DateCorrelation bool
+        +HonorBrokerPriority bool
+        +DelayedDurability string
+        +TargetRecoveryTimeSeconds int
+        +AcceleratedDatabaseRecovery bool
+        +IsLedger bool
         +AutoShrink bool
         +AutoCreateStats bool
         +AutoUpdateStats bool
@@ -283,6 +293,7 @@ classDiagram
         +Name string
         +TypeDesc string
         +IsSchemaBound bool
+        +IsCallerDependent bool
     }
 
     class SearchResult {

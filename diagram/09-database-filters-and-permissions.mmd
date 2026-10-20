@@ -121,6 +121,9 @@ classDiagram
         +DatabaseName string
         +LastLogBackupLSN string
         +LogBackupChainStarted bool
+        +DifferentialBaseLSN string
+        +DifferentialBaseKnown bool
+        +HasDifferentialBase bool
         Whether the log backup chain has been
         started at all — what SQL Server tests
         before a database may join an
@@ -191,7 +194,7 @@ classDiagram
     }
 
     class PrincipalSecurable {
-        +SecurableType string
+        +SecurableType SecurableClass
         +Schema string
         +Name string
         +Permission string
@@ -228,7 +231,7 @@ classDiagram
     }
 
     class SecurableRef {
-        +Type string
+        +Type SecurableClass
         +Schema string
         +Name string
     }

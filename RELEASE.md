@@ -3,34 +3,30 @@
 The current release, in brief. Detail and history are in
 [CHANGELOG.md](CHANGELOG.md).
 
-## v0.0.17
+## v0.1.0
 
 ### New
 
-- Full-Text Search: catalogs, stoplists, search property lists, indexes, populations, scripting.
-- Replication (read-only): distributor, publications, articles, subscriptions.
-- Replication Monitor reads: publishers, agents, sessions, errors.
-- Live Query Statistics: `QueryProfiles`, `InFlightPlan`, `SessionLoginTime`.
-- `ApplyPermission` — one GRANT/DENY/REVOKE for any securable class.
-- `BlockedRequests`, `SetEnabled` on every enable/disable handle, `ErrInvalidRequest`.
-- `ScriptDatabase` writes file layout and database options.
-- `BackupSetType`, `Login.UserMappingsIn`, `SplitName`, rule and default definitions.
+- `tsql` package: quoting, comment-safe names and a lexical scanner, standard library only.
+- Extended properties in table, view, routine, schema, type and database scripts.
+- `Database.EncryptionKey` (TDE), `Server.AvailabilityDatabaseCandidates`, `RecoverFromRestoring`.
+- Differential base on `DatabaseRecoveryStatus`; `IsDistributor`, `SizeOnDiskKB`, `Shrink`.
+- More database options, `TableDetail.Owner`, `Column.Collation`, bound rules and defaults.
+- `VerifyOptions`, `SupportsBackupCompression`, `ChangePasswordOptions` policy flags.
 
 ### Fixes
 
-- Reordering Agent steps with a "go to step N" action rolled back.
-- Schedule start date drifted by a day across time zones.
-- Extended properties with a NULL value failed the whole listing.
-- Histogram keys of NULL, binary and date types rendered as Go artifacts.
-- Files of 2 TB and larger scripted as `Msg 102`.
-- `LOGINPROPERTY` "never" dates came back as a 1900 value.
-- Query Store wait reports counted executions once per category.
-- Reads on `…Ref` handles queried id 0 and answered "no children".
+- A panic in `InTransaction` rolls back and propagates.
+- Forced drop, rename and detach keep the access mode and handle RESTORING databases.
+- Snapshot file names no longer collide; `ALTER COLUMN` keeps the collation.
+- Table space parts sum to reserved; tempdb files read their real size.
+- Scripts: renamed modules, index filegroups, masking functions, server trigger options.
+- Permissions and dependencies cover every securable class and unqualified names.
 
 ### Changes
 
-- **Breaking:** permission writes are `ApplyPermission`; per-class Grant/Deny/Revoke removed.
-- **Breaking:** change tracking and signatures are methods on `Table` and the module handles.
-- **Breaking:** `DatabaseFile` is `*DatabaseFileInfo`; `BackupType` is `SetType`.
-- Argument refusals wrap `ErrInvalidRequest`; `ErrUnsupported` text is "not supported".
-- Dependencies: Go 1.27.2, `azcore` v1.23.3.
+- **Breaking:** boolean mode parameters are named types (`Termination`, `TableDropMode`, `SessionScope`, …).
+- **Breaking:** `VerifyBackup` takes `VerifyOptions`; `SecurableRef.Type` is `SecurableClass`.
+- **Breaking:** `TableDetail.SchemaOwner` → `Owner`; `RequiredSynchronizedSecondariesToCommit` is `*int`.
+- Scripts gain login server roles, indexed-view indexes and orphaned-user comments.
+- Bad server ports are refused; `shopspring/decimal` v1.6.0.

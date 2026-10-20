@@ -15,6 +15,7 @@ classDiagram
         +IsReadOnly bool
         +CreateDate time.Time
         +SourceDatabaseID int
+        +IsDistributor bool
         +IsSystem() bool
         +IsSnapshot() bool
         +Tables() []*Table
@@ -165,15 +166,17 @@ classDiagram
         +SetUserAccess(mode) error
         +SetOffline() error
         +SetOnline() error
-        +Drop(force) error
-        +Rename(newName, force) error
+        +Drop(term Termination) error
+        +Rename(newName, term Termination) error
         +Detach(opts) error
         +Options() *DatabaseOptions
         +SetDatabaseOption(opt, value, term) error
         +SetOwner(principal) error
         +EncryptionKey() *DatabaseEncryptionKey
+        +RecoverFromRestoring() error
+        +PersistentVersionStoreFileGroup() string
         +DatabaseScopedConfigs() []*DatabaseScopedConfig
-        +SetDatabaseScopedConfig(name, value, forSecondary) error
+        +SetDatabaseScopedConfig(name, value, replica ScopedConfigReplica) error
         +QueryStore() *QueryStoreInfo
         +SetQueryStoreOptions(opts) error
         +FlushQueryStore() error
@@ -221,6 +224,15 @@ classDiagram
 
     %% =========================================================
     %% Relationships
+    class DatabaseEncryptionKey {
+        +KeyAlgorithm string
+        +KeyLength int
+        +EncryptionState int
+        +ServerCertificate string
+        +ServerAsymmetricKey string
+        +Algorithm() string
+    }
+
     %% =========================================================
     Server "1" --> "*" Database : owns
     DatabaseSnapshot --> Database : Database() opens

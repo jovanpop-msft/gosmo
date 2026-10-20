@@ -27,6 +27,7 @@ classDiagram
         +VersionMinor int
         +VersionBuild int
         +IsAzure() bool
+        +SupportsBackupCompression() bool
         EngineEdition is SERVERPROPERTY('EngineEdition');
         IsAzure folds the five Azure-hosted ones.
         ProductVersion is frozen on Azure — a Managed

@@ -130,7 +130,8 @@ classDiagram
     }
 
     class TableDetail {
-        +SchemaOwner string
+        +Owner string
+        +OwnedBySchemaOwner bool
         +LockEscalation string
         +UsesAnsiNulls bool
         +IsReplicated bool

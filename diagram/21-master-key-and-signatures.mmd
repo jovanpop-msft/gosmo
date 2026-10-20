@@ -15,7 +15,7 @@ classDiagram
         +EncryptedByServer bool
         +Encryptions []SymmetricKeyEncryption
         +Database() *Database
-        +Regenerate(password, force, openPassword) error
+        +Regenerate(password, mode MasterKeyRegenerateMode, openPassword) error
         +AddEncryption(enc, openPassword) error
         +DropEncryption(enc, openPassword) error
         +Backup(file, encryptionPassword, openPassword) error

@@ -20,7 +20,7 @@ classDiagram
         +DBFailover bool
         +IsDistributed bool
         +IsContained bool
-        +RequiredSynchronizedSecondariesToCommit int
+        +RequiredSynchronizedSecondariesToCommit *int
         +PrimaryReplicaServerName string
         +PrimaryRecoveryHealth string
         +SynchronizationHealth string
@@ -92,6 +92,20 @@ classDiagram
         +SetReadOnlyRoutingURL(url) error
         +SetReadOnlyRoutingList(list) error
         +Drop() error
+    }
+
+    class AvailabilityDatabaseCandidate {
+        +Name string
+        +ID int
+        +State string
+        +RecoveryModel RecoveryModel
+        +IsReadOnly bool
+        +IsSnapshot bool
+        +UserAccess string
+        +IsAutoCloseOn bool
+        +IsMirrored bool
+        +LogBackupChainStarted bool
+        +IsSystem() bool
     }
 
     class AvailabilityDatabase {
@@ -181,6 +195,7 @@ classDiagram
     %% Relationships
     %% =========================================================
     Server "1" --> "*" AvailabilityGroup : AvailabilityGroups() returns
+    Server "1" --> "*" AvailabilityDatabaseCandidate : AvailabilityDatabaseCandidates() returns
     Server --> CreateAvailabilityGroupRequest : accepts
     AvailabilityGroup "1" --> "*" AvailabilityReplica : has
     AvailabilityGroup "1" --> "*" AvailabilityDatabase : has

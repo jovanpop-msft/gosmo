@@ -23,6 +23,7 @@ classDiagram
         +ScriptDrops bool
         +SchemaQualify bool
         +AnsiPadding bool
+        +ExtendedProperties bool
     }
 
     %% =========================================================
@@ -80,8 +81,8 @@ classDiagram
         +Drop() error
         +Rename(newName) error
         +Transfer(targetSchema) error
-        +AddSignature(by Signer, counter) error
-        +DropSignature(by Signer, counter) error
+        +AddSignature(by Signer, kind SignatureKind) error
+        +DropSignature(by Signer, kind SignatureKind) error
     }
 
     class UserDefinedFunction {
@@ -97,8 +98,8 @@ classDiagram
         +Drop() error
         +Rename(newName) error
         +Transfer(targetSchema) error
-        +AddSignature(by Signer, counter) error
-        +DropSignature(by Signer, counter) error
+        +AddSignature(by Signer, kind SignatureKind) error
+        +DropSignature(by Signer, kind SignatureKind) error
     }
 
     class User {
@@ -170,8 +171,8 @@ classDiagram
         +Database() *Database
         +Drop() error
         +Rename(newName) error
-        +AddSignature(by Signer, counter) error
-        +DropSignature(by Signer, counter) error
+        +AddSignature(by Signer, kind SignatureKind) error
+        +DropSignature(by Signer, kind SignatureKind) error
         No Transfer: a trigger moves with its table.
     }
 

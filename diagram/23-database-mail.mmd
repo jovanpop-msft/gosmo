@@ -50,7 +50,7 @@ classDiagram
         +Drop(ctx) error
         +SetAccounts(ctx, []string) error
         +AddAccount / RemoveAccount / SetAccountSequence
-        +Grant / SetGrantDefault / Revoke
+        +Grant / SetGrantDefault(principal, def MailProfileDefault) / Revoke
     }
 
     class MailProfileAccount {

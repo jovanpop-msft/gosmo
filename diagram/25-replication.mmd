@@ -81,7 +81,7 @@ classDiagram
         +ErrorID int
         and delivery figures
         +DistributionDatabase() *DistributionDatabase
-        +Sessions(hours, errorsOnly) []ReplAgentSession
+        +Sessions(hours, filter ReplSessionFilter) []ReplAgentSession
         +SessionActions(session) []ReplAgentAction
     }
 
