@@ -293,15 +293,32 @@ func scanColumns(rows *sql.Rows) ([]*Column, error) {
 // settable this way — SQL Server requires dropping and re-adding the column,
 // or its default constraint, for those.
 //
-// A string column keeps its collation unless col.Collation names another:
-// ALTER COLUMN with no COLLATE gives a char/varchar/nchar/nvarchar column the
-// database default, so changing only the length of a Latin1_General_CS_AS
-// column in a CI database would make it case-insensitive (and can break an
-// index or foreign key that depends on it). With col.Collation empty, this
-// reads the column's current collation from sys.columns first and restates
-// it, as SSMS's designer does; a column that had none (a non-string column
-// becoming a string one) takes the database default. A column the read does
-// not find is ErrNotFound.
+// ALTER COLUMN resets every attribute the statement does not restate, with
+// no error and no warning, so this reads the column from sys.columns first
+// and restates what it has. A column the read does not find is ErrNotFound.
+//
+//   - A string column keeps its collation unless col.Collation names
+//     another: with no COLLATE a char/varchar/nchar/nvarchar column takes the
+//     database default, so changing only the length of a Latin1_General_CS_AS
+//     column in a CI database would make it case-insensitive (and can break
+//     an index or foreign key that depends on it). SSMS's designer restates
+//     it too; a column that had none (a non-string column becoming a string
+//     one) takes the database default.
+//   - A SPARSE column stays sparse. A sparse column must be nullable, so
+//     asking for NOT NULL on one is refused (ErrInvalidRequest); drop SPARSE
+//     first.
+//   - A dynamic data mask is re-applied (ALTER COLUMN ... ADD MASKED) in the
+//     same atomic batch as the ALTER, so no reader without UNMASK sees the
+//     column unmasked in between, and a mask the new type cannot take fails
+//     the whole change. Without it, widening a masked column would expose
+//     its clear values.
+//   - A column both SPARSE and masked is refused on SQL Server 2016
+//     (ErrUnsupported) before anything runs: there ADD MASKED clears SPARSE
+//     and ADD SPARSE clears the mask, so no ALTER keeps both. 2017 and later
+//     keep both.
+//
+// Changing or removing the sparse format or the mask is not this method's
+// job: neither is carried in ColumnDefinition, and both are kept.
 func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 	if col.Name == "" {
 		return invalidf("gosmo: alter column: name is required")
@@ -309,41 +326,77 @@ func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 	if err := checkColumnDefinition(col); err != nil {
 		return fmt.Errorf("gosmo: alter column %q: %w", col.Name, err)
 	}
+	current, err := t.columnAttributes(ctx, col.Name)
+	if err != nil {
+		return err
+	}
 	if col.Collation == "" && collatable(col.DataType) {
-		current, err := t.columnCollation(ctx, col.Name)
-		if err != nil {
-			return err
-		}
-		col.Collation = current
+		col.Collation = current.collation
+	}
+	if current.sparse && !col.IsNullable {
+		return invalidf("gosmo: alter column %q on %s: the column is SPARSE, which requires NULL; drop SPARSE first",
+			col.Name, t.FullName())
+	}
+	if major := t.db.serverMajorVersion(); current.sparse && current.mask != "" &&
+		major != 0 && major < int(SQLServer2017) {
+		return unsupportedf("gosmo: alter column %q on %s: the column is SPARSE and masked, and SQL Server 2016 cannot keep both through ALTER COLUMN",
+			col.Name, t.FullName())
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "ALTER TABLE %s ALTER COLUMN %s %s%s",
 		t.FullName(), quoteIdent(col.Name), colTypeSQL(col), collateClause(col.Collation))
+	if current.sparse {
+		// SPARSE goes before NULL: "NULL SPARSE" is Msg 102.
+		sb.WriteString(" SPARSE")
+	}
 	if col.IsNullable {
 		sb.WriteString(" NULL")
 	} else {
 		sb.WriteString(" NOT NULL")
 	}
 
-	if _, err := t.exec(ctx, sb.String()); err != nil {
+	if current.mask == "" {
+		_, err = t.exec(ctx, sb.String())
+	} else {
+		err = t.db.execAtomic(ctx, []string{sb.String(),
+			fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s ADD MASKED WITH (FUNCTION = %s)",
+				t.FullName(), quoteIdent(col.Name), QuoteLiteral(current.mask))})
+	}
+	if err != nil {
 		return fmt.Errorf("gosmo: alter column %q on %s: %w", col.Name, t.FullName(), err)
 	}
 	return nil
 }
 
-// columnCollation reads a column's current collation for AlterColumn: ""
-// for a column that has none. The name is compared with sys.columns.name in
-// the catalog collation, which is how ALTER COLUMN resolves it.
-func (t *Table) columnCollation(ctx context.Context, name string) (string, error) {
-	var collation sql.NullString
-	err := t.db.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&collation) }, `
-SELECT c.collation_name
+// columnAttrs is what AlterColumn restates of a column: its collation (""
+// for none), whether it is SPARSE, and its masking function, unescaped (""
+// when it is not masked).
+type columnAttrs struct {
+	collation string
+	sparse    bool
+	mask      string
+}
+
+// columnAttributes reads a column's current attributes for AlterColumn. The
+// name is compared with sys.columns.name in the catalog collation, which is
+// how ALTER COLUMN resolves it. sys.masked_columns exists from 2016, gosmo's
+// floor, so it needs no version gate.
+func (t *Table) columnAttributes(ctx context.Context, name string) (columnAttrs, error) {
+	var a columnAttrs
+	var collation, mask sql.NullString
+	err := t.db.queryRow(ctx, func(row *sql.Row) error { return row.Scan(&collation, &a.sparse, &mask) }, `
+SELECT c.collation_name, c.is_sparse, mc.masking_function
 FROM   sys.columns c
+LEFT   JOIN sys.masked_columns mc
+       ON  mc.object_id = c.object_id AND mc.column_id = c.column_id AND mc.is_masked = 1
 WHERE  c.object_id = OBJECT_ID(@p1) AND c.name = @p2`, t.FullName(), name)
-	return foundRow(collation.String, err,
+	a.collation = collation.String
+	// Stored with each quote already doubled; see Column.MaskingFunction.
+	a.mask = strings.ReplaceAll(mask.String, "''", "'")
+	return foundRow(a, err,
 		notFoundf("gosmo: alter column %q: no such column on %s", name, t.FullName()),
-		fmt.Sprintf("alter column %q on %s: read current collation", name, t.FullName()))
+		fmt.Sprintf("alter column %q on %s: read current attributes", name, t.FullName()))
 }
 
 // DropColumn removes a column from the table (ALTER TABLE ... DROP COLUMN).

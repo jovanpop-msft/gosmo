@@ -1,7 +1,7 @@
 -- major 13
 
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
@@ -43,7 +43,7 @@ WHERE  i.object_id = @p1 AND i.type > 0
 -- major 14
 
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
@@ -85,7 +85,7 @@ WHERE  i.object_id = @p1 AND i.type > 0
 -- major 15
 
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
@@ -127,7 +127,7 @@ WHERE  i.object_id = @p1 AND i.type > 0
 -- major 16
 
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
@@ -169,7 +169,7 @@ WHERE  i.object_id = @p1 AND i.type > 0
 -- major 17
 
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        (SELECT pp.partition_number AS n, pp.data_compression_desc AS c

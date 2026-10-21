@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+// alterTestDB is scriptTestDB on a capture server whose column read answers
+// for a plain column (no collation, not sparse, not masked): AlterColumn
+// reads the column before it writes, under WithScript too.
+func alterTestDB(t *testing.T) *Database {
+	t.Helper()
+	s := captureServer(t, 17)
+	captured.reset(columnAttrsRow(nil, false, nil))
+	return &Database{server: s, Name: scriptTestDB().Name}
+}
+
+// columnAttrsRow answers AlterColumn's read of the column's current
+// collation, sparse flag and masking function (nil for NULL).
+func columnAttrsRow(collation driver.Value, sparse bool, mask driver.Value) cannedRow {
+	return cannedRow{match: "FROM   sys.columns c",
+		cols: []string{"collation_name", "is_sparse", "masking_function"},
+		row:  []driver.Value{collation, sparse, mask}}
+}
+
 // TestScriptTypedXMLAndVectorColumns pins the column types CreateTable and
 // AlterColumn could not declare before: a typed xml (CONTENT and DOCUMENT)
 // and a vector, with and without its base type. The spelling is the one
@@ -18,9 +36,10 @@ func TestScriptTypedXMLAndVectorColumns(t *testing.T) {
 			return errOnly(scriptTestDB().CreateTable(c, CreateTableRequest{Schema: "dbo", Name: "o'brien", Columns: []ColumnDefinition{col}}))
 		}
 	}
+	db := alterTestDB(t)
 	alter := func(col ColumnDefinition) func(context.Context) error {
 		return func(c context.Context) error {
-			return scriptTestDB().TableRef("dbo", "o'brien").AlterColumn(c, col)
+			return db.TableRef("dbo", "o'brien").AlterColumn(c, col)
 		}
 	}
 	const head = scriptUsePrefix + "CREATE TABLE [dbo].[o'brien] (\n    "
@@ -86,8 +105,9 @@ func TestScriptColumnCollation(t *testing.T) {
 			return errOnly(scriptTestDB().CreateTable(c, CreateTableRequest{Schema: "dbo", Name: "t", Columns: []ColumnDefinition{col}}))
 		}
 	}
+	db := alterTestDB(t)
 	alter := func(col ColumnDefinition) func(context.Context) error {
-		return func(c context.Context) error { return scriptTestDB().TableRef("dbo", "t").AlterColumn(c, col) }
+		return func(c context.Context) error { return db.TableRef("dbo", "t").AlterColumn(c, col) }
 	}
 	runScriptCases(t, []scriptCase{
 		{"CreateTable collated varchar", create(ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 20,
@@ -125,56 +145,101 @@ func TestColumnCollationRefusedWhenUnsayable(t *testing.T) {
 	}
 }
 
-// AlterColumn with no Collation on a string column restates the one the
-// column has: ALTER COLUMN without COLLATE would reset it to the database
-// default. A column with none (NULL, a non-string column becoming a string
-// one) gets no clause; a non-string target is not read at all; a column the
-// read does not find is ErrNotFound and nothing is altered.
-func TestAlterColumnRestatesCurrentCollation(t *testing.T) {
+// AlterColumn restates what ALTER COLUMN would otherwise reset without a
+// word (B4, review plan 2026-10-21). With no Collation, a string column keeps
+// the one it has; a column with none (NULL, a non-string column becoming a
+// string one) gets no clause. A SPARSE column stays SPARSE, written before
+// NULL ("NULL SPARSE" is Msg 102), and asking it to be NOT NULL is refused. A
+// masked column gets its mask back in the same atomic batch, the function
+// unescaped from the catalog and quoted once. The column is read whatever the
+// target type; one the read does not find is ErrNotFound and nothing is
+// altered. On 2016, where ADD MASKED clears SPARSE (checked live on 13; 14
+// and 17 keep both), a column with both is refused instead.
+func TestAlterColumnRestatesCurrentAttributes(t *testing.T) {
 	const read = "FROM   sys.columns c"
-	collationRow := func(v driver.Value) cannedRow {
-		return cannedRow{match: read, cols: []string{"collation_name"}, row: []driver.Value{v}}
-	}
+	plain := columnAttrsRow(nil, false, nil)
 	cases := []struct {
-		name   string
-		canned []cannedRow
-		col    ColumnDefinition
-		want   string // the ALTER sent; "" for none
-		reads  bool
-		notFnd bool
+		name    string
+		major   int // 0 is 17
+		canned  []cannedRow
+		col     ColumnDefinition
+		want    string // the ALTER sent; "" for none
+		notFnd  bool
+		invalid bool
+		unsupp  bool
 	}{
-		{"keeps CS collation", []cannedRow{collationRow("Latin1_General_CS_AS")},
+		{"keeps CS collation", 0, []cannedRow{columnAttrsRow("Latin1_General_CS_AS", false, nil)},
 			ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 50, IsNullable: true},
-			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(50) COLLATE Latin1_General_CS_AS NULL", true, false},
-		{"none to restate", []cannedRow{collationRow(nil)},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(50) COLLATE Latin1_General_CS_AS NULL", false, false, false},
+		{"none to restate", 0, []cannedRow{plain},
 			ColumnDefinition{Name: "c", DataType: DataTypeNVarChar, MaxLength: 10},
-			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(10) NOT NULL", true, false},
-		{"explicit wins", []cannedRow{collationRow("Latin1_General_CS_AS")},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(10) NOT NULL", false, false, false},
+		{"explicit wins", 0, []cannedRow{columnAttrsRow("Latin1_General_CS_AS", false, nil)},
 			ColumnDefinition{Name: "c", DataType: DataTypeChar, MaxLength: 3, Collation: "Latin1_General_CI_AS"},
-			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] char(3) COLLATE Latin1_General_CI_AS NOT NULL", false, false},
-		{"non-string not read", []cannedRow{collationRow("Latin1_General_CS_AS")},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] char(3) COLLATE Latin1_General_CI_AS NOT NULL", false, false, false},
+		{"non-string drops collation", 0, []cannedRow{columnAttrsRow("Latin1_General_CS_AS", false, nil)},
 			ColumnDefinition{Name: "c", DataType: DataTypeInt},
-			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] int NOT NULL", false, false},
-		{"no such column", nil,
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] int NOT NULL", false, false, false},
+		{"keeps SPARSE", 0, []cannedRow{columnAttrsRow("Latin1_General_CS_AS", true, nil)},
+			ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 20, IsNullable: true},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] varchar(20) COLLATE Latin1_General_CS_AS SPARSE NULL", false, false, false},
+		{"SPARSE NOT NULL refused", 0, []cannedRow{columnAttrsRow(nil, true, nil)},
+			ColumnDefinition{Name: "c", DataType: DataTypeInt},
+			"", false, true, false},
+		{"keeps mask", 0, []cannedRow{columnAttrsRow(nil, false, "email()")},
+			ColumnDefinition{Name: "c]d", DataType: DataTypeVarChar, MaxLength: 20, IsNullable: true},
+			atomicBatchText(
+				"ALTER TABLE [dbo].[t] ALTER COLUMN [c]]d] varchar(20) NULL",
+				"ALTER TABLE [dbo].[t] ALTER COLUMN [c]]d] ADD MASKED WITH (FUNCTION = N'email()')"), false, false, false},
+		{"keeps mask with a quote, and SPARSE", 0, []cannedRow{columnAttrsRow(nil, true, `partial(1,"X''X",0)`)},
+			ColumnDefinition{Name: "c", DataType: DataTypeNVarChar, MaxLength: 30, IsNullable: true},
+			atomicBatchText(
+				"ALTER TABLE [dbo].[t] ALTER COLUMN [c] nvarchar(30) SPARSE NULL",
+				`ALTER TABLE [dbo].[t] ALTER COLUMN [c] ADD MASKED WITH (FUNCTION = N'partial(1,"X''X",0)')`), false, false, false},
+		{"keeps SPARSE on 2016", 13, []cannedRow{columnAttrsRow(nil, true, nil)},
+			ColumnDefinition{Name: "c", DataType: DataTypeInt, IsNullable: true},
+			"ALTER TABLE [dbo].[t] ALTER COLUMN [c] int SPARSE NULL", false, false, false},
+		{"keeps mask on 2016", 13, []cannedRow{columnAttrsRow(nil, false, "default()")},
+			ColumnDefinition{Name: "c", DataType: DataTypeInt, IsNullable: true},
+			atomicBatchText(
+				"ALTER TABLE [dbo].[t] ALTER COLUMN [c] int NULL",
+				"ALTER TABLE [dbo].[t] ALTER COLUMN [c] ADD MASKED WITH (FUNCTION = N'default()')"), false, false, false},
+		{"SPARSE and masked refused on 2016", 13, []cannedRow{columnAttrsRow(nil, true, "default()")},
+			ColumnDefinition{Name: "c", DataType: DataTypeInt, IsNullable: true},
+			"", false, false, true},
+		{"no such column", 0, nil,
 			ColumnDefinition{Name: "c", DataType: DataTypeVarChar, MaxLength: 5},
-			"", true, true},
+			"", true, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := captureServer(t, 17)
+			major := c.major
+			if major == 0 {
+				major = 17
+			}
+			s := captureServer(t, major)
 			captured.reset(c.canned...)
 			err := (&Database{server: s, Name: "app"}).TableRef("dbo", "t").AlterColumn(t.Context(), c.col)
-			if c.notFnd {
+			switch {
+			case c.unsupp:
+				if !errors.Is(err, ErrUnsupported) {
+					t.Fatalf("err = %v, want ErrUnsupported", err)
+				}
+			case c.notFnd:
 				if !errors.Is(err, ErrNotFound) {
 					t.Fatalf("err = %v, want ErrNotFound", err)
 				}
-			} else if err != nil {
+			case c.invalid:
+				if !errors.Is(err, ErrInvalidRequest) {
+					t.Fatalf("err = %v, want ErrInvalidRequest", err)
+				}
+			case err != nil:
 				t.Fatalf("AlterColumn: %v", err)
 			}
-			if q := captured.find(read); (q != "") != c.reads {
-				t.Errorf("collation read sent = %v, want %v", q != "", c.reads)
-			} else if c.reads && !strings.Contains(q, "c.name = @p2") {
-				t.Errorf("collation read %q does not match the column by name", q)
+			if q := captured.find(read); q == "" {
+				t.Error("column read not sent")
+			} else if !strings.Contains(q, "c.name = @p2") {
+				t.Errorf("column read %q does not match the column by name", q)
 			}
 			got := captured.find("ALTER TABLE")
 			if _, rest, ok := splitUseBatch(got); ok {

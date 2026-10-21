@@ -68,6 +68,10 @@ func TestScriptCommentsContainHostileNames(t *testing.T) {
 			return scriptIndex(&Index{Name: n, Type: IndexTypeXML, KeyColumns: []IndexColumn{{Name: "doc"}}},
 				qualifiedName(n, n), DataSpace{}, DefaultScriptOptions())
 		},
+		"hypothetical index": func(n string) string {
+			return scriptIndex(&Index{Name: n, Type: IndexTypeNonClustered, IsHypothetical: true,
+				KeyColumns: []IndexColumn{{Name: "c"}}}, qualifiedName(n, n), DataSpace{}, DefaultScriptOptions())
+		},
 		"built-in resource pool": func(n string) string {
 			var sb strings.Builder
 			systemRGScript(&sb, "ALTER RESOURCE POOL", "resource pool", n, &rgOptions{}, "")

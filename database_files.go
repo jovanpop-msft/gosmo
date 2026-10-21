@@ -339,7 +339,14 @@ func buildAlterFileStatement(dbName, name string, m FileModify) (string, error) 
 // a shrink stops at the space the file's data occupies. It is slow on a
 // large file, moves pages and so fragments the indexes it touches. Under
 // WithScript it captures the statement and returns 0.
+//
+// It refuses a file whose Type reads "FILESTREAM": a container takes only
+// EMPTYFILE (ShrinkWith), never a target. A FileRef has no type, so the
+// server answers that one.
 func (f *DatabaseFileInfo) Shrink(ctx context.Context, targetKB int64) (int64, error) {
+	if f.Type == "FILESTREAM" {
+		return 0, invalidf("gosmo: shrink file %q in %q: a FILESTREAM container can only be emptied (EMPTYFILE)", f.Name, f.db.Name)
+	}
 	if targetKB < 0 {
 		return 0, invalidf("gosmo: shrink file %q in %q: target size %d KB is negative", f.Name, f.db.Name, targetKB)
 	}

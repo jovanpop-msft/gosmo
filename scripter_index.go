@@ -36,9 +36,19 @@ func indexColumnList(cols []IndexColumn) string {
 // form — which is what this once did — emits DDL SQL Server rejects. An XML
 // or spatial index whose form was not read is emitted as a comment naming
 // what was skipped rather than as a statement that cannot run.
+//
+// A hypothetical index is a comment too. It has no data, only the
+// statistics the tuning advisor reads, and no documented DDL recreates one:
+// scripted as CREATE INDEX it was built on the target for real, at real
+// build cost and write overhead — dozens of them in a database the advisor
+// has been through.
 func scriptIndex(idx *Index, tableName string, tableDS DataSpace, opts ScriptOptions) string {
 	var sb strings.Builder
 	switch {
+	case idx.IsHypothetical:
+		fmt.Fprintf(&sb, "-- hypothetical index %s on %s (tuning advisor) not scripted\n\n",
+			tsql.CommentSafe(quoteIdent(idx.Name)), tsql.CommentSafe(tableName))
+		return sb.String()
 	case idx.Type == IndexTypeClusteredColumnStore:
 		if opts.IncludeIfNotExists {
 			sb.WriteString(indexExistenceGuard(idx.Name, tableName))
@@ -332,9 +342,10 @@ func compressionOptions(single DataCompression, parts []DataCompression, named f
 }
 
 // indexDisableStatement renders the ALTER INDEX ... DISABLE that leaves a
-// recreated index disabled as its source was, or "" for an enabled one.
+// recreated index disabled as its source was, or "" for an enabled one —
+// and for a hypothetical one, which scriptIndex does not recreate.
 func indexDisableStatement(idx *Index, tableName string) string {
-	if !idx.IsDisabled {
+	if !idx.IsDisabled || idx.IsHypothetical {
 		return ""
 	}
 	return fmt.Sprintf("ALTER INDEX %s ON %s DISABLE;\nGO\n\n", quoteIdent(idx.Name), tableName)

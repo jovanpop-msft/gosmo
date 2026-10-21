@@ -100,6 +100,7 @@ CROSS  APPLY (
        SELECT 3, i.index_id, N'INDEX', i.name
        FROM   sys.indexes i
        WHERE  ep.class = 7 AND ep.major_id = @p1 AND i.object_id = @p1 AND i.index_id = ep.minor_id
+         AND  i.is_hypothetical = 0
        UNION ALL
        SELECT 4, k.object_id, N'CONSTRAINT', k.name
        FROM   sys.objects k

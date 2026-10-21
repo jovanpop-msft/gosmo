@@ -35,6 +35,9 @@ func (idx *Index) target() string {
 
 // Reorganize reorganizes the index (ALTER INDEX ... REORGANIZE).
 func (idx *Index) Reorganize(ctx context.Context) error {
+	if err := idx.refuseHypothetical("reorganize"); err != nil {
+		return err
+	}
 	q := fmt.Sprintf("ALTER INDEX %s REORGANIZE", idx.target())
 	if _, err := idx.table.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: reorganize index %q: %w", idx.Name, err)
@@ -44,6 +47,9 @@ func (idx *Index) Reorganize(ctx context.Context) error {
 
 // Disable disables the index (ALTER INDEX ... DISABLE).
 func (idx *Index) Disable(ctx context.Context) error {
+	if err := idx.refuseHypothetical("disable"); err != nil {
+		return err
+	}
 	q := fmt.Sprintf("ALTER INDEX %s DISABLE", idx.target())
 	if _, err := idx.table.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: disable index %q: %w", idx.Name, err)
@@ -233,10 +239,25 @@ type IndexRebuildOptions struct {
 // not supported with memory optimized tables"). It knows the table only as
 // far as idx was read: a hash index always is one, and an index of a table
 // read by TableByName says so; an IndexRef on a TableRef is left to the
-// server.
+// server. A hypothetical index is refused too (see refuseHypothetical).
 func (idx *Index) refuseAlterIndex(verb string) error {
+	if err := idx.refuseHypothetical(verb); err != nil {
+		return err
+	}
 	if idx.Type == IndexTypeNonClusteredHash || (idx.table != nil && idx.table.IsMemoryOptimized) {
 		return invalidf("gosmo: %s index %q: ALTER INDEX is not supported on a memory-optimized table", verb, idx.Name)
+	}
+	return nil
+}
+
+// refuseHypothetical refuses ALTER INDEX on an index read as hypothetical
+// (Index.IsHypothetical). The server accepts REBUILD, REORGANIZE, DISABLE
+// and SET on one and does nothing — no data to rebuild, nothing to disable —
+// so the call reported a change that never happened. An IndexRef was not
+// read and is left to the server.
+func (idx *Index) refuseHypothetical(verb string) error {
+	if idx.IsHypothetical {
+		return invalidf("gosmo: %s index %q: it is a hypothetical (tuning advisor) index, which has no data; ALTER INDEX does nothing to it", verb, idx.Name)
 	}
 	return nil
 }
@@ -657,7 +678,7 @@ func (t *Table) FragmentationStats(ctx context.Context, mode FragmentationMode) 
 	}
 
 	q := fragmentationSelect(mode) + `
-WHERE  i.object_id = OBJECT_ID(@p1) AND i.index_id > 0
+WHERE  i.object_id = OBJECT_ID(@p1) AND i.index_id > 0 AND i.is_hypothetical = 0
 GROUP  BY i.name, i.index_id
 ORDER  BY 3 DESC, i.name`
 

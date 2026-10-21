@@ -25,11 +25,18 @@ type Index struct {
 	IsPrimaryKey       bool
 	IsUniqueConstraint bool
 	IsDisabled         bool
-	FillFactor         int
-	IsPadded           bool
-	IgnoreDupKey       bool
-	AllowRowLocks      bool
-	AllowPageLocks     bool
+	// IsHypothetical marks a hypothetical index (sys.indexes.is_hypothetical)
+	// — the what-if index the Database Engine Tuning Advisor creates WITH
+	// STATISTICS_ONLY and often leaves behind. It has statistics and no
+	// data: no pages, no data space, and ALTER INDEX on it does nothing.
+	// A script leaves it out (there is no documented DDL that recreates
+	// one), and DROP INDEX is the one write that means anything on it.
+	IsHypothetical bool
+	FillFactor     int
+	IsPadded       bool
+	IgnoreDupKey   bool
+	AllowRowLocks  bool
+	AllowPageLocks bool
 	// DataCompression is the index's compression — its first partition's
 	// when it is partitioned; PartitionCompression has every partition's.
 	DataCompression DataCompression
@@ -253,7 +260,7 @@ func (t *Table) attachIndexColumns(ctx context.Context, indexes []*Index, extra 
 func (t *Table) indexListSelect() string {
 	return `
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
-       i.is_unique_constraint, i.is_disabled, i.fill_factor,
+       i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
        ` + partitionCompressionList("i.object_id", "i.index_id") + `,
@@ -306,7 +313,7 @@ ORDER  BY i.index_id`
 		var xmin, ymin, xmax, ymax sql.NullFloat64
 		if err := rows.Scan(&idx.Name, &idx.IndexID, &typeDesc,
 			&idx.IsUnique, &idx.IsPrimaryKey, &idx.IsUniqueConstraint,
-			&idx.IsDisabled, &idx.FillFactor, &idx.FilterDefinition,
+			&idx.IsDisabled, &idx.IsHypothetical, &idx.FillFactor, &idx.FilterDefinition,
 			&idx.IsPadded, &idx.IgnoreDupKey, &idx.AllowRowLocks, &idx.AllowPageLocks,
 			&compression,
 			&idx.DataSpace.Name, &idx.DataSpace.IsPartitionScheme,

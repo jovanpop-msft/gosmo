@@ -40,10 +40,23 @@ func TestScriptShrinkWrites(t *testing.T) {
 		{"File ShrinkWith target 0 is sent verbatim", func(c context.Context) error {
 			return scriptTestDB().FileRef("AppLog").ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(0))})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 0)"},
+		{"FILESTREAM container ShrinkWith EMPTYFILE", func(c context.Context) error {
+			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{EmptyFile: true})
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'fs1', EMPTYFILE)"},
+		{"FileRef with no type sends TRUNCATEONLY", func(c context.Context) error {
+			return scriptTestDB().FileRef("fs1").ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'fs1', TRUNCATEONLY)"},
 		{"File ShrinkWith EMPTYFILE at low priority", func(c context.Context) error {
 			return scriptTestDB().FileRef("f3").ShrinkWith(c, ShrinkFileOptions{EmptyFile: true, Wait: ShrinkWaitLowPriorityBlockers})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'f3', EMPTYFILE) WITH WAIT_AT_LOW_PRIORITY (ABORT_AFTER_WAIT = BLOCKERS)"},
 	})
+}
+
+// filestreamFile is a FILESTREAM container as Database.Files returns one.
+func filestreamFile() *DatabaseFileInfo {
+	f := scriptTestDB().FileRef("fs1")
+	f.Type = "FILESTREAM"
+	return f
 }
 
 // TestShrinkRefusals pins the argument checks and the version gate: each is
@@ -70,6 +83,22 @@ func TestShrinkRefusals(t *testing.T) {
 		}, ErrInvalidRequest},
 		{"EMPTYFILE with TRUNCATEONLY", func(c context.Context) error {
 			return scriptTestDB().FileRef("f").ShrinkWith(c, ShrinkFileOptions{EmptyFile: true, Truncate: ShrinkTruncateOnly})
+		}, ErrInvalidRequest},
+		{"FILESTREAM container TRUNCATEONLY", func(c context.Context) error {
+			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
+		}, ErrInvalidRequest},
+		{"FILESTREAM container NOTRUNCATE", func(c context.Context) error {
+			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkNoTruncate})
+		}, ErrInvalidRequest},
+		{"FILESTREAM container with a target", func(c context.Context) error {
+			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(0))})
+		}, ErrInvalidRequest},
+		{"FILESTREAM container bare", func(c context.Context) error {
+			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{})
+		}, ErrInvalidRequest},
+		{"FILESTREAM container narrow Shrink", func(c context.Context) error {
+			_, err := filestreamFile().Shrink(c, 0)
+			return err
 		}, ErrInvalidRequest},
 		{"low priority on SQL Server 2019", func(c context.Context) error {
 			return old.Shrink(c, ShrinkDatabaseOptions{Wait: ShrinkWaitLowPrioritySelf})

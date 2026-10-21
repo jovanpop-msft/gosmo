@@ -60,6 +60,11 @@ type ShrinkDatabaseOptions struct {
 }
 
 // ShrinkFileOptions shapes DatabaseFileInfo.ShrinkWith's DBCC SHRINKFILE.
+//
+// A FILESTREAM container takes EMPTYFILE and nothing else: any other form is
+// Msg 2563. On a file whose Type reads "FILESTREAM" (one Database.Files
+// returned) ShrinkWith refuses those forms itself; a FileRef has no type, so
+// it sends them and the server answers.
 type ShrinkFileOptions struct {
 	// TargetMB is the size to shrink the file to, sent verbatim — 0 included,
 	// which stops at the file's creation size rather than its contents (see
@@ -93,7 +98,7 @@ func (d *Database) Shrink(ctx context.Context, opts ShrinkDatabaseOptions) error
 // and WAIT_AT_LOW_PRIORITY. Shrink is the narrower form that reports the size
 // reached. Under WithScript it captures the statement.
 func (f *DatabaseFileInfo) ShrinkWith(ctx context.Context, opts ShrinkFileOptions) error {
-	stmt, err := buildShrinkFileWithStatement(f.Name, opts, f.db.server)
+	stmt, err := buildShrinkFileWithStatement(f.Name, f.Type, opts, f.db.server)
 	if err != nil {
 		return fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
 	}
@@ -122,9 +127,13 @@ func buildShrinkDatabaseStatement(name string, opts ShrinkDatabaseOptions, s *Se
 
 // buildShrinkFileWithStatement renders ShrinkWith's statement, naming the file
 // by its logical name as a literal — the handle may be a FileRef, with no
-// file_id.
-func buildShrinkFileWithStatement(name string, opts ShrinkFileOptions, s *Server) (string, error) {
+// file_id. typeDesc is the file's Type as the handle holds it, "" when unknown:
+// it is passed in, not read, so a FileRef stays lookup-free.
+func buildShrinkFileWithStatement(name, typeDesc string, opts ShrinkFileOptions, s *Server) (string, error) {
 	args := []string{QuoteLiteral(name)}
+	if typeDesc == "FILESTREAM" && !opts.EmptyFile {
+		return "", invalidf("a FILESTREAM container can only be emptied (EMPTYFILE)")
+	}
 	if opts.EmptyFile {
 		if opts.TargetMB != nil || opts.Truncate != ShrinkTruncateDefault {
 			return "", invalidf("EMPTYFILE takes neither a target size nor a release clause")
