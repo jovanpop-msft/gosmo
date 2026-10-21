@@ -91,14 +91,14 @@ func TestIndexesUsesOneQueryForEveryIndexColumn(t *testing.T) {
 				"is_padded", "ignore_dup_key", "allow_row_locks", "allow_page_locks",
 				"data_compression_desc",
 				"data_space", "is_partition_scheme", "is_default_filegroup", "partition_column",
-				"no_recompute", "optimize_for_sequential_key", "bucket_count", "compression_delay",
+				"no_recompute", "is_incremental", "optimize_for_sequential_key", "bucket_count", "compression_delay",
 				"is_primary_xml", "primary_xml_index", "secondary_type_desc", "is_selective_xml", "selective_xml_path",
 				"tessellation_scheme",
 				"xmin", "ymin", "xmax", "ymax", "level_1", "level_2", "level_3", "level_4", "cells_per_object"},
 			rows: [][]driver.Value{
-				withNoXMLOrSpatial("PK_T", int64(1), "CLUSTERED", true, true, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "PRIMARY", false, true, "", false, false, int64(0), int64(0)),
-				withNoXMLOrSpatial("IX_covering", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"PAGE"},{"n":2,"c":"NONE"}]`, "ps_year", true, false, "created", true, true, int64(0), int64(0)),
-				withNoXMLOrSpatial("IX_empty", int64(3), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "FG_archive", false, false, "", false, false, int64(0), int64(45)),
+				withNoXMLOrSpatial("PK_T", int64(1), "CLUSTERED", true, true, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "PRIMARY", false, true, "", false, false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("IX_covering", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"PAGE"},{"n":2,"c":"NONE"}]`, "ps_year", true, false, "created", true, true, true, int64(0), int64(0)),
+				withNoXMLOrSpatial("IX_empty", int64(3), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "FG_archive", false, false, "", false, false, false, int64(0), int64(45)),
 			},
 		},
 		cannedRow{
@@ -155,11 +155,12 @@ func TestIndexesUsesOneQueryForEveryIndexColumn(t *testing.T) {
 		if !slices.Equal(got.IncludedColumns, w.incl) {
 			t.Errorf("%s included columns = %+v, want %+v", w.name, got.IncludedColumns, w.incl)
 		}
-		// Only IX_covering's row sets the two trailing options; a scan that
+		// Only IX_covering's row sets the three trailing options; a scan that
 		// shifted them onto the wrong destinations flips one of these.
-		if wantOn := w.name == "IX_covering"; got.StatisticsNoRecompute != wantOn || got.OptimizeForSequentialKey != wantOn {
-			t.Errorf("%s NoRecompute/OptimizeForSequentialKey = %v/%v, want %v/%v",
-				w.name, got.StatisticsNoRecompute, got.OptimizeForSequentialKey, wantOn, wantOn)
+		if wantOn := w.name == "IX_covering"; got.StatisticsNoRecompute != wantOn ||
+			got.StatisticsIncremental != wantOn || got.OptimizeForSequentialKey != wantOn {
+			t.Errorf("%s NoRecompute/Incremental/OptimizeForSequentialKey = %v/%v/%v, want %v/%v/%v",
+				w.name, got.StatisticsNoRecompute, got.StatisticsIncremental, got.OptimizeForSequentialKey, wantOn, wantOn, wantOn)
 		}
 		// The compression column is a per-partition JSON list; DataCompression
 		// is its first entry. Only IX_covering's is partitioned and mixed.
@@ -213,14 +214,14 @@ func TestIndexListReadsEachIndexDataSpace(t *testing.T) {
 				"is_padded", "ignore_dup_key", "allow_row_locks", "allow_page_locks",
 				"data_compression_desc",
 				"data_space", "is_partition_scheme", "is_default_filegroup", "partition_column",
-				"no_recompute", "optimize_for_sequential_key", "bucket_count", "compression_delay",
+				"no_recompute", "is_incremental", "optimize_for_sequential_key", "bucket_count", "compression_delay",
 				"is_primary_xml", "primary_xml_index", "secondary_type_desc", "is_selective_xml", "selective_xml_path",
 				"tessellation_scheme",
 				"xmin", "ymin", "xmax", "ymax", "level_1", "level_2", "level_3", "level_4", "cells_per_object"},
 			rows: [][]driver.Value{
-				withNoXMLOrSpatial("PK_T", int64(1), "CLUSTERED", true, true, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "ps_year", true, false, "Created", false, false, int64(0), int64(0)),
-				withNoXMLOrSpatial("IX_archive", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "FG_Archive", false, false, "", false, false, int64(0), int64(0)),
-				withNoXMLOrSpatial("IX_default", int64(3), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "PRIMARY", false, true, "", false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("PK_T", int64(1), "CLUSTERED", true, true, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "ps_year", true, false, "Created", false, false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("IX_archive", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "FG_Archive", false, false, "", false, false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("IX_default", int64(3), "NONCLUSTERED", false, false, false, false, false, int64(0), "", false, false, true, true, `[{"n":1,"c":"NONE"}]`, "PRIMARY", false, true, "", false, false, false, int64(0), int64(0)),
 			},
 		},
 		cannedRow{
@@ -302,13 +303,13 @@ func TestIndexListReadsXMLAndSpatialForms(t *testing.T) {
 		"is_padded", "ignore_dup_key", "allow_row_locks", "allow_page_locks",
 		"data_compression_desc",
 		"data_space", "is_partition_scheme", "is_default_filegroup", "partition_column",
-		"no_recompute", "optimize_for_sequential_key", "bucket_count", "compression_delay",
+		"no_recompute", "is_incremental", "optimize_for_sequential_key", "bucket_count", "compression_delay",
 		"is_primary_xml", "primary_xml_index", "secondary_type_desc", "is_selective_xml", "selective_xml_path",
 		"tessellation_scheme",
 		"xmin", "ymin", "xmax", "ymax", "level_1", "level_2", "level_3", "level_4", "cells_per_object"}
 	head := func(name string, id int64, typ string) []driver.Value {
 		return []driver.Value{name, id, typ, false, false, false, false, false, int64(0), "", false, false, true, true,
-			nil, "", false, false, "", false, false, int64(0), int64(0)}
+			nil, "", false, false, "", false, false, false, int64(0), int64(0)}
 	}
 	captured.reset(
 		cannedRow{
@@ -365,13 +366,13 @@ func TestIndexListReadsSelectiveXML(t *testing.T) {
 		"is_padded", "ignore_dup_key", "allow_row_locks", "allow_page_locks",
 		"data_compression_desc",
 		"data_space", "is_partition_scheme", "is_default_filegroup", "partition_column",
-		"no_recompute", "optimize_for_sequential_key", "bucket_count", "compression_delay",
+		"no_recompute", "is_incremental", "optimize_for_sequential_key", "bucket_count", "compression_delay",
 		"is_primary_xml", "primary_xml_index", "secondary_type_desc", "is_selective_xml", "selective_xml_path",
 		"tessellation_scheme",
 		"xmin", "ymin", "xmax", "ymax", "level_1", "level_2", "level_3", "level_4", "cells_per_object"}
 	head := func(name string, id int64) []driver.Value {
 		return []driver.Value{name, id, "XML", false, false, false, false, false, int64(0), "", false, false, true, true,
-			nil, "", false, false, "", false, false, int64(0), int64(0)}
+			nil, "", false, false, "", false, false, false, int64(0), int64(0)}
 	}
 	spatial := []driver.Value{"", nil, nil, nil, nil, "", "", "", "", int64(0)}
 	captured.reset(

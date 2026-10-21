@@ -256,6 +256,9 @@ func indexWithClause(idx *Index, sep string, extra ...string) string {
 	if idx.StatisticsNoRecompute {
 		o = append(o, "STATISTICS_NORECOMPUTE = ON")
 	}
+	if idx.StatisticsIncremental {
+		o = append(o, "STATISTICS_INCREMENTAL = ON")
+	}
 	if !idx.AllowRowLocks {
 		o = append(o, "ALLOW_ROW_LOCKS = OFF")
 	}
@@ -268,6 +271,7 @@ func indexWithClause(idx *Index, sep string, extra ...string) string {
 		o = append(o, "OPTIMIZE_FOR_SEQUENTIAL_KEY = ON")
 	}
 	o = append(o, compressionOptions(idx.DataCompression, idx.PartitionCompression, rowstoreCompressed)...)
+	o = append(o, xmlCompressionOptions(idx.PartitionXMLCompression)...)
 	o = append(o, extra...)
 	if len(o) == 0 {
 		return ""
@@ -308,24 +312,7 @@ func rowstoreCompressed(c DataCompression) bool {
 // partitions mixed PAGE and NONE as PAGE (or NONE) throughout.
 func compressionOptions(single DataCompression, parts []DataCompression, named func(DataCompression) bool) []string {
 	if len(parts) > 1 && slices.ContainsFunc(parts[1:], func(c DataCompression) bool { return c != parts[0] }) {
-		var order []DataCompression
-		ranges := map[DataCompression][]string{}
-		for start := 0; start < len(parts); {
-			end := start
-			for end+1 < len(parts) && parts[end+1] == parts[start] {
-				end++
-			}
-			c := parts[start]
-			if _, seen := ranges[c]; !seen {
-				order = append(order, c)
-			}
-			if start == end {
-				ranges[c] = append(ranges[c], fmt.Sprint(start+1))
-			} else {
-				ranges[c] = append(ranges[c], fmt.Sprintf("%d TO %d", start+1, end+1))
-			}
-			start = end + 1
-		}
+		order, ranges := partitionRuns(parts)
 		var o []string
 		for _, c := range order {
 			if named(c) {
@@ -338,6 +325,46 @@ func compressionOptions(single DataCompression, parts []DataCompression, named f
 		return []string{"DATA_COMPRESSION = " + string(single)}
 	}
 	return nil
+}
+
+// xmlCompressionOptions renders XML_COMPRESSION for a heap or rowstore index
+// whose partitions' settings are parts: nothing when none is on, the single
+// form when all are, else ON PARTITIONS (…) naming those that are — OFF is
+// the statement's default, so the rest need no clause of their own.
+func xmlCompressionOptions(parts []bool) []string {
+	if !slices.Contains(parts, true) {
+		return nil
+	}
+	if !slices.Contains(parts, false) {
+		return []string{"XML_COMPRESSION = ON"}
+	}
+	_, ranges := partitionRuns(parts)
+	return []string{"XML_COMPRESSION = ON ON PARTITIONS (" + strings.Join(ranges[true], ", ") + ")"}
+}
+
+// partitionRuns groups per-partition values (element i is partition i+1)
+// into ON PARTITIONS ranges, contiguous partitions collapsed to "a TO b":
+// each distinct value in the order it first appears, and its ranges.
+func partitionRuns[T comparable](parts []T) ([]T, map[T][]string) {
+	var order []T
+	ranges := map[T][]string{}
+	for start := 0; start < len(parts); {
+		end := start
+		for end+1 < len(parts) && parts[end+1] == parts[start] {
+			end++
+		}
+		c := parts[start]
+		if _, seen := ranges[c]; !seen {
+			order = append(order, c)
+		}
+		if start == end {
+			ranges[c] = append(ranges[c], fmt.Sprint(start+1))
+		} else {
+			ranges[c] = append(ranges[c], fmt.Sprintf("%d TO %d", start+1, end+1))
+		}
+		start = end + 1
+	}
+	return order, ranges
 }
 
 // indexDisableStatement renders the ALTER INDEX ... DISABLE that leaves a

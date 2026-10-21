@@ -22,13 +22,13 @@ func TestIndexesReadsIsHypothetical(t *testing.T) {
 				"is_padded", "ignore_dup_key", "allow_row_locks", "allow_page_locks",
 				"data_compression_desc",
 				"data_space", "is_partition_scheme", "is_default_filegroup", "partition_column",
-				"no_recompute", "optimize_for_sequential_key", "bucket_count", "compression_delay",
+				"no_recompute", "is_incremental", "optimize_for_sequential_key", "bucket_count", "compression_delay",
 				"is_primary_xml", "primary_xml_index", "secondary_type_desc", "is_selective_xml", "selective_xml_path",
 				"tessellation_scheme",
 				"xmin", "ymin", "xmax", "ymax", "level_1", "level_2", "level_3", "level_4", "cells_per_object"},
 			rows: [][]driver.Value{
-				withNoXMLOrSpatial("ix_real", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(80), "", false, false, true, true, nil, "PRIMARY", false, true, "", false, false, int64(0), int64(0)),
-				withNoXMLOrSpatial("ix_hypo", int64(3), "NONCLUSTERED", false, false, false, false, true, int64(0), "", false, false, true, true, nil, "", false, false, "", false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("ix_real", int64(2), "NONCLUSTERED", false, false, false, false, false, int64(80), "", false, false, true, true, nil, "PRIMARY", false, true, "", false, false, false, int64(0), int64(0)),
+				withNoXMLOrSpatial("ix_hypo", int64(3), "NONCLUSTERED", false, false, false, false, true, int64(0), "", false, false, true, true, nil, "", false, false, "", false, false, false, int64(0), int64(0)),
 			},
 		},
 		cannedRow{

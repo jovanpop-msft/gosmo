@@ -1,6 +1,7 @@
 package gosmo
 
 import (
+	"database/sql"
 	"slices"
 	"strings"
 	"testing"
@@ -419,18 +420,19 @@ func TestBuildTableScriptIndexOptions(t *testing.T) {
 		cols: []*Column{{Name: "a", DataType: DataTypeInt}, {Name: "b", DataType: DataTypeInt}},
 		indexes: []*Index{
 			{Name: "PK_T", IsPrimaryKey: true, IsClustered: true, AllowRowLocks: true, AllowPageLocks: false,
-				OptimizeForSequentialKey: true,
-				DataCompression:          "PAGE", KeyColumns: []IndexColumn{{Name: "a"}}},
+				OptimizeForSequentialKey: true, StatisticsIncremental: true,
+				DataCompression: "PAGE", KeyColumns: []IndexColumn{{Name: "a"}}},
 			{Name: "IX_b", Type: IndexTypeNonClustered, IsUnique: true, IsPadded: true, FillFactor: 80,
-				IgnoreDupKey: true, StatisticsNoRecompute: true, AllowRowLocks: true, AllowPageLocks: true, DataCompression: "ROW",
+				IgnoreDupKey: true, StatisticsNoRecompute: true, StatisticsIncremental: true,
+				AllowRowLocks: true, AllowPageLocks: true, DataCompression: "ROW",
 				IsDisabled: true, KeyColumns: []IndexColumn{{Name: "b"}}},
 		},
 		table: tableScriptOptions{HeapCompression: ""},
 	}
 	got := buildTableScript("dbo", "T", "db", p, ScriptOptions{})
 	for _, want := range []string{
-		"PRIMARY KEY CLUSTERED ([a] ASC) WITH (ALLOW_PAGE_LOCKS = OFF, OPTIMIZE_FOR_SEQUENTIAL_KEY = ON, DATA_COMPRESSION = PAGE)",
-		"WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, STATISTICS_NORECOMPUTE = ON, DATA_COMPRESSION = ROW);",
+		"PRIMARY KEY CLUSTERED ([a] ASC) WITH (STATISTICS_INCREMENTAL = ON, ALLOW_PAGE_LOCKS = OFF, OPTIMIZE_FOR_SEQUENTIAL_KEY = ON, DATA_COMPRESSION = PAGE)",
+		"WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, STATISTICS_NORECOMPUTE = ON, STATISTICS_INCREMENTAL = ON, DATA_COMPRESSION = ROW);",
 		"ALTER INDEX [IX_b] ON [dbo].[T] DISABLE;",
 	} {
 		if !strings.Contains(got, want) {
@@ -516,6 +518,73 @@ func TestCompressionOptionsPerPartition(t *testing.T) {
 		HeapCompression: "NONE", HeapPartitionCompression: []DataCompression{N, P, P}}}
 	if got := buildTableScript("dbo", "T", "db", heap, ScriptOptions{}); !strings.Contains(got, ")\nWITH (DATA_COMPRESSION = PAGE ON PARTITIONS (2 TO 3));") {
 		t.Errorf("a heap with mixed compression lost it:\n%s", got)
+	}
+}
+
+// TestXMLCompressionOptions: XML_COMPRESSION (SQL Server 2022) lives in
+// sys.partitions beside DATA_COMPRESSION and was read nowhere, so a script
+// recreated every table and index with it off. Partitions can mix it.
+func TestXMLCompressionOptions(t *testing.T) {
+	cases := []struct {
+		name  string
+		parts []bool
+		want  []string
+	}{
+		{"unread", nil, nil},
+		{"off", []bool{false, false}, nil},
+		{"single", []bool{true}, []string{"XML_COMPRESSION = ON"}},
+		{"uniform", []bool{true, true, true}, []string{"XML_COMPRESSION = ON"}},
+		{"mixed", []bool{true, false, true, true, false}, []string{"XML_COMPRESSION = ON ON PARTITIONS (1, 3 TO 4)"}},
+	}
+	for _, c := range cases {
+		if got := xmlCompressionOptions(c.parts); !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// Through the whole script: the clustered PK inside CREATE TABLE, a
+	// nonclustered index beside its DATA_COMPRESSION, and a heap.
+	p := tableScriptParts{
+		cols: []*Column{{Name: "a", DataType: DataTypeInt}, {Name: "x", DataType: DataTypeXML}},
+		indexes: []*Index{
+			{Name: "PK_T", IsPrimaryKey: true, IsClustered: true, AllowRowLocks: true, AllowPageLocks: true,
+				DataCompression: DataCompressionNone, XMLCompression: true, PartitionXMLCompression: []bool{true},
+				KeyColumns: []IndexColumn{{Name: "a"}}},
+			{Name: "IX_x", Type: IndexTypeNonClustered, AllowRowLocks: true, AllowPageLocks: true,
+				DataCompression: DataCompressionPage, PartitionXMLCompression: []bool{false, true},
+				KeyColumns: []IndexColumn{{Name: "a"}}, IncludedColumns: []IndexColumn{{Name: "x", IsIncluded: true}}},
+		},
+	}
+	got := buildTableScript("dbo", "T", "db", p, ScriptOptions{})
+	for _, want := range []string{
+		"PRIMARY KEY CLUSTERED ([a] ASC) WITH (XML_COMPRESSION = ON)",
+		"WITH (DATA_COMPRESSION = PAGE, XML_COMPRESSION = ON ON PARTITIONS (2));",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("script is missing %q:\n%s", want, got)
+		}
+	}
+	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapCompression: "NONE",
+		HeapPartitionCompression: []DataCompression{"NONE", "NONE"}, HeapPartitionXMLCompression: []bool{true, false}}}
+	if got := buildTableScript("dbo", "T", "db", heap, ScriptOptions{}); !strings.Contains(got, ")\nWITH (XML_COMPRESSION = ON ON PARTITIONS (1));") {
+		t.Errorf("a heap with XML compression lost it:\n%s", got)
+	}
+}
+
+// TestDecodePartitionCompressionReadsXMLCompression: the per-partition JSON
+// carries both settings, and an older instance's entry (x from CAST(0 AS
+// bit)) decodes as off.
+func TestDecodePartitionCompressionReadsXMLCompression(t *testing.T) {
+	col := sql.NullString{Valid: true, String: `[{"n":1,"c":"PAGE","x":true},{"n":2,"c":"NONE","x":false}]`}
+	data, xml, err := decodePartitionCompression(col)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(data, []DataCompression{DataCompressionPage, DataCompressionNone}) || !slices.Equal(xml, []bool{true, false}) {
+		t.Errorf("got %v / %v", data, xml)
+	}
+	if data, xml, err := decodePartitionCompression(sql.NullString{}); err != nil || data != nil || xml != nil {
+		t.Errorf("NULL: got %v / %v / %v, want nil", data, xml, err)
 	}
 }
 

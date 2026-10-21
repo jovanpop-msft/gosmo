@@ -45,10 +45,20 @@ type Index struct {
 	// index can mix them, and a script written from DataCompression alone
 	// recreated it with one compression throughout.
 	PartitionCompression []DataCompression
+	// XMLCompression is the index's XML_COMPRESSION (SQL Server 2022) — its
+	// first partition's when it is partitioned; PartitionXMLCompression has
+	// every partition's, which a partitioned index can mix as it can
+	// DATA_COMPRESSION. Always false on an older instance.
+	XMLCompression          bool
+	PartitionXMLCompression []bool
 	// StatisticsNoRecompute is the index's STATISTICS_NORECOMPUTE option,
 	// read from its statistics object (sys.stats.no_recompute) — sys.indexes
 	// has no column for it.
 	StatisticsNoRecompute bool
+	// StatisticsIncremental is the index's STATISTICS_INCREMENTAL option —
+	// per-partition statistics on a partitioned index — read, like
+	// StatisticsNoRecompute, from sys.stats.is_incremental.
+	StatisticsIncremental bool
 	// OptimizeForSequentialKey is SQL Server 2019's last-page-insert
 	// contention option; always false on an older instance.
 	OptimizeForSequentialKey bool
@@ -254,18 +264,18 @@ func (t *Table) attachIndexColumns(ctx context.Context, indexes []*Index, extra 
 // such column before then, and naming it fails the whole read, so an older
 // instance reads the option as off — the only value it can have there.
 // https://learn.microsoft.com/sql/relational-databases/system-catalog-views/sys-indexes-transact-sql
-// STATISTICS_NORECOMPUTE lives on the index's statistics object, which
-// shares the index's ID; the join is a LEFT one because not every index type
-// is guaranteed a row there.
+// STATISTICS_NORECOMPUTE and STATISTICS_INCREMENTAL live on the index's
+// statistics object, which shares the index's ID; the join is a LEFT one
+// because not every index type is guaranteed a row there.
 func (t *Table) indexListSelect() string {
 	return `
 SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       ` + partitionCompressionList("i.object_id", "i.index_id") + `,
+       ` + partitionCompressionList(t.db.serverMajorVersion(), "i.object_id", "i.index_id") + `,
        ` + dataSpaceColumns + `,
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        ` + colSince(t.db.serverMajorVersion(), SQLServer2019, "i.optimize_for_sequential_key", "CAST(0 AS bit)") + `,
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),
@@ -318,7 +328,7 @@ ORDER  BY i.index_id`
 			&compression,
 			&idx.DataSpace.Name, &idx.DataSpace.IsPartitionScheme,
 			&idx.DataSpace.IsDefaultFileGroup, &idx.DataSpace.PartitionColumn,
-			&idx.StatisticsNoRecompute, &idx.OptimizeForSequentialKey,
+			&idx.StatisticsNoRecompute, &idx.StatisticsIncremental, &idx.OptimizeForSequentialKey,
 			&idx.BucketCount, &idx.CompressionDelay,
 			&idx.IsPrimaryXML, &idx.PrimaryXMLIndex, &secondary,
 			&idx.IsSelectiveXML, &idx.SelectiveXMLPath,
@@ -333,12 +343,13 @@ ORDER  BY i.index_id`
 		if xmin.Valid && ymin.Valid && xmax.Valid && ymax.Valid {
 			idx.BoundingBox = &SpatialBoundingBox{XMin: xmin.Float64, YMin: ymin.Float64, XMax: xmax.Float64, YMax: ymax.Float64}
 		}
-		if idx.PartitionCompression, err = decodePartitionCompression(compression); err != nil {
+		if idx.PartitionCompression, idx.PartitionXMLCompression, err = decodePartitionCompression(compression); err != nil {
 			return nil, err
 		}
 		idx.DataCompression = DataCompressionNone
 		if len(idx.PartitionCompression) > 0 {
 			idx.DataCompression = idx.PartitionCompression[0]
+			idx.XMLCompression = idx.PartitionXMLCompression[0]
 		}
 		switch desc := strings.TrimSpace(typeDesc.String); desc {
 		case "CLUSTERED":

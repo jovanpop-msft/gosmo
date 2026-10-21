@@ -86,6 +86,9 @@ var gatedColumns = []gatedColumn{
 	{"tables", "ledger_view_id", "(SELECT TOP (4) lv.name AS v FROM sys.columns lv WHERE lv.object_id = t.ledger_view_id ORDER BY lv.column_id DESC FOR JSON PATH)", SQLServer2022, false, ""},
 	{"columns", "is_dropped_ledger_column", "c.is_dropped_ledger_column", SQLServer2022, false, ""},
 
+	// sys.partitions — XML_COMPRESSION, 2022.
+	{"partitions", "xml_compression", "pp.xml_compression", SQLServer2022, false, ""},
+
 	// sys.external_tables — rejected-row location and table options, 2022.
 	{"external_tables", "rejected_row_location", "ISNULL(et.rejected_row_location, '')", SQLServer2022, false, ""},
 	{"external_tables", "table_options", "ISNULL(et.table_options, '')", SQLServer2022, false, ""},

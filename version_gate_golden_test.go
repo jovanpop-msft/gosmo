@@ -80,11 +80,11 @@ var goldenQueries = []goldenQuery{
 	{"table_detail", []string{"tables"}, []string{"ledger_type_desc"}, func(m int) string {
 		return (&Table{db: dbAtMajor(m)}).detailSelect()
 	}},
-	{"table_script_options", []string{"tables", "external_tables"}, []string{"ledger_type", "is_dropped_ledger_table", "ledger_view_id",
-		"history_retention_period", "history_retention_period_unit_desc", "rejected_row_location", "table_options"}, func(m int) string {
+	{"table_script_options", []string{"tables", "external_tables", "partitions"}, []string{"ledger_type", "is_dropped_ledger_table", "ledger_view_id",
+		"history_retention_period", "history_retention_period_unit_desc", "rejected_row_location", "table_options", "xml_compression"}, func(m int) string {
 		return (&Table{db: dbAtMajor(m)}).scriptOptionsSelect()
 	}},
-	{"index_list", []string{"indexes"}, nil, func(m int) string {
+	{"index_list", []string{"indexes", "partitions"}, nil, func(m int) string {
 		return (&Table{db: dbAtMajor(m)}).indexListSelect()
 	}},
 	{"index_columns", []string{"index_columns"}, nil, func(m int) string {

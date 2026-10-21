@@ -136,6 +136,10 @@ type tableScriptOptions struct {
 	// compression, in partition_number order; nil when the table is not a
 	// heap.
 	HeapPartitionCompression []DataCompression
+	// HeapPartitionXMLCompression is each of the heap's partitions'
+	// XML_COMPRESSION (SQL Server 2022), in partition_number order; nil
+	// when the table is not a heap.
+	HeapPartitionXMLCompression []bool
 	// DatabaseCollation is the database default, against which a column's
 	// own collation is compared: a column that differs from it gets a
 	// COLLATE clause, since the script would otherwise recreate it with
@@ -221,11 +225,11 @@ func (t *Table) scriptOptions(ctx context.Context) (tableScriptOptions, error) {
 			&e.RejectedRowLocation, &e.TableOptions); err != nil {
 			return err
 		}
-		parts, err := decodePartitionCompression(heap)
+		parts, xml, err := decodePartitionCompression(heap)
 		if err != nil {
 			return err
 		}
-		o.HeapPartitionCompression = parts
+		o.HeapPartitionCompression, o.HeapPartitionXMLCompression = parts, xml
 		if len(parts) > 0 {
 			o.HeapCompression = string(parts[0])
 		}
@@ -266,7 +270,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       ` + partitionCompressionList("t.object_id", "0") + `,
+       ` + partitionCompressionList(major, "t.object_id", "0") + `,
        ISNULL(CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation')), ''),
        ISNULL(t.durability_desc, ''),
        ISNULL(lds.name, ''), CAST(CASE WHEN lds.type = 'FG' THEN 1 ELSE 0 END AS bit),
@@ -406,6 +410,7 @@ func buildTableScript(schema, name, dbName string, p tableScriptParts, opts Scri
 		} else {
 			tableOpts = append(tableOpts, compressionOptions(
 				DataCompression(p.table.HeapCompression), p.table.HeapPartitionCompression, rowstoreCompressed)...)
+			tableOpts = append(tableOpts, xmlCompressionOptions(p.table.HeapPartitionXMLCompression)...)
 		}
 		if p.table.SystemVersioned {
 			tableOpts = append(tableOpts, systemVersioningOption(p.table))

@@ -8,7 +8,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = t.object_id AND pp.index_id = 0
         ORDER BY pp.partition_number
         FOR JSON PATH),
@@ -50,7 +50,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = t.object_id AND pp.index_id = 0
         ORDER BY pp.partition_number
         FOR JSON PATH),
@@ -92,7 +92,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = t.object_id AND pp.index_id = 0
         ORDER BY pp.partition_number
         FOR JSON PATH),
@@ -134,7 +134,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, pp.xml_compression AS x
         FROM sys.partitions pp WHERE pp.object_id = t.object_id AND pp.index_id = 0
         ORDER BY pp.partition_number
         FOR JSON PATH),
@@ -176,7 +176,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(t.lock_escalation_desc, ''),
        ISNULL(COL_NAME(p.object_id, p.start_column_id), ''),
        ISNULL(COL_NAME(p.object_id, p.end_column_id), ''),
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, pp.xml_compression AS x
         FROM sys.partitions pp WHERE pp.object_id = t.object_id AND pp.index_id = 0
         ORDER BY pp.partition_number
         FOR JSON PATH),

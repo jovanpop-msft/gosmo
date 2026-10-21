@@ -166,30 +166,40 @@ func (idx *Index) Rename(ctx context.Context, newName string) error {
 // in partition_number order, for decodePartitionCompression. JSON rather
 // than TOP 1: the first partition's alone was what made a partitioned index
 // with mixed compression script as uniformly compressed.
-func partitionCompressionList(objectID, indexID string) string {
-	return jsonRows("pp.partition_number AS n, pp.data_compression_desc AS c",
+//
+// Each entry carries the partition's DATA_COMPRESSION and its XML_COMPRESSION;
+// sys.partitions.xml_compression is SQL Server 2022's, and an older instance
+// reads it as off — the only value it can have there.
+// https://learn.microsoft.com/sql/relational-databases/system-catalog-views/sys-partitions-transact-sql
+func partitionCompressionList(major int, objectID, indexID string) string {
+	return jsonRows("pp.partition_number AS n, pp.data_compression_desc AS c, "+
+		colSince(major, SQLServer2022, "pp.xml_compression", "CAST(0 AS bit)")+" AS x",
 		"\n        FROM sys.partitions pp WHERE pp.object_id = "+objectID+" AND pp.index_id = "+indexID,
 		"pp.partition_number")
 }
 
 // decodePartitionCompression decodes one partitionCompressionList column into
-// a slice indexed by partition_number - 1. NULL (no partitions) is nil.
-func decodePartitionCompression(col sql.NullString) ([]DataCompression, error) {
+// two slices indexed by partition_number - 1: each partition's
+// DATA_COMPRESSION and its XML_COMPRESSION. NULL (no partitions) is nil.
+func decodePartitionCompression(col sql.NullString) ([]DataCompression, []bool, error) {
 	rows, err := decodeJSONRows[struct {
 		N int    `json:"n"`
 		C string `json:"c"`
+		X bool   `json:"x"`
 	}](col)
 	if err != nil || rows == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]DataCompression, len(rows))
+	xml := make([]bool, len(rows))
 	for i, r := range rows {
 		if r.N != i+1 {
-			return nil, fmt.Errorf("gosmo: partition %d listed at position %d", r.N, i+1)
+			return nil, nil, fmt.Errorf("gosmo: partition %d listed at position %d", r.N, i+1)
 		}
 		out[i] = DataCompression(r.C)
+		xml[i] = r.X
 	}
-	return out, nil
+	return out, xml, nil
 }
 
 // DataCompression is an index's or partition's DATA_COMPRESSION keyword.

@@ -4,13 +4,13 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = i.object_id AND pp.index_id = i.index_id
         ORDER BY pp.partition_number
         FOR JSON PATH),
        ISNULL(ds.name, ''), CASE WHEN ds.type = 'PS' THEN 1 ELSE 0 END,
        ISNULL(fg.is_default, 0), ISNULL(pc.name, ''),
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        CAST(0 AS bit),
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),
@@ -46,13 +46,13 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = i.object_id AND pp.index_id = i.index_id
         ORDER BY pp.partition_number
         FOR JSON PATH),
        ISNULL(ds.name, ''), CASE WHEN ds.type = 'PS' THEN 1 ELSE 0 END,
        ISNULL(fg.is_default, 0), ISNULL(pc.name, ''),
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        CAST(0 AS bit),
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),
@@ -88,13 +88,13 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, CAST(0 AS bit) AS x
         FROM sys.partitions pp WHERE pp.object_id = i.object_id AND pp.index_id = i.index_id
         ORDER BY pp.partition_number
         FOR JSON PATH),
        ISNULL(ds.name, ''), CASE WHEN ds.type = 'PS' THEN 1 ELSE 0 END,
        ISNULL(fg.is_default, 0), ISNULL(pc.name, ''),
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        i.optimize_for_sequential_key,
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),
@@ -130,13 +130,13 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, pp.xml_compression AS x
         FROM sys.partitions pp WHERE pp.object_id = i.object_id AND pp.index_id = i.index_id
         ORDER BY pp.partition_number
         FOR JSON PATH),
        ISNULL(ds.name, ''), CASE WHEN ds.type = 'PS' THEN 1 ELSE 0 END,
        ISNULL(fg.is_default, 0), ISNULL(pc.name, ''),
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        i.optimize_for_sequential_key,
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),
@@ -172,13 +172,13 @@ SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key,
        i.is_unique_constraint, i.is_disabled, i.is_hypothetical, i.fill_factor,
        ISNULL(i.filter_definition, ''),
        i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c
+       (SELECT pp.partition_number AS n, pp.data_compression_desc AS c, pp.xml_compression AS x
         FROM sys.partitions pp WHERE pp.object_id = i.object_id AND pp.index_id = i.index_id
         ORDER BY pp.partition_number
         FOR JSON PATH),
        ISNULL(ds.name, ''), CASE WHEN ds.type = 'PS' THEN 1 ELSE 0 END,
        ISNULL(fg.is_default, 0), ISNULL(pc.name, ''),
-       ISNULL(st.no_recompute, CAST(0 AS bit)),
+       ISNULL(st.no_recompute, CAST(0 AS bit)), ISNULL(st.is_incremental, CAST(0 AS bit)),
        i.optimize_for_sequential_key,
        ISNULL(h.bucket_count, 0), ISNULL(i.compression_delay, 0),
        CAST(CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END AS bit),

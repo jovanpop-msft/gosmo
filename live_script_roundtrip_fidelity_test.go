@@ -1,7 +1,8 @@
 //go:build livedb
 
 // Live round trips of what a script once lost without a word: a renamed
-// module's name, an index's data space, a masking function's quotes, a DDL
+// module's name, an index's data space and incremental statistics, a table's
+// and an index's XML compression, a masking function's quotes, a DDL
 // trigger's SET options, a column's bound rule and default, an alias type's
 // rule schema, and a graph table's SELECT. Each is asserted on the catalog
 // after a replay (or on the replay running at all), never on the text.
@@ -137,6 +138,146 @@ func TestLiveRoundTripIndexDataSpace(t *testing.T) {
 	}
 	if got := liveRowsAsStrings(t, src, ctx, liveIndexDataSpaces); !slices.Equal(got, want) {
 		t.Errorf("index scripts: data spaces differ\n got %v\nwant %v", got, want)
+	}
+}
+
+const liveIndexIncremental = `
+SELECT OBJECT_NAME(s.object_id) + '.' + s.name + '=' + CAST(s.is_incremental AS varchar(1))
+FROM   sys.stats s JOIN sys.indexes i ON i.object_id = s.object_id AND i.index_id = s.stats_id
+WHERE  OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+ORDER  BY 1`
+
+// TestLiveRoundTripIndexIncrementalStatistics: an index's
+// STATISTICS_INCREMENTAL lives in sys.stats, not sys.indexes, and a script
+// once recreated it with full-table statistics — on a PRIMARY KEY inside
+// CREATE TABLE and on a CREATE INDEX alike.
+func TestLiveRoundTripIndexIncrementalStatistics(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	src, dropSrc := liveScratchDB(t, db, ctx, "gz_rt_inc_src")
+	defer dropSrc()
+	dst, dropDst := liveScratchDB(t, db, ctx, "gz_rt_inc_dst")
+	defer dropDst()
+	liveFilegroupSetup(t, src, ctx)
+	liveFilegroupSetup(t, dst, ctx)
+
+	liveExecIn(t, src, ctx,
+		`CREATE TABLE dbo.tp (id int NOT NULL, a int NULL, b int NULL,
+		     CONSTRAINT pk_tp PRIMARY KEY CLUSTERED (id) WITH (STATISTICS_INCREMENTAL = ON)) ON ps_s(id)`,
+		`CREATE INDEX ix_inc ON dbo.tp (a) WITH (STATISTICS_INCREMENTAL = ON)`,
+		`CREATE INDEX ix_full ON dbo.tp (b)`,
+	)
+	want := liveRowsAsStrings(t, src, ctx, liveIndexIncremental)
+	if strings.Join(want, " ") != "=tp.ix_full=0 =tp.ix_inc=1 =tp.pk_tp=1" {
+		t.Fatalf("setup did not produce the mix it needs: %v", want)
+	}
+
+	sc := NewScripter(src, DefaultScriptOptions())
+	script, err := sc.ScriptTable(ctx, "dbo", "tp")
+	if err != nil {
+		t.Fatalf("ScriptTable: %v", err)
+	}
+	livePinnedRun(t, db, ctx, dst.Name, script)
+	if got := liveRowsAsStrings(t, dst, ctx, liveIndexIncremental); !slices.Equal(got, want) {
+		t.Errorf("table script: incremental statistics differ\n got %v\nwant %v\n%s", got, want, script)
+	}
+
+	opts := DefaultScriptOptions()
+	opts.Verb = ScriptDropAndCreate
+	sc = NewScripter(src, opts)
+	for _, ix := range []string{"ix_inc", "ix_full"} {
+		script, err := sc.ScriptIndex(ctx, "dbo", "tp", ix)
+		if err != nil {
+			t.Fatalf("ScriptIndex %s: %v", ix, err)
+		}
+		livePinnedRun(t, db, ctx, src.Name, script)
+	}
+	if got := liveRowsAsStrings(t, src, ctx, liveIndexIncremental); !slices.Equal(got, want) {
+		t.Errorf("index scripts: incremental statistics differ\n got %v\nwant %v", got, want)
+	}
+}
+
+const liveXMLCompression = `
+SELECT OBJECT_NAME(p.object_id) + '.' + ISNULL(i.name, '(heap)') + '#' + CAST(p.partition_number AS varchar(4))
+       + '=' + CAST(p.xml_compression AS varchar(1)) + '/' + p.data_compression_desc COLLATE DATABASE_DEFAULT
+FROM   sys.partitions p JOIN sys.indexes i ON i.object_id = p.object_id AND i.index_id = p.index_id
+WHERE  OBJECTPROPERTY(p.object_id, 'IsUserTable') = 1
+ORDER  BY 1`
+
+// TestLiveRoundTripXMLCompression: XML_COMPRESSION (SQL Server 2022) is
+// per partition in sys.partitions, and a script once recreated every heap,
+// PRIMARY KEY and index with it off.
+func TestLiveRoundTripXMLCompression(t *testing.T) {
+	db, ctx, done := liveDB(t)
+	defer done()
+	src, dropSrc := liveScratchDB(t, db, ctx, "gz_rt_xmlc_src")
+	defer dropSrc()
+	if major := src.serverMajorVersion(); major != 0 && major < int(SQLServer2022) {
+		t.Skipf("major %d has no XML_COMPRESSION", major)
+	}
+	dst, dropDst := liveScratchDB(t, db, ctx, "gz_rt_xmlc_dst")
+	defer dropDst()
+	for _, d := range []*Database{src, dst} {
+		liveExecIn(t, d, ctx,
+			`CREATE PARTITION FUNCTION pf_x (int) AS RANGE RIGHT FOR VALUES (100, 200)`,
+			`CREATE PARTITION SCHEME ps_x AS PARTITION pf_x ALL TO ([PRIMARY])`)
+	}
+	liveExecIn(t, src, ctx,
+		`CREATE TABLE dbo.h (id int NOT NULL, x xml NULL) ON ps_x(id) WITH (XML_COMPRESSION = ON ON PARTITIONS (1, 3))`,
+		`CREATE TABLE dbo.c (id int NOT NULL, x xml NULL,
+		     CONSTRAINT pk_c PRIMARY KEY CLUSTERED (id) WITH (XML_COMPRESSION = ON)) ON ps_x(id)`,
+		`CREATE INDEX ix_c ON dbo.c (id) INCLUDE (x)
+		     WITH (XML_COMPRESSION = ON ON PARTITIONS (2), DATA_COMPRESSION = PAGE ON PARTITIONS (2 TO 3))`,
+		`CREATE TABLE dbo.u (id int NOT NULL, x xml NULL) WITH (XML_COMPRESSION = ON)`,
+	)
+	want := liveRowsAsStrings(t, src, ctx, liveXMLCompression)
+
+	sc := NewScripter(src, DefaultScriptOptions())
+	for _, tbl := range []string{"h", "c", "u"} {
+		script, err := sc.ScriptTable(ctx, "dbo", tbl)
+		if err != nil {
+			t.Fatalf("ScriptTable %s: %v", tbl, err)
+		}
+		livePinnedRun(t, db, ctx, dst.Name, script)
+	}
+	if got := liveRowsAsStrings(t, dst, ctx, liveXMLCompression); !slices.Equal(got, want) {
+		t.Errorf("table scripts: XML compression differs\n got %v\nwant %v", got, want)
+	}
+
+	opts := DefaultScriptOptions()
+	opts.Verb = ScriptDropAndCreate
+	script, err := NewScripter(src, opts).ScriptIndex(ctx, "dbo", "c", "ix_c")
+	if err != nil {
+		t.Fatalf("ScriptIndex: %v", err)
+	}
+	livePinnedRun(t, db, ctx, src.Name, script)
+	if got := liveRowsAsStrings(t, src, ctx, liveXMLCompression); !slices.Equal(got, want) {
+		t.Errorf("index script: XML compression differs\n got %v\nwant %v\n%s", got, want, script)
+	}
+
+	// A rebuild naming DATA_COMPRESSION keeps XML_COMPRESSION (17.0, checked
+	// 2026-10-21), so Index.Rebuild need not restate it; this pins that.
+	tbl, err := src.TableByName(ctx, "dbo", "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pk_c", "ix_c"} {
+		idx, err := tbl.IndexByName(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.Rebuild(ctx, IndexRebuildOptions{DataCompression: DataCompressionPage}); err != nil {
+			t.Fatalf("Rebuild %s: %v", name, err)
+		}
+	}
+	got := liveRowsAsStrings(t, src, ctx, liveXMLCompression)
+	for i, w := range want {
+		if strings.HasPrefix(w, "=c.") {
+			want[i] = w[:strings.LastIndex(w, "/")] + "/PAGE"
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("Rebuild with DATA_COMPRESSION: XML compression differs\n got %v\nwant %v", got, want)
 	}
 }
 
