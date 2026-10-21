@@ -115,7 +115,7 @@ func withRetry[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 func AcquireConn(ctx context.Context, db *sql.DB, database string) (*sql.Conn, error) {
 	prologue := "SELECT 1"
 	if database != "" {
-		prologue = "USE " + QuoteName(database)
+		prologue = "USE " + quoteIdent(database)
 	}
 	wrapErr := func(err error) error {
 		if database != "" {

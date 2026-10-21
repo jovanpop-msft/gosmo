@@ -300,7 +300,7 @@ func buildServerTriggerScript(t *ServerTrigger, opts ScriptOptions) (string, err
 	drop := fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON ALL SERVER;\nGO\n", quoteIdent(t.Name))
 	return opts.envelopeErr(drop, "", func(sb *strings.Builder) error {
 		if strings.TrimSpace(t.Definition) == "" {
-			return fmt.Errorf("gosmo: script server trigger %q: definition is not readable (encrypted)", t.Name)
+			return unsupportedf("gosmo: script server trigger %q: definition is not readable (encrypted)", t.Name)
 		}
 		def := t.Definition
 		if opts.verb() == ScriptAlter {
@@ -402,7 +402,7 @@ func (sc *ServerScripter) endpointPayloadClause(ctx context.Context, e *Endpoint
 			forwarding, d.MessageForwardingSize), nil
 
 	default:
-		return "", fmt.Errorf("gosmo: script endpoint %q: goSMO cannot script a %s endpoint", e.Name, orElse(e.Type, "typeless"))
+		return "", unsupportedf("gosmo: script endpoint %q: goSMO cannot script a %s endpoint", e.Name, orElse(e.Type, "typeless"))
 	}
 }
 

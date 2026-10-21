@@ -254,6 +254,9 @@ func TestLoginUnmapFromDatabaseNotMappedWritesNothing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `login "alice" is not mapped to database "Sales"`) {
 		t.Fatalf("err = %v, want not mapped", err)
 	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want it to wrap ErrNotFound", err)
+	}
 	if n := len(mapStatements("DROP USER")); n != 0 {
 		t.Errorf("%d DROP USER statements ran with no mapping", n)
 	}

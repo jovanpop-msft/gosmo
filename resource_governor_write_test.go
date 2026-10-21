@@ -89,9 +89,9 @@ func TestResourcePoolStatementShapes(t *testing.T) {
 
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
 		_, err := s.CreateResourcePool(ctx, CreateResourcePoolRequest{Name: "p", Options: ResourcePoolOptions{
-			MinCPUPercent: Ptr(5), MaxCPUPercent: Ptr(60), CapCPUPercent: Ptr(70),
-			MinMemoryPercent: Ptr(0), MaxMemoryPercent: Ptr(50),
-			MinIOPSPerVolume: Ptr(10), MaxIOPSPerVolume: Ptr(500),
+			MinCPUPercent: new(5), MaxCPUPercent: new(60), CapCPUPercent: new(70),
+			MinMemoryPercent: new(0), MaxMemoryPercent: new(50),
+			MinIOPSPerVolume: new(10), MaxIOPSPerVolume: new(500),
 		}})
 		return err
 	}), "CREATE RESOURCE POOL [p] WITH (MIN_CPU_PERCENT = 5, MAX_CPU_PERCENT = 60, CAP_CPU_PERCENT = 70, "+
@@ -99,7 +99,7 @@ func TestResourcePoolStatementShapes(t *testing.T) {
 
 	p := s.ResourcePoolRef("p")
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
-		return p.Alter(ctx, ResourcePoolOptions{MaxCPUPercent: Ptr(40)})
+		return p.Alter(ctx, ResourcePoolOptions{MaxCPUPercent: new(40)})
 	}), "ALTER RESOURCE POOL [p] WITH (MAX_CPU_PERCENT = 40)")
 	if p.MaxCPUPercent != 0 {
 		t.Error("a scripted Alter mirrored MaxCPUPercent onto the receiver")
@@ -123,14 +123,14 @@ func TestWorkloadGroupStatementShapes(t *testing.T) {
 		want string
 	}{
 		{"defaults", WorkloadGroupOptions{}, "CREATE WORKLOAD GROUP [g]"},
-		{"pool only", WorkloadGroupOptions{Pool: Ptr("p")}, "CREATE WORKLOAD GROUP [g] USING [p]"},
-		{"both pools", WorkloadGroupOptions{Pool: Ptr("default"), ExternalPool: Ptr("e")},
+		{"pool only", WorkloadGroupOptions{Pool: new("p")}, "CREATE WORKLOAD GROUP [g] USING [p]"},
+		{"both pools", WorkloadGroupOptions{Pool: new("default"), ExternalPool: new("e")},
 			"CREATE WORKLOAD GROUP [g] USING [default], EXTERNAL [e]"},
 		{"every option", WorkloadGroupOptions{
-			Importance: Ptr(WorkloadImportance("high")), RequestMaxMemoryGrantPercent: Ptr(12.5),
-			RequestMaxCPUTimeSec: Ptr(30), RequestMemoryGrantTimeoutSec: Ptr(20), MaxDOP: Ptr(2),
-			GroupMaxRequests: Ptr(7), GroupMaxTempdbDataPercent: Ptr(10.0), GroupMaxTempdbDataMB: Ptr(256.0),
-			Pool: Ptr("p"),
+			Importance: new(WorkloadImportance("high")), RequestMaxMemoryGrantPercent: new(12.5),
+			RequestMaxCPUTimeSec: new(30), RequestMemoryGrantTimeoutSec: new(20), MaxDOP: new(2),
+			GroupMaxRequests: new(7), GroupMaxTempdbDataPercent: new(10.0), GroupMaxTempdbDataMB: new(256.0),
+			Pool: new("p"),
 		}, "CREATE WORKLOAD GROUP [g] WITH (IMPORTANCE = HIGH, REQUEST_MAX_MEMORY_GRANT_PERCENT = 12.5, " +
 			"REQUEST_MAX_CPU_TIME_SEC = 30, REQUEST_MEMORY_GRANT_TIMEOUT_SEC = 20, MAX_DOP = 2, GROUP_MAX_REQUESTS = 7, " +
 			"GROUP_MAX_TEMPDB_DATA_PERCENT = 10, GROUP_MAX_TEMPDB_DATA_MB = 256) USING [p]"},
@@ -149,10 +149,10 @@ func TestWorkloadGroupStatementShapes(t *testing.T) {
 	g := s.WorkloadGroupRef("g")
 	// A move with no WITH is valid (probed on 17).
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
-		return g.Alter(ctx, WorkloadGroupOptions{Pool: Ptr("p2")})
+		return g.Alter(ctx, WorkloadGroupOptions{Pool: new("p2")})
 	}), "ALTER WORKLOAD GROUP [g] USING [p2]")
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
-		return g.Alter(ctx, WorkloadGroupOptions{Importance: Ptr(ImportanceLow)})
+		return g.Alter(ctx, WorkloadGroupOptions{Importance: new(ImportanceLow)})
 	}), "ALTER WORKLOAD GROUP [g] WITH (IMPORTANCE = LOW)")
 	if got := rgStatements(t, func(ctx context.Context) error { return g.Alter(ctx, WorkloadGroupOptions{}) }); len(got) != 0 {
 		t.Errorf("an empty Alter issued %q", got)
@@ -168,11 +168,11 @@ func TestWorkloadGroupOptionsRefusals(t *testing.T) {
 		version bool // want ErrUnsupportedVersion
 	}{
 		// 13.0.6500.1: REQUEST_MAX_MEMORY_GRANT_PERCENT = 12.5 is Msg 102.
-		{"fractional grant on 2016", 13, WorkloadGroupOptions{RequestMaxMemoryGrantPercent: Ptr(12.5)}, true},
-		{"tempdb on 2022", 16, WorkloadGroupOptions{GroupMaxTempdbDataMB: Ptr(1.0)}, true},
+		{"fractional grant on 2016", 13, WorkloadGroupOptions{RequestMaxMemoryGrantPercent: new(12.5)}, true},
+		{"tempdb on 2022", 16, WorkloadGroupOptions{GroupMaxTempdbDataMB: new(1.0)}, true},
 		{"tempdb clear on 2019", 15, WorkloadGroupOptions{ClearGroupMaxTempdbDataPercent: true}, true},
-		{"set and clear", 17, WorkloadGroupOptions{GroupMaxTempdbDataMB: Ptr(1.0), ClearGroupMaxTempdbDataMB: true}, false},
-		{"bad importance", 17, WorkloadGroupOptions{Importance: Ptr(WorkloadImportance("urgent"))}, false},
+		{"set and clear", 17, WorkloadGroupOptions{GroupMaxTempdbDataMB: new(1.0), ClearGroupMaxTempdbDataMB: true}, false},
+		{"bad importance", 17, WorkloadGroupOptions{Importance: new(WorkloadImportance("urgent"))}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -194,7 +194,7 @@ func TestWorkloadGroupOptionsRefusals(t *testing.T) {
 	s := &Server{info: &ServerInfo{VersionMajor: 13}}
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
 		_, err := s.CreateWorkloadGroup(ctx, CreateWorkloadGroupRequest{Name: "g",
-			Options: WorkloadGroupOptions{RequestMaxMemoryGrantPercent: Ptr(30.0)}})
+			Options: WorkloadGroupOptions{RequestMaxMemoryGrantPercent: new(30.0)}})
 		return err
 	}), "CREATE WORKLOAD GROUP [g] WITH (REQUEST_MAX_MEMORY_GRANT_PERCENT = 30)")
 }
@@ -203,12 +203,12 @@ func TestExternalResourcePoolStatementShapes(t *testing.T) {
 	s := &Server{}
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
 		_, err := s.CreateExternalResourcePool(ctx, CreateExternalResourcePoolRequest{Name: "e",
-			Options: ExternalResourcePoolOptions{MaxCPUPercent: Ptr(40), MaxMemoryPercent: Ptr(30), MaxProcesses: Ptr(5)}})
+			Options: ExternalResourcePoolOptions{MaxCPUPercent: new(40), MaxMemoryPercent: new(30), MaxProcesses: new(5)}})
 		return err
 	}), "CREATE EXTERNAL RESOURCE POOL [e] WITH (MAX_CPU_PERCENT = 40, MAX_MEMORY_PERCENT = 30, MAX_PROCESSES = 5)")
 	e := s.ExternalResourcePoolRef("e")
 	wantOne(t, rgStatements(t, func(ctx context.Context) error {
-		return e.Alter(ctx, ExternalResourcePoolOptions{MaxProcesses: Ptr(0)})
+		return e.Alter(ctx, ExternalResourcePoolOptions{MaxProcesses: new(0)})
 	}), "ALTER EXTERNAL RESOURCE POOL [e] WITH (MAX_PROCESSES = 0)")
 	wantOne(t, rgStatements(t, e.Drop), "DROP EXTERNAL RESOURCE POOL [e]")
 }
@@ -222,7 +222,7 @@ func TestPoolAffinityStatementShapes(t *testing.T) {
 	}{
 		{"create with schedulers", func(ctx context.Context) error {
 			_, err := s.CreateResourcePool(ctx, CreateResourcePoolRequest{Name: "p", Options: ResourcePoolOptions{
-				MaxCPUPercent: Ptr(50), Affinity: &PoolAffinity{Schedulers: []int{6, 0, 2, 1, 3, 2}}}})
+				MaxCPUPercent: new(50), Affinity: &PoolAffinity{Schedulers: []int{6, 0, 2, 1, 3, 2}}}})
 			return err
 		}, "CREATE RESOURCE POOL [p] WITH (MAX_CPU_PERCENT = 50, AFFINITY SCHEDULER = (0 TO 3, 6))"},
 		{"alter to NUMA nodes", func(ctx context.Context) error {
@@ -384,7 +384,7 @@ func TestSystemResourceGovernorObjectsScriptAsAlter(t *testing.T) {
 func TestWorkloadGroupScript(t *testing.T) {
 	g := &WorkloadGroup{ID: 256, Name: "g", PoolName: "default", ExternalPoolName: "e",
 		Importance: "High", RequestMaxMemoryGrantPercent: 12.5, MaxDOP: 2,
-		GroupMaxTempdbDataMB: Ptr(256.0)}
+		GroupMaxTempdbDataMB: new(256.0)}
 	got, err := buildWorkloadGroupScript(g, ScriptOptions{})
 	if err != nil {
 		t.Fatal(err)

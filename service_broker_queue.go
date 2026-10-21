@@ -414,7 +414,7 @@ type QueueSettings struct {
 // generated SQL.
 func queueSettingClauses(s QueueSettings) ([]string, error) {
 	if s.Activation != nil && s.DropActivation {
-		return nil, errors.New("the Activation and DropActivation settings are mutually exclusive; " +
+		return nil, invalidf("the Activation and DropActivation settings are mutually exclusive; " +
 			"one statement cannot both restate and drop the ACTIVATION block")
 	}
 	var clauses []string
@@ -426,7 +426,7 @@ func queueSettingClauses(s QueueSettings) ([]string, error) {
 	}
 	if a := s.Activation; a != nil {
 		if a.ProcedureName == "" {
-			return nil, errors.New("QueueActivation.ProcedureName is empty; " +
+			return nil, invalidf("QueueActivation.ProcedureName is empty; " +
 				"the server refuses an ACTIVATION block without a procedure")
 		}
 		if a.MaxQueueReaders < 0 || a.MaxQueueReaders > 32767 {
@@ -449,7 +449,7 @@ func queueSettingClauses(s QueueSettings) ([]string, error) {
 			onOff(*s.PoisonMessageHandling)+")")
 	}
 	if len(clauses) == 0 {
-		return nil, errors.New("no setting was given; ALTER QUEUE with no clause does not parse")
+		return nil, invalidf("no setting was given; ALTER QUEUE with no clause does not parse")
 	}
 	return clauses, nil
 }

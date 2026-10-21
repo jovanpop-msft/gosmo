@@ -16,44 +16,37 @@ import (
 // said no" with errors.Is rather than by matching text. invalidf builds every
 // such error.
 //
-// This keeps the rule from eroding: every fmt.Errorf whose format has no %w —
-// an error that wraps nothing, so one gosmo decided on its own — must be on
-// this list, which is the refusals that are about the server's state or
-// gosmo's own limits rather than the caller's arguments. A new argument check
-// written with fmt.Errorf fails here; write it with invalidf (or unsupportedf,
-// when the request is fine and gosmo has no form for it).
+// This keeps the rule from eroding: every fmt.Errorf whose format has no %w,
+// and every errors.New inside a function — an error that wraps nothing, so
+// one gosmo decided on its own — must be on this list, which is the refusals
+// about the server's state rather than the caller's arguments (invalidf),
+// gosmo having no form for the request (unsupportedf) or something absent
+// (notFoundf). A new check written with fmt.Errorf or errors.New fails here.
+// A package-level var ErrX = errors.New(...) is a sentinel, not a refusal,
+// and is not scanned. An entry nothing matches any more fails too, so the
+// list only shrinks with the code.
 func TestEveryArgumentRefusalWrapsErrInvalidRequest(t *testing.T) {
 	// File → the start of each allowed format string.
 	allowed := map[string][]string{
-		"catalog.go":           {"result set %d of %d is missing"},
-		"certificate.go":       {"gosmo: encode certificate %q in %q: CERTENCODED returned nothing"},
-		"connection_dsn.go":    {"gosmo: connection string: cannot mask an unparseable DSN"},
-		"database_mail.go":     {"gosmo: read mail status: unexpected status"},
-		"database_snapshot.go": {"gosmo: restore from snapshot %q: its source database is gone"},
-		"database_users.go":    {"gosmo: create user %q: a user with a password needs a contained database"},
-		"entra.go":             {"gosmo: no Entra credential mapping for fedauth"},
-		"errors.go":            {"", ""}, // invalidf and unsupportedf themselves
-		"executionplan.go":     {"gosmo: capture execution plan: no plan was returned"},
-		"extended_events_read.go": {
-			"gosmo: %s: the server reports no error-log directory",
-			"gosmo: event session %q has no event_file target",
-			"gosmo: event session %q: event_file target has no filename",
+		"catalog.go":        {"result set %d of %d is missing"},
+		"certificate.go":    {"gosmo: encode certificate %q in %q: CERTENCODED returned nothing"},
+		"connection_dsn.go": {"gosmo: connection string: cannot mask an unparseable DSN"},
+		"database_mail.go":  {"gosmo: read mail status: unexpected status"},
+		"database_users.go": {"gosmo: create user %q: a user with a password needs a contained database"},
+		"entra.go": {
+			"gosmo: no Entra credential mapping for fedauth",
+			"the server completed a login without asking for an Entra token",
 		},
-		"helpers.go":          {"a result set names database %q, which was not asked for"},
-		"index_management.go": {"gosmo: partition %d listed at position %d", "not supported for a %s index"},
-		"login.go":            {"gosmo: login %q is not mapped to database %q"},
-		"scripter_index.go":   {"partition scheme %s has no partitioning column"},
-		"scripter_module.go": {
-			"gosmo: script %s %s: definition is not readable (encrypted)",
-			"gosmo: script database trigger %q: definition is not readable (encrypted)",
-		},
-		"scripter_objects.go":  {"gosmo: script statistic %q on %s: it belongs to the index of the same name"},
-		"scripter_security.go": {"gosmo: script database audit specification %q: it names no audit"},
+		"errors.go":               {"", ""}, // invalidf and unsupportedf themselves
+		"executionplan.go":        {"gosmo: capture execution plan: no plan was returned"},
+		"extended_events_read.go": {"gosmo: %s: the server reports no error-log directory"},
+		"helpers.go":              {"a result set names database %q, which was not asked for"},
+		"index_management.go":     {"gosmo: partition %d listed at position %d"},
+		"scripter_index.go":       {"partition scheme %s has no partitioning column"},
+		"scripter_security.go":    {"gosmo: script database audit specification %q: it names no audit"},
 		"scripter_server.go": {
-			"gosmo: script server trigger %q: definition is not readable (encrypted)",
 			"gosmo: script endpoint %q: its database mirroring detail could not be read",
 			"gosmo: script endpoint %q: its service broker detail could not be read",
-			"gosmo: script endpoint %q: goSMO cannot script a %s endpoint",
 			"gosmo: script server audit specification %q: it names no audit",
 		},
 		// Script mode's argument binding: the statement is fine, the capture
@@ -65,7 +58,7 @@ func TestEveryArgumentRefusalWrapsErrInvalidRequest(t *testing.T) {
 			"named argument %q cannot be scripted positionally",
 			"cannot script a %T argument",
 		},
-		"server.go": {"a log file needs a data file beside it, and the instance reports no default data path"},
+		"server_databases.go": {"a log file needs a data file beside it, and the instance reports no default data path"},
 		"symmetric_key.go": {
 			"symmetric key %q has no decryptor to open it with",
 			"symmetric key %q: decryptor chain deeper than %d",
@@ -78,6 +71,7 @@ func TestEveryArgumentRefusalWrapsErrInvalidRequest(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	seen := 0
+	used := map[string]bool{} // file + "\x00" + allowed prefix
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -86,35 +80,61 @@ func TestEveryArgumentRefusalWrapsErrInvalidRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		// Sentinels: errors.New as the value of a package-level var.
+		sentinel := map[*ast.CallExpr]bool{}
+		for _, d := range f.Decls {
+			if g, ok := d.(*ast.GenDecl); ok && g.Tok == token.VAR {
+				for _, spec := range g.Specs {
+					for _, v := range spec.(*ast.ValueSpec).Values {
+						if call, ok := v.(*ast.CallExpr); ok {
+							sentinel[call] = true
+						}
+					}
+				}
+			}
+		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok {
+			if !ok || len(call.Args) == 0 || sentinel[call] {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Errorf" {
+			if !ok {
 				return true
 			}
-			if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "fmt" || len(call.Args) == 0 {
+			x, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			fn := x.Name + "." + sel.Sel.Name
+			if fn != "fmt.Errorf" && fn != "errors.New" {
 				return true
 			}
 			format := literalText(call.Args[0])
-			if strings.Contains(format, "%w") {
+			if fn == "fmt.Errorf" && strings.Contains(format, "%w") {
 				return true
 			}
 			seen++
 			for _, prefix := range allowed[name] {
 				if strings.HasPrefix(format, prefix) {
+					used[name+"\x00"+prefix] = true
 					return true
 				}
 			}
-			t.Errorf("%s: fmt.Errorf(%q) wraps nothing: an argument check is invalidf, and anything else belongs on this test's list",
-				fset.Position(call.Pos()), format)
+			t.Errorf("%s: %s(%q) wraps nothing: use invalidf, unsupportedf or notFoundf, or add it to this test's list if it is about the server's state",
+				fset.Position(call.Pos()), fn, format)
 			return true
 		})
 	}
 	if seen == 0 {
 		t.Fatal("found no fmt.Errorf at all; the scan is broken")
+	}
+	for name, prefixes := range allowed {
+		for _, prefix := range prefixes {
+			if !used[name+"\x00"+prefix] {
+				t.Errorf("%s: allowed %q matches no error any more; drop it from the list", name, prefix)
+			}
+		}
 	}
 }
 

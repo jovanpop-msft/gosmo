@@ -21,7 +21,7 @@ func TestFullTextWriteStatements(t *testing.T) {
 	runScriptCases(t, []scriptCase{
 		{"catalog create, all options", func(c context.Context) error {
 			_, err := d().CreateFullTextCatalog(c, CreateFullTextCatalogRequest{
-				Name: "ft]c", AccentSensitive: Ptr(false), IsDefault: true, Owner: "o]wn"})
+				Name: "ft]c", AccentSensitive: new(false), IsDefault: true, Owner: "o]wn"})
 			return err
 		}, u + "CREATE FULLTEXT CATALOG [ft]]c] WITH ACCENT_SENSITIVITY = OFF AS DEFAULT AUTHORIZATION [o]]wn]"},
 		{"catalog create, bare", func(c context.Context) error {
@@ -30,7 +30,7 @@ func TestFullTextWriteStatements(t *testing.T) {
 		}, u + "CREATE FULLTEXT CATALOG [ft]]c]"},
 		{"catalog rebuild", func(c context.Context) error { return cat().Rebuild(c, nil) },
 			u + "ALTER FULLTEXT CATALOG [ft]]c] REBUILD"},
-		{"catalog rebuild accent", func(c context.Context) error { return cat().Rebuild(c, Ptr(true)) },
+		{"catalog rebuild accent", func(c context.Context) error { return cat().Rebuild(c, new(true)) },
 			u + "ALTER FULLTEXT CATALOG [ft]]c] REBUILD WITH ACCENT_SENSITIVITY = ON"},
 		{"catalog reorganize", func(c context.Context) error { return cat().Reorganize(c) },
 			u + "ALTER FULLTEXT CATALOG [ft]]c] REORGANIZE"},
@@ -196,7 +196,7 @@ func TestFullTextCreatesReturnHandlesAndScriptedWritesDoNotMirror(t *testing.T) 
 	}
 	c := d.FullTextCatalogRef("c")
 	_ = c.SetDefault(ctx)
-	_ = c.Rebuild(ctx, Ptr(true))
+	_ = c.Rebuild(ctx, new(true))
 	if c.IsDefault || c.AccentSensitive {
 		t.Errorf("scripted writes mirrored onto the catalog: %+v", c)
 	}

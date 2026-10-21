@@ -10,6 +10,7 @@ package gosmo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -171,6 +172,9 @@ func TestQueueAndRouteAltersRefuseWhatTheServerWould(t *testing.T) {
 			}
 			if !contains(err.Error(), c.want) {
 				t.Errorf("error %q does not explain the refusal (%q)", err, c.want)
+			}
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("error %q does not wrap ErrInvalidRequest", err)
 			}
 			if len(script.Statements()) != 0 {
 				t.Errorf("a refused call still emitted %q", script.Statements())

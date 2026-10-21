@@ -128,7 +128,7 @@ func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Build
 		return nil
 	}
 	if !def.Valid {
-		return fmt.Errorf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
+		return unsupportedf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
 	}
 	text := renameModuleHeader(def.String, k.keyword, schema, name)
 	if sc.opts.verb() == ScriptAlter {
@@ -682,7 +682,7 @@ func buildDatabaseTriggerScript(t *DatabaseTrigger, opts ScriptOptions) (string,
 	drop := fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON DATABASE;\nGO\n", quoteIdent(t.Name))
 	return opts.envelopeErr(drop, "", func(sb *strings.Builder) error {
 		if strings.TrimSpace(t.Definition) == "" {
-			return fmt.Errorf("gosmo: script database trigger %q: definition is not readable (encrypted)", t.Name)
+			return unsupportedf("gosmo: script database trigger %q: definition is not readable (encrypted)", t.Name)
 		}
 		def := t.Definition
 		if opts.verb() == ScriptAlter {

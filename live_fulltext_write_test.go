@@ -35,7 +35,7 @@ func TestLiveFullTextWrites(t *testing.T) {
 	const catA, catB, list, plist = "ftc'a]", "ftc_b", "sl'a]", "spl'a]"
 
 	// -- catalogs --
-	a, err := src.CreateFullTextCatalog(ctx, CreateFullTextCatalogRequest{Name: catA, AccentSensitive: Ptr(false), IsDefault: true, Owner: "dbo"})
+	a, err := src.CreateFullTextCatalog(ctx, CreateFullTextCatalogRequest{Name: catA, AccentSensitive: new(false), IsDefault: true, Owner: "dbo"})
 	if err != nil {
 		t.Fatalf("CreateFullTextCatalog: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestLiveFullTextWrites(t *testing.T) {
 	if err := b.SetDefault(ctx); err != nil || !b.IsDefault {
 		t.Errorf("SetDefault: %v (IsDefault %v)", err, b.IsDefault)
 	}
-	if err := src.FullTextCatalogRef(catA).Rebuild(ctx, Ptr(true)); err != nil {
+	if err := src.FullTextCatalogRef(catA).Rebuild(ctx, new(true)); err != nil {
 		t.Errorf("Rebuild: %v", err)
 	}
 	if err := src.FullTextCatalogRef(catA).Reorganize(ctx); err != nil {

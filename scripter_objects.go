@@ -178,7 +178,7 @@ func (sc *Scripter) ScriptStatistic(ctx context.Context, schema, table, name str
 		return "", err
 	}
 	if !st.IsAutoCreated && !st.IsUserCreated {
-		return "", fmt.Errorf("gosmo: script statistic %q on %s: it belongs to the index of the same name; script the index instead",
+		return "", invalidf("gosmo: script statistic %q on %s: it belongs to the index of the same name; script the index instead",
 			name, t.FullName())
 	}
 	var cols []string

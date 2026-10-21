@@ -99,7 +99,7 @@ func TestLiveResourcePoolAffinity(t *testing.T) {
 	}
 
 	pool, err := srv.CreateResourcePool(ctx, CreateResourcePoolRequest{Name: liveAffPool, Options: ResourcePoolOptions{
-		MaxCPUPercent: Ptr(50), Affinity: &PoolAffinity{Schedulers: []int{first.ID, last.ID}}}})
+		MaxCPUPercent: new(50), Affinity: &PoolAffinity{Schedulers: []int{first.ID, last.ID}}}})
 	if err != nil {
 		t.Fatalf("CreateResourcePool with affinity: %v", err)
 	}

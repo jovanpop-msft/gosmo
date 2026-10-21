@@ -14,7 +14,6 @@ package gosmo
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -246,7 +245,7 @@ func routeSettingClauses(s RouteSettings) ([]string, error) {
 		return nil, err
 	}
 	if len(clauses) == 0 {
-		return nil, errors.New("no setting was given; ALTER ROUTE with no clause does not parse")
+		return nil, invalidf("no setting was given; ALTER ROUTE with no clause does not parse")
 	}
 	return clauses, nil
 }

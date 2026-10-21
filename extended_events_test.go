@@ -133,6 +133,14 @@ func TestEventFilePattern(t *testing.T) {
 	}
 	if _, err := (&EventSession{Name: "s"}).EventFilePattern(); err == nil {
 		t.Error("a session with no event_file target returned a pattern")
+	} else if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("no event_file target: %v does not wrap ErrInvalidRequest", err)
+	}
+	noName := &EventSession{Name: "s", Targets: []SessionTarget{{Package: "package0", Name: XETargetEventFile}}}
+	if _, err := noName.EventFilePattern(); err == nil || !strings.Contains(err.Error(), "has no filename") {
+		t.Errorf("event_file target with no filename: err = %v, want a refusal", err)
+	} else if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("no filename: %v does not wrap ErrInvalidRequest", err)
 	}
 }
 

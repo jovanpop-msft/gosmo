@@ -405,11 +405,11 @@ func matchWildcardFold(pattern, name string) bool {
 func (es *EventSession) EventFilePattern() (string, error) {
 	t, ok := es.Target(XETargetEventFile)
 	if !ok {
-		return "", fmt.Errorf("gosmo: event session %q has no event_file target", es.Name)
+		return "", invalidf("gosmo: event session %q has no event_file target", es.Name)
 	}
 	name, ok := t.Field("filename")
 	if !ok || name == "" {
-		return "", fmt.Errorf("gosmo: event session %q: event_file target has no filename", es.Name)
+		return "", invalidf("gosmo: event session %q: event_file target has no filename", es.Name)
 	}
 	if strings.EqualFold(name[max(0, len(name)-4):], ".xel") {
 		name = name[:len(name)-4]

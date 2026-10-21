@@ -1,7 +1,6 @@
 package gosmo
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -403,7 +402,7 @@ func indexDataSpaceClause(ds, tableDS DataSpace) string {
 func explicitDataSpaceClause(ds DataSpace) (string, error) {
 	switch {
 	case ds.Name == "":
-		return "", errors.New("the index has no data space to recreate it on")
+		return "", unsupportedf("the index has no data space to recreate it on")
 	case ds.IsPartitionScheme && ds.PartitionColumn == "":
 		return "", fmt.Errorf("partition scheme %s has no partitioning column", quoteIdent(ds.Name))
 	case ds.IsPartitionScheme:

@@ -3,7 +3,6 @@ package gosmo
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -364,15 +363,15 @@ func (idx *Index) IncludedColumnsSupported() error {
 		// An IndexRef handle: nothing was read, so nothing can be restated.
 		return fmt.Errorf("the index's properties were not read — an IndexRef: %w", ErrHandleNotLoaded)
 	case idx.Type != IndexTypeNonClustered:
-		return fmt.Errorf("not supported for a %s index", idx.Type)
+		return unsupportedf("not supported for a %s index", idx.Type)
 	case idx.IsPrimaryKey:
-		return errors.New("not supported for an index backing a PRIMARY KEY constraint")
+		return unsupportedf("not supported for an index backing a PRIMARY KEY constraint")
 	case idx.IsUniqueConstraint:
-		return errors.New("not supported for an index backing a UNIQUE constraint")
+		return unsupportedf("not supported for an index backing a UNIQUE constraint")
 	case idx.DataSpace.Name == "":
 		// A memory-optimized table's index: no data space of its own, and
 		// its indexes are changed with ALTER TABLE, never CREATE INDEX.
-		return errors.New("not supported for an index on a memory-optimized table")
+		return unsupportedf("not supported for an index on a memory-optimized table")
 	}
 	return nil
 }

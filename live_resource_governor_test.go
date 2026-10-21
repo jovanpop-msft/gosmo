@@ -369,7 +369,7 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 
 	// Pools and group.
 	pool, err := srv.CreateResourcePool(ctx, CreateResourcePoolRequest{Name: liveRGWPool, Options: ResourcePoolOptions{
-		MinCPUPercent: Ptr(5), MaxCPUPercent: Ptr(60), MaxMemoryPercent: Ptr(50), MaxIOPSPerVolume: Ptr(500),
+		MinCPUPercent: new(5), MaxCPUPercent: new(60), MaxMemoryPercent: new(50), MaxIOPSPerVolume: new(500),
 	}})
 	if err != nil {
 		t.Fatalf("CreateResourcePool: %v", err)
@@ -378,7 +378,7 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 		pool.MaxIOPSPerVolume != 500 || pool.CapCPUPercent != 100 {
 		t.Errorf("created pool read back as %+v", *pool)
 	}
-	if err := pool.Alter(ctx, ResourcePoolOptions{CapCPUPercent: Ptr(70), MinIOPSPerVolume: Ptr(10)}); err != nil {
+	if err := pool.Alter(ctx, ResourcePoolOptions{CapCPUPercent: new(70), MinIOPSPerVolume: new(10)}); err != nil {
 		t.Fatalf("ResourcePool.Alter: %v", err)
 	}
 	if back, err := srv.ResourcePoolByName(ctx, liveRGWPool); err != nil || !reflect.DeepEqual(back, pool) {
@@ -386,11 +386,11 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 	}
 
 	ext, extErr := srv.CreateExternalResourcePool(ctx, CreateExternalResourcePoolRequest{Name: liveRGWExtPool,
-		Options: ExternalResourcePoolOptions{MaxCPUPercent: Ptr(40), MaxProcesses: Ptr(5)}})
+		Options: ExternalResourcePoolOptions{MaxCPUPercent: new(40), MaxProcesses: new(5)}})
 	if extErr != nil {
 		t.Logf("external pool not created, its writes are not checked: %v", extErr)
 	} else {
-		if err := ext.Alter(ctx, ExternalResourcePoolOptions{MaxMemoryPercent: Ptr(30)}); err != nil {
+		if err := ext.Alter(ctx, ExternalResourcePoolOptions{MaxMemoryPercent: new(30)}); err != nil {
 			t.Fatalf("ExternalResourcePool.Alter: %v", err)
 		}
 		back, err := srv.ExternalResourcePoolByName(ctx, liveRGWExtPool)
@@ -404,15 +404,15 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 		grant = 12.5
 	}
 	opts := WorkloadGroupOptions{
-		Importance: Ptr(ImportanceHigh), RequestMaxMemoryGrantPercent: Ptr(grant),
-		RequestMaxCPUTimeSec: Ptr(30), MaxDOP: Ptr(2), Pool: Ptr(liveRGWPool),
+		Importance: new(ImportanceHigh), RequestMaxMemoryGrantPercent: new(grant),
+		RequestMaxCPUTimeSec: new(30), MaxDOP: new(2), Pool: new(liveRGWPool),
 	}
 	tempdb := major == 0 || major >= int(SQLServer2025)
 	if tempdb {
-		opts.GroupMaxTempdbDataMB = Ptr(256.0)
+		opts.GroupMaxTempdbDataMB = new(256.0)
 	}
 	if extErr == nil {
-		opts.ExternalPool = Ptr(liveRGWExtPool)
+		opts.ExternalPool = new(liveRGWExtPool)
 	}
 	grp, err := srv.CreateWorkloadGroup(ctx, CreateWorkloadGroupRequest{Name: liveRGWGroup, Options: opts})
 	if err != nil {
@@ -425,10 +425,10 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 	if tempdb && (grp.GroupMaxTempdbDataMB == nil || *grp.GroupMaxTempdbDataMB != 256) {
 		t.Errorf("tempdb limit read back as %v", grp.GroupMaxTempdbDataMB)
 	}
-	alt := WorkloadGroupOptions{Importance: Ptr(WorkloadImportance("low")), GroupMaxRequests: Ptr(7)}
+	alt := WorkloadGroupOptions{Importance: new(WorkloadImportance("low")), GroupMaxRequests: new(7)}
 	if tempdb {
 		alt.ClearGroupMaxTempdbDataMB = true
-		alt.GroupMaxTempdbDataPercent = Ptr(10.0)
+		alt.GroupMaxTempdbDataPercent = new(10.0)
 	}
 	if err := grp.Alter(ctx, alt); err != nil {
 		t.Fatalf("WorkloadGroup.Alter: %v", err)
@@ -438,7 +438,7 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 	}
 	if !fractional {
 		_, err := srv.CreateWorkloadGroup(ctx, CreateWorkloadGroupRequest{Name: "gosmo_live_rgw_never",
-			Options: WorkloadGroupOptions{RequestMaxMemoryGrantPercent: Ptr(12.5)}})
+			Options: WorkloadGroupOptions{RequestMaxMemoryGrantPercent: new(12.5)}})
 		if !errors.Is(err, ErrUnsupportedVersion) {
 			t.Errorf("fractional grant on major %d = %v, want ErrUnsupportedVersion", major, err)
 		}
@@ -447,8 +447,8 @@ func TestLiveResourceGovernorWrites(t *testing.T) {
 	// What the server refuses comes through as its own message.
 	for what, err := range map[string]error{
 		"drop pool with a group": srv.ResourcePoolRef(liveRGWPool).Drop(ctx),
-		"alter internal pool":    srv.ResourcePoolRef("internal").Alter(ctx, ResourcePoolOptions{MaxCPUPercent: Ptr(90)}),
-		"alter internal group":   srv.WorkloadGroupRef("internal").Alter(ctx, WorkloadGroupOptions{Importance: Ptr(ImportanceLow)}),
+		"alter internal pool":    srv.ResourcePoolRef("internal").Alter(ctx, ResourcePoolOptions{MaxCPUPercent: new(90)}),
+		"alter internal group":   srv.WorkloadGroupRef("internal").Alter(ctx, WorkloadGroupOptions{Importance: new(ImportanceLow)}),
 		"drop default pool":      srv.ResourcePoolRef("default").Drop(ctx),
 		"drop default group":     srv.WorkloadGroupRef("default").Drop(ctx),
 	} {

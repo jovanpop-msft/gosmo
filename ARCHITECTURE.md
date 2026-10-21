@@ -331,7 +331,7 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Own blocked requests    | `srv.BlockedRequests(ctx, os.Getpid())` — this client's pooled sessions waiting on another, with the blocker |
 | Kill session            | `srv.KillSession(ctx, id)`                      |
 | Error log               | `srv.ReadLog(ctx, logType, n)` / `srv.ReadLogFiltered(ctx, logType, n, search)` / `srv.EnumErrorLogs(ctx, logType)` / `srv.CycleLog(ctx, logType)` — see [Error log](#error-log) |
-| Database Mail           | `srv.MailAccounts(ctx)` / `srv.MailAccountByName(ctx, name)` / `srv.MailProfiles(ctx)` / `srv.MailProfileByName(ctx, name)` (each with its ordered `Accounts`) / `srv.MailPrincipalProfiles(ctx)` (SID 0x00 = public) / `srv.MailConfiguration(ctx)` / `srv.MailStatus(ctx)` (`MailDisabled` while 'Database Mail XPs' is 0, not an error) / `srv.MailQueues(ctx)` (VIEW SERVER STATE) / `srv.MailItems(ctx, gosmo.MailItemFilter{...})` / `srv.MailItemByID(ctx, id)` / `srv.MailEvents(ctx, gosmo.MailEventFilter{...})`. Writes: `srv.CreateMailAccount(ctx, req)` / `MailAccountRef(name).Alter(ctx, gosmo.MailAccountOptions{...})` (nil `Credentials` keeps the stored user and password) / `.Drop(ctx)`; `srv.CreateMailProfile(ctx, req)` / `MailProfileRef(name).Alter` / `.Drop` / `.SetAccounts(ctx, ordered)` / `.Grant(ctx, principal, gosmo.MailDefaultProfile)` (or `MailNotDefaultProfile`) / `.SetGrantDefault` / `.Revoke`; `srv.SetMailConfiguration(ctx, opts)`; `srv.StartDatabaseMail(ctx)` / `StopDatabaseMail`; `srv.SendMail(ctx, gosmo.MailMessage{Profile, To, Subject, Body})` → mailitem_id (never retried); `srv.DeleteMailItems(ctx, before, status)` / `DeleteMailLog(ctx, before, eventType)`. The log also reads as `ReadLog(ctx, gosmo.ErrorLogDatabaseMail, 0)`. Scripts: `ScriptMailAccount` / `ScriptMailProfile` / `ScriptDatabaseMail`, the password as `<insert password here>` (also under `WithScript` and to a statement observer) — msdb permission, not sysadmin; see `database_mail.go`, `database_mail_write.go` |
+| Database Mail           | `srv.MailAccounts(ctx)` / `srv.MailAccountByName(ctx, name)` / `srv.MailProfiles(ctx)` / `srv.MailProfileByName(ctx, name)` (each with its ordered `Accounts`) / `srv.MailPrincipalProfiles(ctx)` (SID 0x00 = public) / `srv.MailConfiguration(ctx)` / `srv.MailStatus(ctx)` (`MailDisabled` while 'Database Mail XPs' is 0, not an error) / `srv.MailQueues(ctx)` (VIEW SERVER STATE) / `srv.MailItems(ctx, gosmo.MailItemFilter{...})` / `srv.MailItemByID(ctx, id)` / `srv.MailEvents(ctx, gosmo.MailEventFilter{...})`. Writes: `srv.CreateMailAccount(ctx, req)` / `MailAccountRef(name).Alter(ctx, gosmo.MailAccountOptions{...})` (nil `Credentials` keeps the stored user and password) / `.Drop(ctx)`; `srv.CreateMailProfile(ctx, req)` / `MailProfileRef(name).Alter` / `.Drop` / `.SetAccounts(ctx, ordered)` / `.Grant(ctx, principal, gosmo.MailDefaultProfile)` (or `MailNotDefaultProfile`) / `.SetGrantDefault` / `.Revoke`; `srv.SetMailConfiguration(ctx, opts)`; `srv.StartDatabaseMail(ctx)` / `StopDatabaseMail`; `srv.SendMail(ctx, gosmo.MailMessage{Profile, To, Subject, Body})` → mailitem_id (never retried); `srv.DeleteMailItems(ctx, before, status)` / `DeleteMailLog(ctx, before, eventType)`. The log also reads as `ReadLog(ctx, gosmo.ErrorLogDatabaseMail, 0)`. Scripts: `ScriptMailAccount` / `ScriptMailProfile` / `ScriptDatabaseMail`, the password as `<insert password here>` (also under `WithScript` and to a statement observer) — msdb permission, not sysadmin; see `database_mail.go`, `database_mail_write.go`, `database_mail_service.go` |
 | Create login (safe)     | `srv.CreateLogin(ctx, gosmo.CreateLoginRequest{Name, Password, Source, ...})` — SQL, Windows, external provider, certificate or asymmetric key |
 | Authentication mode     | `srv.SecurityInfo(ctx)`                       |
 | Server-level permissions | `srv.ServerPermissions(ctx)` / `srv.ApplyPermission(ctx, verb, gosmo.Securable{Class: gosmo.SecurableServer}, perm, principal, opts)` / `srv.ServerPermissionNames()` |
@@ -1575,7 +1575,7 @@ reads them from `mssql.conf`, both refuse with `ErrAgentSettingsInMssqlConf`.
 ```go
 mail, _ := srv.AgentMailSettings(ctx) // .Enabled, .Profile
 err := srv.SetAgentMailSettings(ctx, gosmo.AgentMailChanges{
-    Enabled: gosmo.Ptr(true), Profile: gosmo.Ptr("Ops"),
+    Enabled: new(true), Profile: new("Ops"),
 })
 ```
 
@@ -1602,10 +1602,10 @@ families.
 
 ```go
 job.Alter(ctx, gosmo.JobChanges{
-    Description: gosmo.Ptr("Runs the nightly full backup"),
-    Category:    gosmo.Ptr("Database Maintenance"),
-    OwnerLogin:  gosmo.Ptr("sa"),
-    Enabled:     gosmo.Ptr(true),
+    Description: new("Runs the nightly full backup"),
+    Category:    new("Database Maintenance"),
+    OwnerLogin:  new("sa"),
+    Enabled:     new(true),
 })   // one statement, not four
 
 sched.Alter(ctx, gosmo.ScheduleChanges{

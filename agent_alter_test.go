@@ -25,26 +25,26 @@ func TestScriptAgentAlterWrites(t *testing.T) {
 	runScriptCases(t, []scriptCase{
 		{"Job Alter, three fields", func(c context.Context) error {
 			return job().Alter(c, JobChanges{
-				Description: Ptr("runs at 2'am"),
-				OwnerLogin:  Ptr("sa'm"),
-				Enabled:     Ptr(true),
+				Description: new("runs at 2'am"),
+				OwnerLogin:  new("sa'm"),
+				Enabled:     new(true),
 			})
 		}, "EXEC msdb.dbo.sp_update_job @job_name = N'Nightly''Run', @description = N'runs at 2''am', @owner_login_name = N'sa''m', @enabled = 1"},
 		{"Job Alter, every field", func(c context.Context) error {
 			return job().Alter(c, JobChanges{
-				Name:                    Ptr("New'Name"),
-				Description:             Ptr("d'esc"),
-				Category:                Ptr("Cat'1"),
-				OwnerLogin:              Ptr("sa'm"),
-				Enabled:                 Ptr(false),
-				StartStepID:             Ptr(2),
-				NotifyLevelEmail:        Ptr(NotifyOnFailure),
-				NotifyEmailOperatorName: Ptr("On'Call"),
-				DeleteLevel:             Ptr(NotifyNever),
+				Name:                    new("New'Name"),
+				Description:             new("d'esc"),
+				Category:                new("Cat'1"),
+				OwnerLogin:              new("sa'm"),
+				Enabled:                 new(false),
+				StartStepID:             new(2),
+				NotifyLevelEmail:        new(NotifyOnFailure),
+				NotifyEmailOperatorName: new("On'Call"),
+				DeleteLevel:             new(NotifyNever),
 			})
 		}, "EXEC msdb.dbo.sp_update_job @job_name = N'Nightly''Run', @new_name = N'New''Name', @description = N'd''esc', @category_name = N'Cat''1', @owner_login_name = N'sa''m', @enabled = 0, @start_step_id = 2, @notify_level_email = 2, @notify_email_operator_name = N'On''Call', @delete_level = 0"},
 		{"Job Alter sends a zero value it was given", func(c context.Context) error {
-			return job().Alter(c, JobChanges{Description: Ptr(""), StartStepID: Ptr(0)})
+			return job().Alter(c, JobChanges{Description: new(""), StartStepID: new(0)})
 		}, "EXEC msdb.dbo.sp_update_job @job_name = N'Nightly''Run', @description = N'', @start_step_id = 0"},
 		// [DEFAULT] is sp_verify_job's own "back to uncategorised"
 		// sentinel, right for a multi-server job too, where the N'' that
@@ -52,7 +52,7 @@ func TestScriptAgentAlterWrites(t *testing.T) {
 		// Jobs do not share the [Uncategorized] spelling alerts and
 		// operators use — see agentCategoryTarget.
 		{"Job Alter clears the category as [DEFAULT]", func(c context.Context) error {
-			return job().Alter(c, JobChanges{Category: Ptr("")})
+			return job().Alter(c, JobChanges{Category: new("")})
 		}, "EXEC msdb.dbo.sp_update_job @job_name = N'Nightly''Run', @category_name = N'[DEFAULT]'"},
 		{"Job SetCategory clears the category as [DEFAULT]", func(c context.Context) error {
 			return job().SetCategory(c, "")
@@ -60,49 +60,49 @@ func TestScriptAgentAlterWrites(t *testing.T) {
 
 		{"Alert Alter, trigger and delay", func(c context.Context) error {
 			return alert().Alter(c, AlertChanges{
-				ErrorNumber:           Ptr(823),
-				Severity:              Ptr(0),
-				DelayBetweenResponses: Ptr(90 * time.Second),
+				ErrorNumber:           new(823),
+				Severity:              new(0),
+				DelayBetweenResponses: new(90 * time.Second),
 			})
 		}, "EXEC msdb.dbo.sp_update_alert @name = N'Disk''Full', @message_id = 823, @severity = 0, @delay_between_responses = 90"},
 		{"Alert Alter, every field", func(c context.Context) error {
 			return alert().Alter(c, AlertChanges{
-				Name:                      Ptr("New'Alert"),
-				Enabled:                   Ptr(true),
-				ErrorNumber:               Ptr(0),
-				Severity:                  Ptr(17),
-				DatabaseName:              Ptr("App'DB"),
-				DelayBetweenResponses:     Ptr(2 * time.Minute),
-				NotificationMessage:       Ptr("call o'brien"),
-				IncludeEventDescriptionIn: Ptr(1),
-				Category:                  Ptr("Cat'1"),
-				JobName:                   Ptr("Nightly'Run"),
+				Name:                      new("New'Alert"),
+				Enabled:                   new(true),
+				ErrorNumber:               new(0),
+				Severity:                  new(17),
+				DatabaseName:              new("App'DB"),
+				DelayBetweenResponses:     new(2 * time.Minute),
+				NotificationMessage:       new("call o'brien"),
+				IncludeEventDescriptionIn: new(1),
+				Category:                  new("Cat'1"),
+				JobName:                   new("Nightly'Run"),
 			})
 		}, "EXEC msdb.dbo.sp_update_alert @name = N'Disk''Full', @new_name = N'New''Alert', @enabled = 1, @message_id = 0, @severity = 17, @database_name = N'App''DB', @delay_between_responses = 120, @notification_message = N'call o''brien', @include_event_description_in = 1, @category_name = N'Cat''1', @job_name = N'Nightly''Run'"},
 		{"Alert Alter clears the category as [Uncategorized]", func(c context.Context) error {
-			return alert().Alter(c, AlertChanges{Category: Ptr("")})
+			return alert().Alter(c, AlertChanges{Category: new("")})
 		}, "EXEC msdb.dbo.sp_update_alert @name = N'Disk''Full', @category_name = N'[Uncategorized]'"},
 		{"Alert Alter clears the job response with an empty name", func(c context.Context) error {
-			return alert().Alter(c, AlertChanges{JobName: Ptr("")})
+			return alert().Alter(c, AlertChanges{JobName: new("")})
 		}, "EXEC msdb.dbo.sp_update_alert @name = N'Disk''Full', @job_name = N''"},
 
 		{"Operator Alter, every field", func(c context.Context) error {
 			return operator().Alter(c, OperatorChanges{
-				Name:           Ptr("New'Op"),
-				Enabled:        Ptr(false),
-				EmailAddress:   Ptr("o'brien@example.com"),
-				PagerAddress:   Ptr("pager'1"),
-				NetSendAddress: Ptr("host'1"),
-				Category:       Ptr("Cat'1"),
+				Name:           new("New'Op"),
+				Enabled:        new(false),
+				EmailAddress:   new("o'brien@example.com"),
+				PagerAddress:   new("pager'1"),
+				NetSendAddress: new("host'1"),
+				Category:       new("Cat'1"),
 			})
 		}, "EXEC msdb.dbo.sp_update_operator @name = N'On''Call', @new_name = N'New''Op', @enabled = 0, @email_address = N'o''brien@example.com', @pager_address = N'pager''1', @netsend_address = N'host''1', @category_name = N'Cat''1'"},
 		{"Operator Alter clears the category as [Uncategorized]", func(c context.Context) error {
-			return operator().Alter(c, OperatorChanges{Category: Ptr("")})
+			return operator().Alter(c, OperatorChanges{Category: new("")})
 		}, "EXEC msdb.dbo.sp_update_operator @name = N'On''Call', @category_name = N'[Uncategorized]'"},
 
 		{"Schedule Alter, frequency and range in one call", func(c context.Context) error {
 			return schedule().Alter(c, ScheduleChanges{
-				Enabled: Ptr(true),
+				Enabled: new(true),
 				Frequency: &ScheduleFrequency{
 					FreqType: FreqWeekly, FreqInterval: 2, FreqSubdayType: SubdayMinutes,
 					FreqSubdayInterval: 30, FreqRecurrenceFactor: 1,
@@ -112,7 +112,7 @@ func TestScriptAgentAlterWrites(t *testing.T) {
 					EndDate:   time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
 					StartTime: 20000, EndTime: 235959,
 				},
-				OwnerLogin: Ptr("sa'm"),
+				OwnerLogin: new("sa'm"),
 			})
 		}, "EXEC msdb.dbo.sp_update_schedule @schedule_id = 7, @enabled = 1, @freq_type = 8, @freq_interval = 2, @freq_subday_type = 4, @freq_subday_interval = 30, @freq_relative_interval = 0, @freq_recurrence_factor = 1, @active_start_date = 20260801, @active_end_date = 20261231, @active_start_time = 20000, @active_end_time = 235959, @owner_login_name = N'sa''m'"},
 		{"Schedule Alter renders no end date as the sentinel", func(c context.Context) error {
@@ -124,7 +124,7 @@ func TestScriptAgentAlterWrites(t *testing.T) {
 		// schedule. Alter falls back to @name, which is what makes it — and
 		// the setters, which wrap it — usable from a Ref.
 		{"Schedule Alter from a Ref addresses by name", func(c context.Context) error {
-			return (&Server{}).ScheduleRef("Daily'2am").Alter(c, ScheduleChanges{Enabled: Ptr(false)})
+			return (&Server{}).ScheduleRef("Daily'2am").Alter(c, ScheduleChanges{Enabled: new(false)})
 		}, "EXEC msdb.dbo.sp_update_schedule @name = N'Daily''2am', @enabled = 0"},
 		{"Schedule Disable from a Ref addresses by name", func(c context.Context) error {
 			return (&Server{}).ScheduleRef("Daily'2am").Disable(c)
@@ -176,7 +176,7 @@ func TestAgentAlterMirrorsOnlyWhatItSet(t *testing.T) {
 	// including the name every subsequent statement would be built from.
 	j := &Job{server: &Server{}, Name: "Nightly'Run", Description: "old", Category: "Cat"}
 	ctx, _ := WithScript(context.Background())
-	if err := j.Alter(ctx, JobChanges{Name: Ptr("New"), Description: Ptr("new")}); err != nil {
+	if err := j.Alter(ctx, JobChanges{Name: new("New"), Description: new("new")}); err != nil {
 		t.Fatalf("Alter under WithScript: %v", err)
 	}
 	if j.Name != "Nightly'Run" || j.Description != "old" {
@@ -193,7 +193,7 @@ func TestAgentAlterMirrorsOnlyWhatItSet(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	captured.reset()
 	a := &Alert{server: &Server{db: db}, Name: "Disk'Full", DatabaseName: "keep", Severity: 17}
-	if err := a.Alter(context.Background(), AlertChanges{NotificationMessage: Ptr("msg")}); err != nil {
+	if err := a.Alter(context.Background(), AlertChanges{NotificationMessage: new("msg")}); err != nil {
 		t.Fatalf("Alter: %v", err)
 	}
 	if a.NotificationMessage != "msg" {
@@ -214,7 +214,7 @@ func TestAgentAlterMirrorsOnlyWhatItSet(t *testing.T) {
 		t.Errorf("Job.Category = %q, want %q", jr.Category, "[Uncategorized (Local)]")
 	}
 	o := &Operator{server: &Server{db: db}, Name: "On'Call", Category: "Cat"}
-	if err := o.Alter(context.Background(), OperatorChanges{Category: Ptr("")}); err != nil {
+	if err := o.Alter(context.Background(), OperatorChanges{Category: new("")}); err != nil {
 		t.Fatalf("Operator.Alter: %v", err)
 	}
 	if o.Category != "[Uncategorized]" {

@@ -146,10 +146,14 @@ func TestSetIncludedColumnsRefusesWhatItCannotRecreate(t *testing.T) {
 			c.edit(idx)
 			if err := idx.IncludedColumnsSupported(); err == nil || !strings.Contains(err.Error(), c.label) {
 				t.Errorf("IncludedColumnsSupported() = %v, want an error naming %q", err, c.label)
+			} else if !errors.Is(err, ErrUnsupported) {
+				t.Errorf("IncludedColumnsSupported() = %v, want it to wrap ErrUnsupported", err)
 			}
 			err := onTable(tbl, idx).SetIncludedColumns(t.Context(), []string{"c"})
 			if err == nil || !strings.Contains(err.Error(), c.label) {
 				t.Errorf("SetIncludedColumns() = %v, want an error naming %q", err, c.label)
+			} else if !errors.Is(err, ErrUnsupported) {
+				t.Errorf("SetIncludedColumns() = %v, want it to wrap ErrUnsupported", err)
 			}
 			if q := captured.find("CREATE"); q != "" {
 				t.Errorf("refused but still executed: %s", q)

@@ -244,7 +244,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "CREATE DATABASE %s ON", QuoteName(req.Name))
+	fmt.Fprintf(&sb, "CREATE DATABASE %s ON", quoteIdent(req.Name))
 	for i, f := range files {
 		if f.LogicalName == "" || f.FileName == "" {
 			return nil, invalidf("gosmo: create database snapshot %q: file %d needs both a logical name and a path", req.Name, i+1)
@@ -253,9 +253,9 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 			sb.WriteString(",")
 		}
 		fmt.Fprintf(&sb, "\n    ( NAME = %s, FILENAME = %s )",
-			QuoteName(f.LogicalName), QuoteLiteral(f.FileName))
+			quoteIdent(f.LogicalName), QuoteLiteral(f.FileName))
 	}
-	fmt.Fprintf(&sb, "\nAS SNAPSHOT OF %s", QuoteName(req.SourceDatabase))
+	fmt.Fprintf(&sb, "\nAS SNAPSHOT OF %s", quoteIdent(req.SourceDatabase))
 
 	if err := s.exec(ctx, sb.String()); err != nil {
 		return nil, fmt.Errorf("gosmo: create database snapshot %q of %q: %w", req.Name, req.SourceDatabase, err)
@@ -281,7 +281,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 // FROM DATABASE_SNAPSHOT clause takes a name, not a bracketed reference.
 func (s *Server) RestoreFromSnapshot(ctx context.Context, database, snapshot string) error {
 	stmt := fmt.Sprintf("RESTORE DATABASE %s FROM DATABASE_SNAPSHOT = %s",
-		QuoteName(database), QuoteLiteral(snapshot))
+		quoteIdent(database), QuoteLiteral(snapshot))
 	if err := s.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: restore %q from snapshot %q: %w", database, snapshot, err)
 	}
@@ -291,7 +291,7 @@ func (s *Server) RestoreFromSnapshot(ctx context.Context, database, snapshot str
 // Restore reverts the snapshot's source database to it.
 func (s *DatabaseSnapshot) Restore(ctx context.Context) error {
 	if s.SourceDatabase == "" {
-		return fmt.Errorf("gosmo: restore from snapshot %q: its source database is gone", s.Name)
+		return notFoundf("gosmo: restore from snapshot %q: its source database is gone", s.Name)
 	}
 	return s.server.RestoreFromSnapshot(ctx, s.SourceDatabase, s.Name)
 }
@@ -299,7 +299,7 @@ func (s *DatabaseSnapshot) Restore(ctx context.Context) error {
 // Drop drops the snapshot. Dropping a snapshot deletes its sparse files and
 // leaves the source database untouched.
 func (s *DatabaseSnapshot) Drop(ctx context.Context) error {
-	if err := s.server.exec(ctx, "DROP DATABASE "+QuoteName(s.Name)); err != nil {
+	if err := s.server.exec(ctx, "DROP DATABASE "+quoteIdent(s.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop database snapshot %q: %w", s.Name, err)
 	}
 	return nil

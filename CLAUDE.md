@@ -13,7 +13,7 @@ gosmo is a pure-Go (no CGO) library mimicking SQL Server Management Objects
   `diagram/00-map.mmd` is inlined. Read § Maintaining this document before
   touching a diagram.
 - Read only what the task touches: `quoting.go`'s doc comments for anything
-  building an identifier or literal; `server.go`/`login.go`'s for the
+  building an identifier or literal; `server_databases.go`/`login.go`'s for the
   handle-vs-lookup pairs.
 
 ## This is a library, not gossms's back end
@@ -210,7 +210,7 @@ exercise the write, drop them; never mutate pre-existing objects.
     `ErrSystemEndpoint`).
   - **A new handle method takes the `Ref` suffix** — it is what stops
     `s.Database("x").State()` compiling into a silent zero value. Doc comments
-    in `server.go`/`login.go` are authoritative; `go doc
+    in `server_databases.go`/`login.go` are authoritative; `go doc
     gosmo.Server.DatabaseRef`.
 
 ## Open threads
