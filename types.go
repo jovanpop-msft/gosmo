@@ -572,6 +572,26 @@ func (i *ServerInfo) SupportsShrinkLowPriority() bool {
 	return majorAtLeast(i.featureMajor(), SQLServer2022)
 }
 
+// minimumServerBuild is the build of MinimumServerVersion that gosmo needs:
+// 13.0.4001, SQL Server 2016 SP1.
+const minimumServerBuild = 4001
+
+// Supported reports whether the connected instance is one gosmo supports:
+// MinimumServerVersion (SQL Server 2016 SP1) or later. An older instance
+// connects fine and then fails read by read with "Invalid column name", so a
+// caller checks this once on connect and warns rather than refusing — most
+// reads still work.
+//
+// An Azure edition, an unread version and a nil ServerInfo answer true, the
+// "0 = newest" rule every version gate follows (majorAtLeast).
+func (i *ServerInfo) Supported() bool {
+	major := i.featureMajor()
+	if majorBefore(major, MinimumServerVersion) {
+		return false
+	}
+	return i == nil || i.VersionMajor != int(MinimumServerVersion) || i.VersionBuild >= minimumServerBuild
+}
+
 // BackupInfo holds metadata about a specific database backup.
 type BackupInfo struct {
 	DatabaseName  string

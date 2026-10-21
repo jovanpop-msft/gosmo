@@ -247,9 +247,12 @@ func upperKeyword[K ~string](v K) K { return K(strings.ToUpper(string(v))) }
 //
 // The replica is addressed by name as a string literal, not an identifier —
 // that is the syntax ALTER requires — so escapeSingle is what protects it.
+//
+// Its refusal carries no "gosmo:" prefix: every caller wraps it with one plus
+// the setting and the replica.
 func (r *AvailabilityReplica) modifyReplica(ctx context.Context, with string) error {
 	if r.server == nil || r.GroupName == "" {
-		return invalidf("gosmo: modify replica %q: replica did not come from AvailabilityGroup.Replicas", r.ReplicaServerName)
+		return invalidf("replica did not come from AvailabilityGroup.Replicas")
 	}
 	return r.server.exec(ctx, fmt.Sprintf(
 		"ALTER AVAILABILITY GROUP %s MODIFY REPLICA ON N'%s' WITH (%s)",

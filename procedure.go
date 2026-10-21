@@ -70,13 +70,13 @@ func scriptExecProc(proc string, params []ProcParam) (string, error) {
 		case p.dest == nil:
 			lit, err := scriptLiteral(p.value)
 			if err != nil {
-				return "", fmt.Errorf("gosmo: script: parameter %q: %w", p.name, err)
+				return "", fmt.Errorf("script: parameter %q: %w", p.name, err)
 			}
 			args = append(args, v+" = "+lit)
 		case p.inOut:
 			lit, err := scriptLiteral(dereference(p.dest))
 			if err != nil {
-				return "", fmt.Errorf("gosmo: script: parameter %q: %w", p.name, err)
+				return "", fmt.Errorf("script: parameter %q: %w", p.name, err)
 			}
 			decls = append(decls, "DECLARE "+v+" "+scriptDeclType(p.dest)+" = "+lit+";")
 			args = append(args, v+" = "+v+" OUTPUT")

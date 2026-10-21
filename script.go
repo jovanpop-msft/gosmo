@@ -600,7 +600,7 @@ func bindScriptArgs(q string, args []any) (string, error) {
 	// here and not in scriptLiteral's type switch.
 	for _, a := range args {
 		if na, ok := a.(sql.NamedArg); ok {
-			return "", fmt.Errorf("gosmo: script: named argument %q cannot be scripted positionally", na.Name)
+			return "", fmt.Errorf("script: named argument %q cannot be scripted positionally", na.Name)
 		}
 	}
 	var bindErr error
@@ -618,14 +618,14 @@ func bindScriptArgs(q string, args []any) (string, error) {
 			n, err := strconv.Atoi(m[2:])
 			if err != nil || n < 1 || n > len(args) {
 				if bindErr == nil {
-					bindErr = fmt.Errorf("gosmo: script: %s has no argument (%d given)", m, len(args))
+					bindErr = fmt.Errorf("script: %s has no argument (%d given)", m, len(args))
 				}
 				return m
 			}
 			lit, err := scriptLiteral(args[n-1])
 			if err != nil {
 				if bindErr == nil {
-					bindErr = fmt.Errorf("gosmo: script: %s: %w", m, err)
+					bindErr = fmt.Errorf("script: %s: %w", m, err)
 				}
 				return m
 			}
@@ -647,7 +647,7 @@ func bindScriptArgs(q string, args []any) (string, error) {
 		if err != nil || n < 1 || n > len(args) || bound[n-1] {
 			continue
 		}
-		return "", fmt.Errorf("gosmo: script: %s appears only inside a literal or comment", m)
+		return "", fmt.Errorf("script: %s appears only inside a literal or comment", m)
 	}
 	return out.String(), nil
 }
@@ -658,9 +658,11 @@ func bindScriptArgs(q string, args []any) (string, error) {
 // silently wrong literal in a script the user is about to run by hand is
 // worse than a refusal to produce one.
 //
-// Its errors carry no "gosmo:" prefix of their own — both call sites
+// Its errors carry no "script:" prefix of their own — both call sites
 // (bindScriptArgs, scriptExecProc) wrap them with one plus the parameter
-// they belong to, and prefixing here would put it in the middle.
+// they belong to, and prefixing here would put it in the middle. Neither of
+// those adds "gosmo:" either: their errors reach the caller through the write
+// that captured them, which wraps with "gosmo: <operation>".
 func scriptLiteral(v any) (string, error) {
 	if v == nil {
 		return "NULL", nil

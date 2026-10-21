@@ -239,7 +239,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 		var err error
 		files, err = s.SnapshotFileDefaults(ctx, req.SourceDatabase, req.Name)
 		if err != nil {
-			return nil, fmt.Errorf("gosmo: create database snapshot %q: %w", req.Name, err)
+			return nil, err // already "gosmo: <its operation>"
 		}
 	}
 

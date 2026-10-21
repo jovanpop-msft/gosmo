@@ -359,7 +359,7 @@ func (s *Server) EventFiles(ctx context.Context, pathPattern string) ([]string, 
 	}
 	entries, err := s.EnumFileSystem(ctx, dir)
 	if err != nil {
-		return nil, fmt.Errorf("gosmo: %s: %w", what, err)
+		return nil, err // already "gosmo: <its operation>"
 	}
 	var out []string
 	for _, e := range entries {

@@ -81,7 +81,10 @@ exercise the write, drop them; never mutate pre-existing objects.
   `fmt.Errorf("gosmo: drop statistic %q: %w", st.Name, err)`. An error that
   wraps nothing is a refusal: `invalidf` for the caller's arguments
   (`ErrInvalidRequest`), `unsupportedf` when gosmo has no form for the request
-  (`ErrUnsupported`) — `invalid_request_test.go` enforces it.
+  (`ErrUnsupported`) — `invalid_request_test.go` enforces it. The prefix
+  goes on once: an unexported helper whose caller wraps leaves it off, and a
+  caller of an exported method returns its error as is
+  (`TestNoWrapOfAnAlreadyPrefixedError`).
 - **A write never goes through `query`/`queryRow*`** — they retry
   (`withRetry`), and a write retried after a broken connection runs twice. A
   write that reads a value back (an `OUTPUT` parameter) uses `execScan`.
