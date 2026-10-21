@@ -147,7 +147,7 @@ func TestLiveScriptedSetterMirroring(t *testing.T) {
 
 	// 2. A captured statement, run for real, must produce the change — the
 	// handle being left alone is only correct if the script is what applies it.
-	if err := srv.exec(ctx, script.Statements()[0]); err != nil {
+	if _, err := srv.exec(ctx, script.Statements()[0]); err != nil {
 		t.Fatalf("running the captured statement: %v", err)
 	}
 	if got := reload().RecoveryModel; got != RecoveryModelSimple {

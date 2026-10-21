@@ -134,7 +134,7 @@ func (j *Job) addStepAt(ctx context.Context, req JobStepRequest, stepID int) (*J
 	if req.Name == "" {
 		return nil, invalidf("gosmo: add step: name is required")
 	}
-	if err := j.server.exec(ctx, addStepStmt(j.Name, req, stepID)); err != nil {
+	if _, err := j.server.exec(ctx, addStepStmt(j.Name, req, stepID)); err != nil {
 		return nil, fmt.Errorf("gosmo: add step %q to job %q: %w", req.Name, j.Name, err)
 	}
 	return createdObject(ctx, &JobStep{job: j, StepID: stepID, Name: req.Name}, func() (*JobStep, error) {
@@ -212,7 +212,7 @@ func (s *JobStep) Alter(ctx context.Context, req JobStepRequest) error {
 	// form actually clears the step's output file instead of silently keeping
 	// the old path while the JobStep claimed it was gone.
 	q += fmt.Sprintf(", @output_file_name = N'%s'", escapeSingle(req.OutputFileName))
-	if err := s.job.server.exec(ctx, q); err != nil {
+	if _, err := s.job.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: alter step %q of job %q: %w", req.Name, s.job.Name, err)
 	}
 	// Not mirrored under WithScript — nothing reached the server, so the step
@@ -244,7 +244,7 @@ func (s *JobStep) Drop(ctx context.Context) error {
 // *JobStep for it, for a caller holding a step number rather than the step.
 // JobStep.Drop is this with the number taken off the step.
 func (j *Job) deleteStepAt(ctx context.Context, stepID int) error {
-	if err := j.server.exec(ctx, deleteStepStmt(j.Name, stepID)); err != nil {
+	if _, err := j.server.exec(ctx, deleteStepStmt(j.Name, stepID)); err != nil {
 		return fmt.Errorf("gosmo: delete step %d of job %q: %w", stepID, j.Name, err)
 	}
 	return nil
@@ -321,7 +321,7 @@ type JobStep struct {
 // chance to lose a column the request does not model.
 func (s *JobStep) SetFlow(ctx context.Context, onSuccessAction, onSuccessStepID, onFailAction, onFailStepID int) error {
 	q := setFlowStmt(s.job.Name, s.StepID, onSuccessAction, onSuccessStepID, onFailAction, onFailStepID)
-	if err := s.job.server.exec(ctx, q); err != nil {
+	if _, err := s.job.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set flow of step %q of job %q: %w", s.Name, s.job.Name, err)
 	}
 	if !Scripting(ctx) {

@@ -51,9 +51,13 @@ func TestLiveShrinkFile(t *testing.T) {
 	if err := f.Alter(ctx, FileModify{SizeKB: 16 * 1024}); err == nil {
 		t.Fatal("MODIFY FILE to a smaller size succeeded; Shrink would be unneeded")
 	}
-	got, err := f.Shrink(ctx, 16*1024)
+	res, err := f.Shrink(ctx, ShrinkFileOptions{TargetMB: new(int64(16))})
 	if err != nil {
 		t.Fatalf("Shrink: %v", err)
+	}
+	got := res.CurrentKB
+	if res.MinimumKB <= 0 || res.UsedPages <= 0 || res.EstimatedPages <= 0 {
+		t.Errorf("Shrink result = %+v, want every figure filled", res)
 	}
 	var pages int64
 	if err := db.QueryRowContext(ctx,
@@ -64,13 +68,20 @@ func TestLiveShrinkFile(t *testing.T) {
 		t.Errorf("size = %d KB, Shrink reported %d KB, want both 16384", pages*8, got)
 	}
 	// Already at the target, and below what the data allows: still a row.
-	for _, target := range []int64{16 * 1024, 0} {
-		if got, err := f.Shrink(ctx, target); err != nil || got <= 0 || got > 16*1024 {
-			t.Errorf("Shrink(%d) again = %d, %v", target, got, err)
+	for _, target := range []int64{16, 0} {
+		if res, err := f.Shrink(ctx, ShrinkFileOptions{TargetMB: new(target)}); err != nil || res.CurrentKB <= 0 || res.CurrentKB > 16*1024 {
+			t.Errorf("Shrink(%d MB) again = %+v, %v", target, res, err)
 		}
 	}
-	if got, err := d.FileRef(name+"_log").Shrink(ctx, 0); err != nil || got <= 0 {
-		t.Errorf("Shrink of the log = %d, %v", got, err)
+	if res, err := d.FileRef(name+"_log").Shrink(ctx, ShrinkFileOptions{TargetMB: new(int64(0))}); err != nil || res.CurrentKB <= 0 {
+		t.Errorf("Shrink of the log = %+v, %v", res, err)
+	}
+	// Release unused space and SendZeroTarget answer with the same row.
+	if res, err := f.Shrink(ctx, ShrinkFileOptions{Truncate: ShrinkTruncateOnly}); err != nil || res.CurrentKB <= 0 {
+		t.Errorf("Shrink TRUNCATEONLY = %+v, %v", res, err)
+	}
+	if res, err := f.Shrink(ctx, ShrinkFileOptions{TargetMB: new(int64(0)), SendZeroTarget: true}); err != nil || res.CurrentKB <= 0 {
+		t.Errorf("Shrink with SendZeroTarget = %+v, %v", res, err)
 	}
 }
 
@@ -93,10 +104,11 @@ func TestLiveShrinkFileToZeroGoesBelowTheCreationSize(t *testing.T) {
 	if err := f.Alter(ctx, FileModify{SizeKB: 20 * 1024}); err != nil {
 		t.Fatalf("grow to 20 MB: %v", err)
 	}
-	got, err := f.Shrink(ctx, 0)
+	res, err := f.Shrink(ctx, ShrinkFileOptions{TargetMB: new(int64(0))})
 	if err != nil {
 		t.Fatalf("Shrink(0): %v", err)
 	}
+	got := res.CurrentKB
 	if got >= created*8 {
 		t.Errorf("Shrink(0) reached %d KB, want below the creation size %d KB", got, created*8)
 	}

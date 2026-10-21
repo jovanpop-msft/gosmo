@@ -45,7 +45,7 @@ func TestLiveForcedDropDeletesADatabaseInAnyState(t *testing.T) {
 	}
 	dir := dataFile[:strings.LastIndexAny(dataFile, `\/`)+1]
 	bak := dir + src + ".bak"
-	if err := srv.exec(ctx, "BACKUP DATABASE "+quoteIdent(src)+" TO DISK = N'"+escapeSingle(bak)+"' WITH INIT, COPY_ONLY"); err != nil {
+	if _, err := srv.exec(ctx, "BACKUP DATABASE "+quoteIdent(src)+" TO DISK = N'"+escapeSingle(bak)+"' WITH INIT, COPY_ONLY"); err != nil {
 		t.Fatalf("back up: %v", err)
 	}
 	// xp_delete_file (type 0: a backup file, checked by its header) is on
@@ -65,9 +65,10 @@ func TestLiveForcedDropDeletesADatabaseInAnyState(t *testing.T) {
 		return s
 	}
 	restore := func(name, with string) error {
-		return srv.exec(ctx, "RESTORE DATABASE "+quoteIdent(name)+" FROM DISK = N'"+escapeSingle(bak)+"' WITH "+with+
+		_, err := srv.exec(ctx, "RESTORE DATABASE "+quoteIdent(name)+" FROM DISK = N'"+escapeSingle(bak)+"' WITH "+with+
 			", MOVE N'"+escapeSingle(src)+"' TO N'"+escapeSingle(dir+name+".mdf")+"'"+
 			", MOVE N'"+escapeSingle(src+"_log")+"' TO N'"+escapeSingle(dir+name+"_log.ldf")+"'")
+		return err
 	}
 	cleanup := func(name string) {
 		srv.exec(context.Background(), "IF DB_ID('"+name+"') IS NOT NULL DROP DATABASE "+quoteIdent(name))
@@ -97,7 +98,7 @@ func TestLiveForcedDropDeletesADatabaseInAnyState(t *testing.T) {
 			}
 		}},
 		{"gossms_live_dropstate_offline", "OFFLINE", func(t *testing.T, name string) {
-			if err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(name)+
+			if _, err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(name)+
 				" ON (NAME = N'"+name+"', FILENAME = N'"+escapeSingle(dir+name+".mdf")+"')"+
 				" LOG ON (NAME = N'"+name+"_log', FILENAME = N'"+escapeSingle(dir+name+"_log.ldf")+"')"+
 				"; ALTER DATABASE "+quoteIdent(name)+" SET OFFLINE"); err != nil {
@@ -121,7 +122,7 @@ func TestLiveForcedDropDeletesADatabaseInAnyState(t *testing.T) {
 			}
 			if c.want == "OFFLINE" {
 				// The files outlive the drop; attach them back to delete them.
-				if err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(c.name)+
+				if _, err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(c.name)+
 					" ON (FILENAME = N'"+escapeSingle(dir+c.name+".mdf")+"'), (FILENAME = N'"+escapeSingle(dir+c.name+"_log.ldf")+"') FOR ATTACH"); err != nil {
 					t.Errorf("the OFFLINE database's files did not survive the drop to be attached back: %v", err)
 				}

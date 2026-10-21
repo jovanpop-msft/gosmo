@@ -185,7 +185,7 @@ func (s *Server) VerifyBackup(ctx context.Context, opts VerifyOptions, targets .
 	if opts.FileNumber < 0 {
 		return invalidf("gosmo: verify backup: backup set number %d is negative", opts.FileNumber)
 	}
-	if err := s.exec(ctx, buildVerifyBackupStatement(opts, targets)); err != nil {
+	if _, err := s.exec(ctx, buildVerifyBackupStatement(opts, targets)); err != nil {
 		return fmt.Errorf("gosmo: verify backup %q: %w", targetNames(targets), err)
 	}
 	return nil

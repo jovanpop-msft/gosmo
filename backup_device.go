@@ -134,7 +134,7 @@ func (s *Server) CreateBackupDevice(ctx context.Context, req CreateBackupDeviceR
 
 	stmt := fmt.Sprintf("EXEC sp_addumpdevice @devtype = N'%s', @logicalname = N'%s', @physicalname = N'%s'",
 		escapeSingle(string(devType)), escapeSingle(name), escapeSingle(physicalName))
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create backup device %q: %w", name, err)
 	}
 	return createdObject(ctx, s.BackupDeviceRef(name), func() (*BackupDevice, error) {
@@ -166,7 +166,7 @@ func (d *BackupDevice) Drop(ctx context.Context, file DeviceFileMode) error {
 	default:
 		return invalidf("gosmo: drop backup device %q: unrecognized file mode %d", d.Name, file)
 	}
-	if err := d.server.exec(ctx, stmt); err != nil {
+	if _, err := d.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: drop backup device %q: %w", d.Name, err)
 	}
 	return nil

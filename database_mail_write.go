@@ -238,7 +238,7 @@ func (s *Server) CreateMailAccount(ctx context.Context, req CreateMailAccountReq
 	run, shown := mailAccountCreateStmts(req)
 	var err error
 	if len(run) == 1 {
-		err = s.execSecret(ctx, run[0], shown[0])
+		_, err = s.execSecret(ctx, run[0], shown[0])
 	} else {
 		err = s.execSecretAtomic(ctx, run, shown)
 	}
@@ -339,7 +339,7 @@ func (a *MailAccount) Alter(ctx context.Context, o MailAccountOptions) error {
 		}
 	}
 	run, shown := mailAccountAlterStmt(a.Name, o)
-	if err := a.server.execSecret(ctx, run, shown); err != nil {
+	if _, err := a.server.execSecret(ctx, run, shown); err != nil {
 		return fmt.Errorf("gosmo: alter mail account %q: %w", a.Name, err)
 	}
 	setPtrIfApplied(ctx, &a.Name, o.Name)
@@ -371,7 +371,7 @@ func (a *MailAccount) Alter(ctx context.Context, o MailAccountOptions) error {
 func (a *MailAccount) Drop(ctx context.Context) error {
 	var p procArgs
 	p.str("@account_name", a.Name)
-	if err := a.server.exec(ctx, p.exec("sysmail_delete_account_sp")); err != nil {
+	if _, err := a.server.exec(ctx, p.exec("sysmail_delete_account_sp")); err != nil {
 		return fmt.Errorf("gosmo: drop mail account %q: %w", a.Name, err)
 	}
 	return nil
@@ -402,7 +402,7 @@ func (s *Server) CreateMailProfile(ctx context.Context, req CreateMailProfileReq
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, invalidf("gosmo: create mail profile: profile has no name")
 	}
-	if err := s.exec(ctx, mailProfileCreateStmt(req.Name, req.Description)); err != nil {
+	if _, err := s.exec(ctx, mailProfileCreateStmt(req.Name, req.Description)); err != nil {
 		return nil, fmt.Errorf("gosmo: create mail profile %q: %w", req.Name, err)
 	}
 	return createdObject(ctx, s.MailProfileRef(req.Name), func() (*MailProfile, error) {
@@ -448,7 +448,7 @@ func (p *MailProfile) Alter(ctx context.Context, o MailProfileOptions) error {
 		stmt = "DECLARE @profile_id int = (SELECT profile_id FROM msdb.dbo.sysmail_profile WHERE name = " +
 			QuoteLiteral(p.Name) + ");\nIF @profile_id IS NULL RAISERROR(14607, 16, 1, 'profile') ELSE " + stmt
 	}
-	if err := p.server.exec(ctx, stmt); err != nil {
+	if _, err := p.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: alter mail profile %q: %w", p.Name, err)
 	}
 	setPtrIfApplied(ctx, &p.Name, o.Name)
@@ -461,7 +461,7 @@ func (p *MailProfile) Alter(ctx context.Context, o MailProfileOptions) error {
 func (p *MailProfile) Drop(ctx context.Context) error {
 	var a procArgs
 	a.str("@profile_name", p.Name)
-	if err := p.server.exec(ctx, a.exec("sysmail_delete_profile_sp")); err != nil {
+	if _, err := p.server.exec(ctx, a.exec("sysmail_delete_profile_sp")); err != nil {
 		return fmt.Errorf("gosmo: drop mail profile %q: %w", p.Name, err)
 	}
 	return nil
@@ -479,7 +479,7 @@ func mailProfileAccountStmt(proc, profile, account string, seq *int) string {
 
 // AddAccount adds an account to the profile at failover position seq.
 func (p *MailProfile) AddAccount(ctx context.Context, account string, seq int) error {
-	if err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_add_profileaccount_sp", p.Name, account, &seq)); err != nil {
+	if _, err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_add_profileaccount_sp", p.Name, account, &seq)); err != nil {
 		return fmt.Errorf("gosmo: add account %q to mail profile %q: %w", account, p.Name, err)
 	}
 	return nil
@@ -488,7 +488,7 @@ func (p *MailProfile) AddAccount(ctx context.Context, account string, seq int) e
 // RemoveAccount removes an account from the profile; the account itself is
 // kept.
 func (p *MailProfile) RemoveAccount(ctx context.Context, account string) error {
-	if err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_delete_profileaccount_sp", p.Name, account, nil)); err != nil {
+	if _, err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_delete_profileaccount_sp", p.Name, account, nil)); err != nil {
 		return fmt.Errorf("gosmo: remove account %q from mail profile %q: %w", account, p.Name, err)
 	}
 	return nil
@@ -497,7 +497,7 @@ func (p *MailProfile) RemoveAccount(ctx context.Context, account string) error {
 // SetAccountSequence moves an account of the profile to failover position
 // seq, in place.
 func (p *MailProfile) SetAccountSequence(ctx context.Context, account string, seq int) error {
-	if err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_update_profileaccount_sp", p.Name, account, &seq)); err != nil {
+	if _, err := p.server.exec(ctx, mailProfileAccountStmt("sysmail_update_profileaccount_sp", p.Name, account, &seq)); err != nil {
 		return fmt.Errorf("gosmo: set sequence of account %q in mail profile %q: %w", account, p.Name, err)
 	}
 	return nil
@@ -636,7 +636,7 @@ func (d MailProfileDefault) isDefault() (bool, error) {
 func (p *MailProfile) Grant(ctx context.Context, principal string, def MailProfileDefault) error {
 	isDefault, err := def.isDefault()
 	if err == nil {
-		err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_add_principalprofile_sp", p.Name, principal, &isDefault))
+		_, err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_add_principalprofile_sp", p.Name, principal, &isDefault))
 	}
 	if err != nil {
 		return fmt.Errorf("gosmo: grant mail profile %q to %q: %w", p.Name, principal, err)
@@ -654,7 +654,7 @@ func (p *MailProfile) Grant(ctx context.Context, principal string, def MailProfi
 func (p *MailProfile) SetGrantDefault(ctx context.Context, principal string, def MailProfileDefault) error {
 	isDefault, err := def.isDefault()
 	if err == nil {
-		err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_update_principalprofile_sp", p.Name, principal, &isDefault))
+		_, err = p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_update_principalprofile_sp", p.Name, principal, &isDefault))
 	}
 	if err != nil {
 		return fmt.Errorf("gosmo: set default of mail profile %q for %q: %w", p.Name, principal, err)
@@ -667,7 +667,7 @@ func (p *MailProfile) SetGrantDefault(ctx context.Context, principal string, def
 
 // Revoke removes principal's grant of the profile.
 func (p *MailProfile) Revoke(ctx context.Context, principal string) error {
-	if err := p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_delete_principalprofile_sp", p.Name, principal, nil)); err != nil {
+	if _, err := p.server.exec(ctx, mailPrincipalProfileStmt("sysmail_delete_principalprofile_sp", p.Name, principal, nil)); err != nil {
 		return fmt.Errorf("gosmo: revoke mail profile %q from %q: %w", p.Name, principal, err)
 	}
 	if principal == MailPublicPrincipal {

@@ -2,6 +2,8 @@ package gosmo
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -59,24 +61,44 @@ type ShrinkDatabaseOptions struct {
 	Wait              ShrinkWait
 }
 
-// ShrinkFileOptions shapes DatabaseFileInfo.ShrinkWith's DBCC SHRINKFILE.
+// ShrinkFileOptions shapes DatabaseFileInfo.Shrink's DBCC SHRINKFILE.
 //
 // A FILESTREAM container takes EMPTYFILE and nothing else: any other form is
 // Msg 2563. On a file whose Type reads "FILESTREAM" (one Database.Files
-// returned) ShrinkWith refuses those forms itself; a FileRef has no type, so
-// it sends them and the server answers.
+// returned) Shrink refuses those forms itself; a FileRef has no type, so it
+// sends them and the server answers.
 type ShrinkFileOptions struct {
-	// TargetMB is the size to shrink the file to, sent verbatim — 0 included,
-	// which stops at the file's creation size rather than its contents (see
-	// Shrink, which floors it at 1 instead). nil omits it: the file shrinks
-	// to its creation size.
+	// TargetMB is the size to shrink the file to. A target of 0 is sent as 1:
+	// SHRINKFILE's own 0 stops at the file's creation size, its MinimumSize,
+	// however little the file holds, so "as small as the data allows" is 1.
+	// nil omits it: the file shrinks to its creation size.
 	TargetMB *int64
-	Truncate ShrinkTruncate
+	// SendZeroTarget sends a TargetMB of 0 as 0, for a caller that wants
+	// SHRINKFILE's own stop at the creation size. Any other target is
+	// unaffected.
+	SendZeroTarget bool
+	Truncate       ShrinkTruncate
 	// EmptyFile moves every page of the file to the other files in its
 	// filegroup (EMPTYFILE), so it can be removed. It takes neither a target
 	// nor a release clause.
 	EmptyFile bool
 	Wait      ShrinkWait
+}
+
+// ShrinkResult is the row DBCC SHRINKFILE answers with, sizes converted from
+// 8 KB pages to KB. Every field is zero under WithScript, and when the server
+// answers with no row.
+type ShrinkResult struct {
+	// CurrentKB is the size the file reached, which can be above the target:
+	// a shrink stops at the space the file's data occupies.
+	CurrentKB int64
+	// MinimumKB is the smallest size the file can shrink to — its creation
+	// size, or the size last set by ALTER DATABASE MODIFY FILE.
+	MinimumKB int64
+	// UsedPages and EstimatedPages are the 8 KB pages the file uses now, and
+	// the pages the server estimates it could shrink to.
+	UsedPages      int64
+	EstimatedPages int64
 }
 
 // Shrink shrinks every file of the database (DBCC SHRINKDATABASE). It moves
@@ -93,19 +115,43 @@ func (d *Database) Shrink(ctx context.Context, opts ShrinkDatabaseOptions) error
 	return nil
 }
 
-// ShrinkWith shrinks the file (DBCC SHRINKFILE) with every option the
-// command takes: a target sent as given, TRUNCATEONLY, NOTRUNCATE, EMPTYFILE
-// and WAIT_AT_LOW_PRIORITY. Shrink is the narrower form that reports the size
-// reached. Under WithScript it captures the statement.
-func (f *DatabaseFileInfo) ShrinkWith(ctx context.Context, opts ShrinkFileOptions) error {
-	stmt, err := buildShrinkFileWithStatement(f.Name, f.Type, opts, f.db.server)
+// Shrink shrinks the file (DBCC SHRINKFILE) with every option the command
+// takes: a target, TRUNCATEONLY, NOTRUNCATE, EMPTYFILE and
+// WAIT_AT_LOW_PRIORITY. Lowering a file's size cannot go through Alter —
+// MODIFY FILE with a smaller SIZE is Msg 5039. It is slow on a large file,
+// moves pages (unless TRUNCATEONLY) and so fragments the indexes it touches.
+//
+// It returns the server's answer, and sets SizeKB to the size reached. Under
+// WithScript it captures the statement and returns a zero ShrinkResult.
+func (f *DatabaseFileInfo) Shrink(ctx context.Context, opts ShrinkFileOptions) (ShrinkResult, error) {
+	stmt, err := buildShrinkFileStatement(f.Name, f.Type, opts, f.db.server)
 	if err != nil {
-		return fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
+		return ShrinkResult{}, fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
 	}
-	if _, err := f.db.exec(ctx, stmt); err != nil {
-		return fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
+	if Scripting(ctx) {
+		if _, err := f.db.exec(ctx, stmt); err != nil {
+			return ShrinkResult{}, fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
+		}
+		return ShrinkResult{}, nil
 	}
-	return nil
+	// DBCC SHRINKFILE answers with one row: DbId, FileId, CurrentSize,
+	// MinimumSize, UsedPages, EstimatedPages — sizes in 8 KB pages.
+	var dbID, fileID int
+	var r ShrinkResult
+	var current, minimum int64
+	err = f.db.withConn(ctx, func(ctx context.Context, c sqlConn) error {
+		return c.QueryRowContext(ctx, stmt).Scan(&dbID, &fileID, &current, &minimum, &r.UsedPages, &r.EstimatedPages)
+	})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ShrinkResult{}, fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
+	}
+	observe(ctx, f.db.server, ScriptEntry{Server: scriptServerName(ctx, f.db.server), Database: f.db.Name, SQL: stmt})
+	if err != nil {
+		return ShrinkResult{}, nil
+	}
+	r.CurrentKB, r.MinimumKB = current*8, minimum*8
+	setIfApplied(ctx, &f.SizeKB, r.CurrentKB)
+	return r, nil
 }
 
 // buildShrinkDatabaseStatement renders Database.Shrink's statement, naming the
@@ -125,11 +171,11 @@ func buildShrinkDatabaseStatement(name string, opts ShrinkDatabaseOptions, s *Se
 	return shrinkStatement("DBCC SHRINKDATABASE", args, opts.Wait, s)
 }
 
-// buildShrinkFileWithStatement renders ShrinkWith's statement, naming the file
-// by its logical name as a literal — the handle may be a FileRef, with no
+// buildShrinkFileStatement renders Shrink's statement, naming the file by
+// its logical name as a literal — the handle may be a FileRef, with no
 // file_id. typeDesc is the file's Type as the handle holds it, "" when unknown:
 // it is passed in, not read, so a FileRef stays lookup-free.
-func buildShrinkFileWithStatement(name, typeDesc string, opts ShrinkFileOptions, s *Server) (string, error) {
+func buildShrinkFileStatement(name, typeDesc string, opts ShrinkFileOptions, s *Server) (string, error) {
 	args := []string{QuoteLiteral(name)}
 	if typeDesc == "FILESTREAM" && !opts.EmptyFile {
 		return "", invalidf("a FILESTREAM container can only be emptied (EMPTYFILE)")
@@ -145,7 +191,11 @@ func buildShrinkFileWithStatement(name, typeDesc string, opts ShrinkFileOptions,
 		if *t < 0 {
 			return "", invalidf("target size %d MB is negative", *t)
 		}
-		args = append(args, fmt.Sprint(*t))
+		mb := *t
+		if mb == 0 && !opts.SendZeroTarget {
+			mb = 1
+		}
+		args = append(args, fmt.Sprint(mb))
 	}
 	args, err := appendShrinkTruncate(args, opts.Truncate)
 	if err != nil {

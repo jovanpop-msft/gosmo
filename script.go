@@ -301,12 +301,14 @@ func scriptFrom(ctx context.Context) (*ScriptCollector, bool) {
 }
 
 // exec is the chokepoint every server-scoped write method (and, via
-// Database.exec, every database-scoped one) funnels through. stmt must
-// already be a complete, self-contained statement — every write method in
-// this package builds one via QuoteName/QuoteLiteral/escapeSingle before
-// reaching here, since none of these are parameterizable DDL/EXEC calls.
-func (s *Server) exec(ctx context.Context, stmt string) error {
-	return s.execSecret(ctx, stmt, stmt)
+// Database.exec, every database-scoped one) funnels through. It has
+// Database.exec's shape, so a write moving between scopes keeps its call:
+// args bind @p1, @p2, … and are substituted into the text a WithScript
+// collector captures or an observer sees (see bindScriptArgs). Most callers
+// pass none — their statement is DDL or an EXEC built complete via
+// QuoteName/QuoteLiteral/escapeSingle, since those are not parameterizable.
+func (s *Server) exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return s.execShown(ctx, q, q, args...)
 }
 
 // execSecret is exec for a statement carrying a secret: stmt, with the
@@ -316,10 +318,20 @@ func (s *Server) exec(ctx context.Context, stmt string) error {
 // Every password, credential secret and key source a write sends goes
 // through here or Database.execSecret: a captured script is shown to a
 // person and an observer is an audit trail, and neither may carry one.
-func (s *Server) execSecret(ctx context.Context, stmt, shown string) error {
+func (s *Server) execSecret(ctx context.Context, stmt, shown string) (sql.Result, error) {
+	return s.execShown(ctx, stmt, shown)
+}
+
+// execShown is Database.execShown for a server-scoped statement: q runs with
+// args, shown (with args bound into its text) is what is captured or observed.
+func (s *Server) execShown(ctx context.Context, q, shown string, args ...any) (sql.Result, error) {
 	if c, ok := scriptFrom(ctx); ok {
-		c.append(ScriptEntry{Server: scriptServerName(ctx, s), SQL: capturedForm(ctx, stmt, shown)})
-		return nil
+		bound, err := bindScriptArgs(capturedForm(ctx, q, shown), args)
+		if err != nil {
+			return nil, err
+		}
+		c.append(ScriptEntry{Server: scriptServerName(ctx, s), SQL: bound})
+		return scriptResult{}, nil
 	}
 	ctx, release := s.bound(ctx)
 	defer release()
@@ -327,20 +339,27 @@ func (s *Server) execSecret(ctx context.Context, stmt, shown string) error {
 	if t := txFrom(ctx, s); t != nil {
 		c, err := t.serverConn(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		conn = c
 	}
-	if _, err := conn.ExecContext(ctx, stmt); err != nil {
-		return withAllMessages(err)
+	res, err := conn.ExecContext(ctx, q, args...)
+	if err != nil {
+		return nil, withAllMessages(err)
 	}
-	observe(ctx, s, ScriptEntry{Server: scriptServerName(ctx, s), SQL: shown})
-	return nil
+	if observerFrom(ctx) != nil {
+		sent, berr := bindScriptArgs(shown, args)
+		if berr != nil {
+			sent = shown
+		}
+		observe(ctx, s, ScriptEntry{Server: scriptServerName(ctx, s), SQL: sent})
+	}
+	return res, nil
 }
 
 // execPasswords is execSecret for a statement whose secrets are all
 // passwords.
-func (s *Server) execPasswords(ctx context.Context, stmt string, passwords ...string) error {
+func (s *Server) execPasswords(ctx context.Context, stmt string, passwords ...string) (sql.Result, error) {
 	return s.execSecret(ctx, stmt, redactSecrets(stmt, PasswordPlaceholder, passwords...))
 }
 
@@ -502,9 +521,10 @@ func (s *Server) execAtomic(ctx context.Context, stmts []string) error {
 func (s *Server) execPasswordsAtomic(ctx context.Context, stmts []string, passwords ...string) error {
 	t := txFrom(ctx, s)
 	if t == nil || Scripting(ctx) {
-		return s.execPasswords(ctx, atomicBatch(stmts), passwords...)
+		_, err := s.execPasswords(ctx, atomicBatch(stmts), passwords...)
+		return err
 	}
-	err := s.execPasswords(ctx, atomicTxBatch(stmts), passwords...)
+	_, err := s.execPasswords(ctx, atomicTxBatch(stmts), passwords...)
 	t.fail(err)
 	return err
 }
@@ -517,9 +537,10 @@ func (s *Server) execPasswordsAtomic(ctx context.Context, stmts []string, passwo
 func (s *Server) execSecretAtomic(ctx context.Context, run, shown []string) error {
 	t := txFrom(ctx, s)
 	if t == nil || Scripting(ctx) {
-		return s.execSecret(ctx, atomicBatch(run), atomicBatch(shown))
+		_, err := s.execSecret(ctx, atomicBatch(run), atomicBatch(shown))
+		return err
 	}
-	err := s.execSecret(ctx, atomicTxBatch(run), atomicTxBatch(shown))
+	_, err := s.execSecret(ctx, atomicTxBatch(run), atomicTxBatch(shown))
 	t.fail(err)
 	return err
 }

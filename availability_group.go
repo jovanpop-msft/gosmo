@@ -215,8 +215,9 @@ func (s *Server) AvailabilityGroupByName(ctx context.Context, name string) (*Ava
 
 // alterSet runs one ALTER AVAILABILITY GROUP ... SET (<option>) statement.
 func (ag *AvailabilityGroup) alterSet(ctx context.Context, option string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER AVAILABILITY GROUP %s SET (%s)", quoteIdent(ag.Name), option))
+	return err
 }
 
 // BackupPreference is a group's AUTOMATED_BACKUP_PREFERENCE, spelled as both
@@ -344,8 +345,9 @@ func (ag *AvailabilityGroup) SetRequiredSynchronizedSecondariesToCommit(ctx cont
 
 // alter runs one ALTER AVAILABILITY GROUP <name> <clause> statement.
 func (ag *AvailabilityGroup) alter(ctx context.Context, clause string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s", quoteIdent(ag.Name), clause))
+	return err
 }
 
 // -- The group itself ------------------------------------------------------
@@ -361,7 +363,7 @@ func (ag *AvailabilityGroup) alter(ctx context.Context, clause string) error {
 // each secondary is left with the same unusable copies RemoveDatabase leaves
 // behind.
 func (ag *AvailabilityGroup) Drop(ctx context.Context) error {
-	if err := ag.server.exec(ctx, "DROP AVAILABILITY GROUP "+quoteIdent(ag.Name)); err != nil {
+	if _, err := ag.server.exec(ctx, "DROP AVAILABILITY GROUP "+quoteIdent(ag.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop availability group %q: %w", ag.Name, err)
 	}
 	return nil

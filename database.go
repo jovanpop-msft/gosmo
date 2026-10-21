@@ -736,18 +736,18 @@ func (d *Database) Drop(ctx context.Context, term Termination) error {
 		// Nothing here set the access mode, so nothing is repaired: a
 		// MULTI_USER on the way out would silently undo a RESTRICTED_USER or
 		// SINGLE_USER the database was deliberately left in.
-		if err := s.exec(ctx, drop); err != nil {
+		if _, err := s.exec(ctx, drop); err != nil {
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
 	case s.refusesSingleUser():
 		// One batch for the same reason as exclusiveBatch: a session that
 		// reconnects between the KILLs and the DROP makes the DROP fail.
-		if err := s.exec(ctx, killDatabaseSessionsBatch(name)+";\n"+drop+";"); err != nil {
+		if _, err := s.exec(ctx, killDatabaseSessionsBatch(name)+";\n"+drop+";"); err != nil {
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
 	default:
 		mode := s.accessModeBefore(ctx, name)
-		if err := s.exec(ctx, exclusiveBatch(name, drop)); err != nil {
+		if _, err := s.exec(ctx, exclusiveBatch(name, drop)); err != nil {
 			// The drop can genuinely fail after the alter succeeded — the
 			// database belongs to an availability group, the login may set
 			// state but not drop — and the batch puts it back to the access
@@ -805,7 +805,7 @@ func (d *Database) rename(ctx context.Context, newName string, term Termination)
 		q = killDatabaseSessionsBatch(oldName) + ";\n" + q + ";"
 	default:
 		mode := s.accessModeBefore(ctx, oldName)
-		if err := s.exec(ctx, renameExclusiveBatch(oldName, newName)); err != nil {
+		if _, err := s.exec(ctx, renameExclusiveBatch(oldName, newName)); err != nil {
 			if batchCutShort(err) {
 				_ = s.restoreAccessModeAfterRename(ctx, oldName, newName, mode)
 			}
@@ -813,7 +813,7 @@ func (d *Database) rename(ctx context.Context, newName string, term Termination)
 		}
 		return nil
 	}
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: rename database %q to %q: %w", oldName, newName, err)
 	}
 	return nil

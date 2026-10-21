@@ -190,7 +190,7 @@ var (
 // d.exec.
 func (d *Database) SetQueryStoreOptions(ctx context.Context, opts QueryStoreOptions) error {
 	if opts.DesiredState == QueryStoreOff {
-		if err := d.server.exec(ctx,
+		if _, err := d.server.exec(ctx,
 			fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE = OFF", quoteIdent(d.Name)),
 		); err != nil {
 			return fmt.Errorf("gosmo: disable query store on %q: %w", d.Name, err)
@@ -208,7 +208,7 @@ func (d *Database) SetQueryStoreOptions(ctx context.Context, opts QueryStoreOpti
 	}
 
 	q := fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE = ON (%s)", quoteIdent(d.Name), withs)
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set query store options on %q: %w", d.Name, err)
 	}
 	return nil
@@ -288,7 +288,7 @@ func (d *Database) FlushQueryStore(ctx context.Context) error {
 // ClearQueryStore discards all captured Query Store data (SSMS's "Clear
 // Query Store" action) without changing its configuration.
 func (d *Database) ClearQueryStore(ctx context.Context) error {
-	if err := d.server.exec(ctx,
+	if _, err := d.server.exec(ctx,
 		fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE CLEAR", quoteIdent(d.Name)),
 	); err != nil {
 		return fmt.Errorf("gosmo: clear query store on %q: %w", d.Name, err)

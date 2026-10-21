@@ -112,7 +112,7 @@ func (s *Server) ResourceGovernorRef() *ResourceGovernor {
 }
 
 func (rg *ResourceGovernor) alter(ctx context.Context, clause, what string) error {
-	if err := rg.server.exec(ctx, "ALTER RESOURCE GOVERNOR "+clause); err != nil {
+	if _, err := rg.server.exec(ctx, "ALTER RESOURCE GOVERNOR "+clause); err != nil {
 		return fmt.Errorf("gosmo: %s: %w", what, err)
 	}
 	return nil
@@ -293,7 +293,7 @@ func (k *poolKind[P]) create(ctx context.Context, s *Server, name string, render
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create %s %q: %w", k.noun, name, err)
 	}
-	if err := s.exec(ctx, "CREATE "+k.ddl+" "+quoteIdent(name)+w.with()); err != nil {
+	if _, err := s.exec(ctx, "CREATE "+k.ddl+" "+quoteIdent(name)+w.with()); err != nil {
 		return nil, fmt.Errorf("gosmo: create %s %q: %w", k.noun, name, err)
 	}
 	return createdObject(ctx, ref, func() (P, error) { return k.byName(ctx, s, name) })
@@ -309,14 +309,14 @@ func (k *poolKind[P]) alter(ctx context.Context, s *Server, name string, render 
 	if len(w.parts) == 0 {
 		return false, nil
 	}
-	if err := s.exec(ctx, "ALTER "+k.ddl+" "+quoteIdent(name)+w.with()); err != nil {
+	if _, err := s.exec(ctx, "ALTER "+k.ddl+" "+quoteIdent(name)+w.with()); err != nil {
 		return false, fmt.Errorf("gosmo: alter %s %q: %w", k.noun, name, err)
 	}
 	return true, nil
 }
 
 func (k *poolKind[P]) drop(ctx context.Context, s *Server, name string) error {
-	if err := s.exec(ctx, "DROP "+k.ddl+" "+quoteIdent(name)); err != nil {
+	if _, err := s.exec(ctx, "DROP "+k.ddl+" "+quoteIdent(name)); err != nil {
 		return fmt.Errorf("gosmo: drop %s %q: %w", k.noun, name, err)
 	}
 	return nil
@@ -511,7 +511,7 @@ func (s *Server) CreateWorkloadGroup(ctx context.Context, req CreateWorkloadGrou
 		return nil, fmt.Errorf("gosmo: create workload group %q: %w", req.Name, err)
 	}
 	stmt := "CREATE WORKLOAD GROUP " + quoteIdent(req.Name) + w.with() + using
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create workload group %q: %w", req.Name, err)
 	}
 	return createdObject(ctx, s.WorkloadGroupRef(req.Name), func() (*WorkloadGroup, error) {
@@ -533,7 +533,7 @@ func (g *WorkloadGroup) Alter(ctx context.Context, o WorkloadGroupOptions) error
 	if len(w.parts) == 0 && using == "" {
 		return nil
 	}
-	if err := g.server.exec(ctx, "ALTER WORKLOAD GROUP "+quoteIdent(g.Name)+w.with()+using); err != nil {
+	if _, err := g.server.exec(ctx, "ALTER WORKLOAD GROUP "+quoteIdent(g.Name)+w.with()+using); err != nil {
 		return fmt.Errorf("gosmo: alter workload group %q: %w", g.Name, err)
 	}
 	if o.Importance != nil {
@@ -567,7 +567,7 @@ func (g *WorkloadGroup) Alter(ctx context.Context, o WorkloadGroupOptions) error
 // default. Sessions already classified into the group keep running in it
 // until they end.
 func (g *WorkloadGroup) Drop(ctx context.Context) error {
-	if err := g.server.exec(ctx, "DROP WORKLOAD GROUP "+quoteIdent(g.Name)); err != nil {
+	if _, err := g.server.exec(ctx, "DROP WORKLOAD GROUP "+quoteIdent(g.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop workload group %q: %w", g.Name, err)
 	}
 	return nil

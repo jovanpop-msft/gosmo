@@ -96,7 +96,7 @@ func (s *Server) ConfigurationRef(name string) *ConfigurationOption {
 // changes with one RECONFIGURE; prefer it for anything a user edits.
 func (c *ConfigurationOption) SetValue(ctx context.Context, value int64) error {
 	q := fmt.Sprintf("EXEC sp_configure N'%s', %d", escapeSingle(c.Name), value)
-	if err := c.server.exec(ctx, q); err != nil {
+	if _, err := c.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set configuration %q = %d: %w", c.Name, value, err)
 	}
 	setIfApplied(ctx, &c.Value, value)
@@ -128,7 +128,7 @@ func (s *Server) Reconfigure(ctx context.Context, mode ReconfigureMode) error {
 	default:
 		return invalidf("gosmo: reconfigure: unrecognized mode %d", mode)
 	}
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: reconfigure: %w", err)
 	}
 	return nil
@@ -184,7 +184,7 @@ func (s *Server) ApplyConfiguration(ctx context.Context, changes []ConfigChange,
 	if len(changes) == 0 {
 		return nil
 	}
-	if err := s.exec(ctx, buildApplyConfiguration(changes, opts)); err != nil {
+	if _, err := s.exec(ctx, buildApplyConfiguration(changes, opts)); err != nil {
 		return fmt.Errorf("gosmo: apply configuration: %w", err)
 	}
 	return nil
@@ -549,7 +549,7 @@ ORDER  BY s.session_id`, sysFilter)
 
 // KillSession terminates a session by session ID.
 func (s *Server) KillSession(ctx context.Context, sessionID int) error {
-	if err := s.exec(ctx, fmt.Sprintf("KILL %d", sessionID)); err != nil {
+	if _, err := s.exec(ctx, fmt.Sprintf("KILL %d", sessionID)); err != nil {
 		return fmt.Errorf("gosmo: kill session %d: %w", sessionID, err)
 	}
 	return nil

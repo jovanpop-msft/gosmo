@@ -245,8 +245,9 @@ func (ag *AvailabilityGroup) RemoveDatabase(ctx context.Context, name string) er
 
 // alterDatabaseHADR runs one ALTER DATABASE <name> SET HADR <clause> statement.
 func (ag *AvailabilityGroup) alterDatabaseHADR(ctx context.Context, name, clause string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER DATABASE %s SET HADR %s", quoteIdent(name), clause))
+	return err
 }
 
 // JoinDatabase joins a restored secondary copy of a database to the group.

@@ -328,7 +328,7 @@ func (s *Server) CreateAvailabilityGroup(ctx context.Context, req CreateAvailabi
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create availability group: %w", err)
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create availability group %q: %w", req.Name, err)
 	}
 	// Under Scripting(ctx) the group does not exist yet; the handle carries

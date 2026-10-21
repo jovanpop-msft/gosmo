@@ -254,9 +254,10 @@ func (r *AvailabilityReplica) modifyReplica(ctx context.Context, with string) er
 	if r.server == nil || r.GroupName == "" {
 		return invalidf("replica did not come from AvailabilityGroup.Replicas")
 	}
-	return r.server.exec(ctx, fmt.Sprintf(
+	_, err := r.server.exec(ctx, fmt.Sprintf(
 		"ALTER AVAILABILITY GROUP %s MODIFY REPLICA ON N'%s' WITH (%s)",
 		quoteIdent(r.GroupName), escapeSingle(r.ReplicaServerName), with))
+	return err
 }
 
 // setReplicaKeyword is the shared body of the keyword-valued replica setters:
@@ -494,7 +495,7 @@ func (r *AvailabilityReplica) Drop(ctx context.Context) error {
 	if r.server == nil || r.GroupName == "" {
 		return invalidf("gosmo: drop replica %q: replica did not come from AvailabilityGroup.Replicas", r.ReplicaServerName)
 	}
-	if err := r.server.exec(ctx, fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s",
+	if _, err := r.server.exec(ctx, fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s",
 		quoteIdent(r.GroupName), removeReplicaClause(r.ReplicaServerName))); err != nil {
 		return fmt.Errorf("gosmo: remove replica %q from availability group %q: %w", r.ReplicaServerName, r.GroupName, err)
 	}

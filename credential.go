@@ -153,7 +153,7 @@ func (s *Server) CreateCredential(ctx context.Context, spec CreateCredentialRequ
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create credential: %w", err)
 	}
-	if err := s.execSecret(ctx, stmt, redactSecrets(stmt, SecretPlaceholder, spec.Secret)); err != nil {
+	if _, err := s.execSecret(ctx, stmt, redactSecrets(stmt, SecretPlaceholder, spec.Secret)); err != nil {
 		return nil, fmt.Errorf("gosmo: create credential %q: %w", spec.Name, err)
 	}
 	return createdObject(ctx, s.CredentialRef(spec.Name), func() (*Credential, error) {
@@ -190,7 +190,7 @@ func (c *Credential) Alter(ctx context.Context, o CredentialOptions) error {
 		stmt += ", SECRET = " + QuoteLiteral(*secret)
 		shown = redactSecrets(stmt, SecretPlaceholder, *secret)
 	}
-	if err := c.server.execSecret(ctx, stmt, shown); err != nil {
+	if _, err := c.server.execSecret(ctx, stmt, shown); err != nil {
 		return fmt.Errorf("gosmo: alter credential %q: %w", c.Name, err)
 	}
 	setIfApplied(ctx, &c.Identity, identity)
@@ -199,7 +199,7 @@ func (c *Credential) Alter(ctx context.Context, o CredentialOptions) error {
 
 // Drop deletes the credential.
 func (c *Credential) Drop(ctx context.Context) error {
-	if err := c.server.exec(ctx, "DROP CREDENTIAL "+quoteIdent(c.Name)); err != nil {
+	if _, err := c.server.exec(ctx, "DROP CREDENTIAL "+quoteIdent(c.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop credential %q: %w", c.Name, err)
 	}
 	return nil

@@ -327,7 +327,7 @@ func (j *Job) Start(ctx context.Context, stepName string) error {
 	if stepName != "" {
 		q += fmt.Sprintf(", @step_name = N'%s'", escapeSingle(stepName))
 	}
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: start job %q: %w", j.Name, err)
 	}
 	return nil
@@ -336,7 +336,7 @@ func (j *Job) Start(ctx context.Context, stepName string) error {
 // Stop stops a running job.
 func (j *Job) Stop(ctx context.Context) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_stop_job @job_name = N'%s'", escapeSingle(j.Name))
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: stop job %q: %w", j.Name, err)
 	}
 	return nil
@@ -356,7 +356,7 @@ func (j *Job) SetEnabled(ctx context.Context, on bool) error {
 // Drop drops the agent job.
 func (j *Job) Drop(ctx context.Context) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_delete_job @job_name = N'%s'", escapeSingle(j.Name))
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop job %q: %w", j.Name, err)
 	}
 	return nil
@@ -482,7 +482,7 @@ func (j *Job) AddSchedule(ctx context.Context, req CreateScheduleRequest) (*Sche
 	var id int
 	switch {
 	case Scripting(ctx) && req.OwnerLoginName == "":
-		err = j.server.exec(ctx, add)
+		_, err = j.server.exec(ctx, add)
 	case Scripting(ctx):
 		err = j.server.execAtomic(ctx, stmts)
 	case req.OwnerLoginName == "":

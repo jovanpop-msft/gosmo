@@ -131,7 +131,7 @@ func (j *Job) Alter(ctx context.Context, ch JobChanges) error {
 		return nil
 	}
 	q := p.statement("sp_update_job", fmt.Sprintf("@job_name = N'%s'", escapeSingle(j.Name)))
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: alter job %q: %w", j.Name, err)
 	}
 	setPtrIfApplied(ctx, &j.Description, ch.Description)
@@ -223,7 +223,7 @@ func (a *Alert) Alter(ctx context.Context, ch AlertChanges) error {
 		return nil
 	}
 	q := p.statement("sp_update_alert", fmt.Sprintf("@name = N'%s'", escapeSingle(a.Name)))
-	if err := a.server.exec(ctx, q); err != nil {
+	if _, err := a.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: alter alert %q: %w", a.Name, err)
 	}
 	setPtrIfApplied(ctx, &a.Enabled, ch.Enabled)
@@ -291,7 +291,7 @@ func (o *Operator) Alter(ctx context.Context, ch OperatorChanges) error {
 		return nil
 	}
 	q := p.statement("sp_update_operator", fmt.Sprintf("@name = N'%s'", escapeSingle(o.Name)))
-	if err := o.server.exec(ctx, q); err != nil {
+	if _, err := o.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: alter operator %q: %w", o.Name, err)
 	}
 	setPtrIfApplied(ctx, &o.Enabled, ch.Enabled)
@@ -384,7 +384,7 @@ func (sch *Schedule) Alter(ctx context.Context, ch ScheduleChanges) error {
 		return nil
 	}
 	q := p.statement("sp_update_schedule", sch.key("@name"))
-	if err := sch.server.exec(ctx, q); err != nil {
+	if _, err := sch.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: alter schedule %q: %w", sch.Name, err)
 	}
 	setPtrIfApplied(ctx, &sch.Enabled, ch.Enabled)

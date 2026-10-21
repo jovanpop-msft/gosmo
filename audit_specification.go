@@ -204,7 +204,7 @@ func (s *Server) CreateServerAuditSpecification(ctx context.Context, spec Create
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create server audit specification: %w", err)
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create server audit specification %q: %w", spec.Name, err)
 	}
 	return createdObject(ctx, s.ServerAuditSpecificationRef(spec.Name), func() (*ServerAuditSpecification, error) {
@@ -233,7 +233,7 @@ func (spec *ServerAuditSpecification) SetEnabled(ctx context.Context, on bool) e
 	}
 	stmt := fmt.Sprintf("ALTER SERVER AUDIT SPECIFICATION %s WITH ( STATE = %s )",
 		quoteIdent(spec.Name), state)
-	if err := spec.server.exec(ctx, stmt); err != nil {
+	if _, err := spec.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: set server audit specification %q state: %w", spec.Name, err)
 	}
 	setIfApplied(ctx, &spec.IsEnabled, on)
@@ -329,7 +329,7 @@ func (spec *ServerAuditSpecification) alterActionGroups(ctx context.Context, ver
 	}
 	stmt := fmt.Sprintf("ALTER SERVER AUDIT SPECIFICATION %s\n    %s", quoteIdent(spec.Name), clauses)
 	return spec.withSpecificationDisabled(ctx, func(ctx context.Context) error {
-		if err := spec.server.exec(ctx, stmt); err != nil {
+		if _, err := spec.server.exec(ctx, stmt); err != nil {
 			return fmt.Errorf("gosmo: alter server audit specification %q: %w", spec.Name, err)
 		}
 		return nil
@@ -346,7 +346,7 @@ func (spec *ServerAuditSpecification) SetAudit(ctx context.Context, auditName st
 	stmt := fmt.Sprintf("ALTER SERVER AUDIT SPECIFICATION %s\nFOR SERVER AUDIT %s",
 		quoteIdent(spec.Name), quoteIdent(auditName))
 	err := spec.withSpecificationDisabled(ctx, func(ctx context.Context) error {
-		if err := spec.server.exec(ctx, stmt); err != nil {
+		if _, err := spec.server.exec(ctx, stmt); err != nil {
 			return fmt.Errorf("gosmo: alter server audit specification %q: %w", spec.Name, err)
 		}
 		return nil
@@ -373,7 +373,7 @@ func (spec *ServerAuditSpecification) Drop(ctx context.Context) error {
 		}
 	}
 	stmt := "DROP SERVER AUDIT SPECIFICATION " + quoteIdent(spec.Name)
-	if err := spec.server.exec(ctx, stmt); err != nil {
+	if _, err := spec.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: drop server audit specification %q: %w", spec.Name, err)
 	}
 	return nil

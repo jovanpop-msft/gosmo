@@ -38,7 +38,7 @@ func TestLiveAtomicBatchRollsBackTheStatementsBeforeTheFailure(t *testing.T) {
 	}
 	drop()
 	defer drop()
-	if err := srv.exec(ctx, "CREATE TABLE "+atomicBatchTable+" (n INT NOT NULL)"); err != nil {
+	if _, err := srv.exec(ctx, "CREATE TABLE "+atomicBatchTable+" (n INT NOT NULL)"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestLiveAtomicBatchRollsBackTheStatementsBeforeTheFailure(t *testing.T) {
 
 	// The happy path first, so a batch that silently does nothing at all
 	// cannot pass the rollback assertion below.
-	if err := srv.exec(ctx, atomicBatch([]string{
+	if _, err := srv.exec(ctx, atomicBatch([]string{
 		"INSERT INTO " + atomicBatchTable + " VALUES (1)",
 		"INSERT INTO " + atomicBatchTable + " VALUES (2)",
 	})); err != nil {
@@ -65,7 +65,7 @@ func TestLiveAtomicBatchRollsBackTheStatementsBeforeTheFailure(t *testing.T) {
 	// Now one that fails on its second statement. The first has already
 	// succeeded when it does, which is the delete-then-failed-insert shape a
 	// job step reorder gets into.
-	err := srv.exec(ctx, atomicBatch([]string{
+	_, err := srv.exec(ctx, atomicBatch([]string{
 		"INSERT INTO " + atomicBatchTable + " VALUES (3)",
 		"INSERT INTO " + atomicBatchTable + " VALUES ('not an int')",
 	}))

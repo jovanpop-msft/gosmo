@@ -40,13 +40,13 @@ func TestScriptEntriesRecordWhereEachStatementRuns(t *testing.T) {
 	ctx, script := WithScript(context.Background())
 	s := &Server{info: &ServerInfo{Name: "SQL1"}}
 	d := &Database{server: s, Name: "app"}
-	if err := s.exec(ctx, "CREATE LOGIN [x]"); err != nil {
+	if _, err := s.exec(ctx, "CREATE LOGIN [x]"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.exec(ctx, "CREATE USER [x]"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.exec(WithScriptServer(ctx, "SQL2"), "ALTER AVAILABILITY GROUP [ag] JOIN"); err != nil {
+	if _, err := s.exec(WithScriptServer(ctx, "SQL2"), "ALTER AVAILABILITY GROUP [ag] JOIN"); err != nil {
 		t.Fatal(err)
 	}
 	want := []ScriptEntry{

@@ -288,7 +288,7 @@ func (s *Server) CycleLog(ctx context.Context, logType ErrorLogType) error {
 	if !ok {
 		return invalidf("gosmo: cycle error log: unknown log type %d", int(logType))
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: cycle %s error log: %w", logType, err)
 	}
 	return nil

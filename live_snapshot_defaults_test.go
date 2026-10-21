@@ -44,7 +44,7 @@ func TestLiveSnapshotDefaultsForFilesDifferingOnlyByExtension(t *testing.T) {
 	}
 	dir = strings.TrimRight(dir, `\/`) + sep
 	stem := dir + name
-	if err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(name)+
+	if _, err := srv.exec(ctx, "CREATE DATABASE "+quoteIdent(name)+
 		" ON PRIMARY (NAME = "+quoteIdent(name)+", FILENAME = "+QuoteLiteral(stem+".mdf")+"),"+
 		" FILEGROUP fg2 (NAME = "+quoteIdent(name+"_2")+", FILENAME = "+QuoteLiteral(stem+".ndf")+")"+
 		" LOG ON (NAME = "+quoteIdent(name+"_log")+", FILENAME = "+QuoteLiteral(stem+"_log.ldf")+")"); err != nil {

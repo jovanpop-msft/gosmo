@@ -297,7 +297,7 @@ func (s *Server) CreateServerAudit(ctx context.Context, spec ServerAuditSpec) (*
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create server audit: %w", err)
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create server audit %q: %w", spec.Name, err)
 	}
 	return createdObject(ctx, s.ServerAuditRef(spec.Name), func() (*ServerAudit, error) {
@@ -331,7 +331,7 @@ func (a *ServerAudit) setStateNamed(ctx context.Context, name string, on bool) e
 		state = "ON"
 	}
 	stmt := fmt.Sprintf("ALTER SERVER AUDIT %s WITH ( STATE = %s )", quoteIdent(name), state)
-	if err := a.server.exec(ctx, stmt); err != nil {
+	if _, err := a.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: set server audit %q state: %w", name, err)
 	}
 	setIfApplied(ctx, &a.IsEnabled, on)
@@ -466,7 +466,7 @@ func (spec ServerAuditSpec) alterServerAuditStatements(name string) []string {
 func (a *ServerAudit) Alter(ctx context.Context, spec ServerAuditSpec) error {
 	return a.withAuditDisabled(ctx, func(ctx context.Context) error {
 		for _, stmt := range spec.alterServerAuditStatements(a.Name) {
-			if err := a.server.exec(ctx, stmt); err != nil {
+			if _, err := a.server.exec(ctx, stmt); err != nil {
 				return fmt.Errorf("gosmo: alter server audit %q: %w", a.Name, err)
 			}
 		}
@@ -504,7 +504,7 @@ func (a *ServerAudit) Rename(ctx context.Context, newName string) error {
 	}
 	stmt := fmt.Sprintf("ALTER SERVER AUDIT %s MODIFY NAME = %s",
 		quoteIdent(a.Name), quoteIdent(newName))
-	if err := a.server.exec(ctx, stmt); err != nil {
+	if _, err := a.server.exec(ctx, stmt); err != nil {
 		err = fmt.Errorf("gosmo: rename server audit %q: %w", a.Name, err)
 		if restore {
 			// The rename did not commit, so the audit is still the old name.
@@ -545,7 +545,7 @@ func (a *ServerAudit) Drop(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := a.server.exec(ctx, "DROP SERVER AUDIT "+quoteIdent(a.Name)); err != nil {
+	if _, err := a.server.exec(ctx, "DROP SERVER AUDIT "+quoteIdent(a.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop server audit %q: %w", a.Name, err)
 	}
 	return nil

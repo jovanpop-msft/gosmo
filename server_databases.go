@@ -143,19 +143,19 @@ func (s *Server) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) 
 		opts = &placed
 	}
 
-	if err := s.exec(ctx, buildCreateDatabaseStatement(name, opts)); err != nil {
+	if _, err := s.exec(ctx, buildCreateDatabaseStatement(name, opts)); err != nil {
 		return nil, fmt.Errorf("gosmo: create database %q: %w", name, err)
 	}
 
 	if opts.RecoveryModel != "" {
-		if err := s.exec(ctx,
+		if _, err := s.exec(ctx,
 			fmt.Sprintf("ALTER DATABASE %s SET RECOVERY %s", quoteIdent(name), opts.RecoveryModel),
 		); err != nil {
 			return nil, fmt.Errorf("gosmo: set recovery model for %q: %w", name, err)
 		}
 	}
 	if opts.CompatLevel > 0 {
-		if err := s.exec(ctx,
+		if _, err := s.exec(ctx,
 			fmt.Sprintf("ALTER DATABASE %s SET COMPATIBILITY_LEVEL = %d", quoteIdent(name), opts.CompatLevel),
 		); err != nil {
 			return nil, fmt.Errorf("gosmo: set compat level for %q: %w", name, err)

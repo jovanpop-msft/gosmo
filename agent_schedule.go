@@ -281,7 +281,7 @@ func (s *Server) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 		q += fmt.Sprintf(", @owner_login_name = N'%s'", escapeSingle(req.OwnerLoginName))
 	}
 	if Scripting(ctx) {
-		if err := s.exec(ctx, q); err != nil {
+		if _, err := s.exec(ctx, q); err != nil {
 			return nil, fmt.Errorf("gosmo: create schedule %q: %w", req.Name, err)
 		}
 		return s.ScheduleRef(req.Name), nil
@@ -353,7 +353,7 @@ func (sch *Schedule) SetOwner(ctx context.Context, loginName string) error {
 // (no ID) is dropped by name.
 func (sch *Schedule) Drop(ctx context.Context) error {
 	q := "EXEC msdb.dbo.sp_delete_schedule " + sch.key("@schedule_name")
-	if err := sch.server.exec(ctx, q); err != nil {
+	if _, err := sch.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop schedule %q: %w", sch.Name, err)
 	}
 	return nil
@@ -412,7 +412,7 @@ ORDER  BY sch.name`
 func (j *Job) AttachSchedule(ctx context.Context, sch *Schedule) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_attach_schedule @job_name = N'%s', %s",
 		escapeSingle(j.Name), sch.key("@schedule_name"))
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: attach schedule %q to job %q: %w", sch.Name, j.Name, err)
 	}
 	return nil
@@ -424,7 +424,7 @@ func (j *Job) AttachSchedule(ctx context.Context, sch *Schedule) error {
 func (j *Job) DetachSchedule(ctx context.Context, sch *Schedule) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_detach_schedule @job_name = N'%s', %s",
 		escapeSingle(j.Name), sch.key("@schedule_name"))
-	if err := j.server.exec(ctx, q); err != nil {
+	if _, err := j.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: detach schedule %q from job %q: %w", sch.Name, j.Name, err)
 	}
 	return nil

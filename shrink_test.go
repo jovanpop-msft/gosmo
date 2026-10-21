@@ -9,11 +9,11 @@ import (
 )
 
 // TestScriptShrinkWrites pins DBCC SHRINKDATABASE and DBCC SHRINKFILE as
-// Database.Shrink and DatabaseFileInfo.ShrinkWith render them. The zero
-// options are the bare SHRINKDATABASE SSMS scripts with "Reorganize files"
-// unticked (captured from SSMS, 2026-10-21); a file target is sent as given,
-// 0 included — unlike Shrink, which floors it at 1 MB. Every form was run
-// against SQL Server 2025 with each wait clause, TRUNCATEONLY included.
+// Database.Shrink and DatabaseFileInfo.Shrink render them. The zero options
+// are the bare SHRINKDATABASE SSMS scripts with "Reorganize files" unticked
+// (captured from SSMS, 2026-10-21); a file target of 0 is sent as 1 unless
+// SendZeroTarget asks for SHRINKFILE's own 0. Every form was run against SQL
+// Server 2025 with each wait clause, TRUNCATEONLY included.
 func TestScriptShrinkWrites(t *testing.T) {
 	runScriptCases(t, []scriptCase{
 		{"Database Shrink bare", func(c context.Context) error {
@@ -31,25 +31,37 @@ func TestScriptShrinkWrites(t *testing.T) {
 		{"Database Shrink NOTRUNCATE killing blockers", func(c context.Context) error {
 			return scriptTestDB().Shrink(c, ShrinkDatabaseOptions{TargetFreePercent: new(5), Truncate: ShrinkNoTruncate, Wait: ShrinkWaitLowPriorityBlockers})
 		}, scriptUsePrefix + "DBCC SHRINKDATABASE (N'App''DB', 5, NOTRUNCATE) WITH WAIT_AT_LOW_PRIORITY (ABORT_AFTER_WAIT = BLOCKERS)"},
-		{"File ShrinkWith TRUNCATEONLY", func(c context.Context) error {
-			return scriptTestDB().FileRef("App'Dat]2").ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
+		{"File Shrink TRUNCATEONLY", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("App'Dat]2"), ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'App''Dat]2', TRUNCATEONLY)"},
-		{"File ShrinkWith a target", func(c context.Context) error {
-			return scriptTestDB().FileRef("AppDat").ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(72))})
+		{"File Shrink a target", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("AppDat"), ShrinkFileOptions{TargetMB: new(int64(72))})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppDat', 72)"},
-		{"File ShrinkWith target 0 is sent verbatim", func(c context.Context) error {
-			return scriptTestDB().FileRef("AppLog").ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(0))})
+		{"File Shrink target 0 is sent as 1", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("AppLog"), ShrinkFileOptions{TargetMB: new(int64(0))})
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 1)"},
+		{"File Shrink target 0 with SendZeroTarget", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("AppLog"), ShrinkFileOptions{TargetMB: new(int64(0)), SendZeroTarget: true})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 0)"},
-		{"FILESTREAM container ShrinkWith EMPTYFILE", func(c context.Context) error {
-			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{EmptyFile: true})
+		{"File Shrink SendZeroTarget leaves another target alone", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("AppLog"), ShrinkFileOptions{TargetMB: new(int64(5)), SendZeroTarget: true})
+		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 5)"},
+		{"FILESTREAM container Shrink EMPTYFILE", func(c context.Context) error {
+			return shrinkFile(c, filestreamFile(), ShrinkFileOptions{EmptyFile: true})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'fs1', EMPTYFILE)"},
 		{"FileRef with no type sends TRUNCATEONLY", func(c context.Context) error {
-			return scriptTestDB().FileRef("fs1").ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
+			return shrinkFile(c, scriptTestDB().FileRef("fs1"), ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'fs1', TRUNCATEONLY)"},
-		{"File ShrinkWith EMPTYFILE at low priority", func(c context.Context) error {
-			return scriptTestDB().FileRef("f3").ShrinkWith(c, ShrinkFileOptions{EmptyFile: true, Wait: ShrinkWaitLowPriorityBlockers})
+		{"File Shrink EMPTYFILE at low priority", func(c context.Context) error {
+			return shrinkFile(c, scriptTestDB().FileRef("f3"), ShrinkFileOptions{EmptyFile: true, Wait: ShrinkWaitLowPriorityBlockers})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'f3', EMPTYFILE) WITH WAIT_AT_LOW_PRIORITY (ABORT_AFTER_WAIT = BLOCKERS)"},
 	})
+}
+
+// shrinkFile is DatabaseFileInfo.Shrink without the result, for the tables.
+func shrinkFile(c context.Context, f *DatabaseFileInfo, opts ShrinkFileOptions) error {
+	_, err := f.Shrink(c, opts)
+	return err
 }
 
 // filestreamFile is a FILESTREAM container as Database.Files returns one.
@@ -76,35 +88,31 @@ func TestShrinkRefusals(t *testing.T) {
 			return scriptTestDB().Shrink(c, ShrinkDatabaseOptions{TargetFreePercent: new(-1)})
 		}, ErrInvalidRequest},
 		{"negative file target", func(c context.Context) error {
-			return scriptTestDB().FileRef("f").ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(-1))})
+			return shrinkFile(c, scriptTestDB().FileRef("f"), ShrinkFileOptions{TargetMB: new(int64(-1))})
 		}, ErrInvalidRequest},
 		{"EMPTYFILE with a target", func(c context.Context) error {
-			return scriptTestDB().FileRef("f").ShrinkWith(c, ShrinkFileOptions{EmptyFile: true, TargetMB: new(int64(1))})
+			return shrinkFile(c, scriptTestDB().FileRef("f"), ShrinkFileOptions{EmptyFile: true, TargetMB: new(int64(1))})
 		}, ErrInvalidRequest},
 		{"EMPTYFILE with TRUNCATEONLY", func(c context.Context) error {
-			return scriptTestDB().FileRef("f").ShrinkWith(c, ShrinkFileOptions{EmptyFile: true, Truncate: ShrinkTruncateOnly})
+			return shrinkFile(c, scriptTestDB().FileRef("f"), ShrinkFileOptions{EmptyFile: true, Truncate: ShrinkTruncateOnly})
 		}, ErrInvalidRequest},
 		{"FILESTREAM container TRUNCATEONLY", func(c context.Context) error {
-			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
+			return shrinkFile(c, filestreamFile(), ShrinkFileOptions{Truncate: ShrinkTruncateOnly})
 		}, ErrInvalidRequest},
 		{"FILESTREAM container NOTRUNCATE", func(c context.Context) error {
-			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{Truncate: ShrinkNoTruncate})
+			return shrinkFile(c, filestreamFile(), ShrinkFileOptions{Truncate: ShrinkNoTruncate})
 		}, ErrInvalidRequest},
 		{"FILESTREAM container with a target", func(c context.Context) error {
-			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{TargetMB: new(int64(0))})
+			return shrinkFile(c, filestreamFile(), ShrinkFileOptions{TargetMB: new(int64(0))})
 		}, ErrInvalidRequest},
 		{"FILESTREAM container bare", func(c context.Context) error {
-			return filestreamFile().ShrinkWith(c, ShrinkFileOptions{})
-		}, ErrInvalidRequest},
-		{"FILESTREAM container narrow Shrink", func(c context.Context) error {
-			_, err := filestreamFile().Shrink(c, 0)
-			return err
+			return shrinkFile(c, filestreamFile(), ShrinkFileOptions{})
 		}, ErrInvalidRequest},
 		{"low priority on SQL Server 2019", func(c context.Context) error {
 			return old.Shrink(c, ShrinkDatabaseOptions{Wait: ShrinkWaitLowPrioritySelf})
 		}, ErrUnsupportedVersion},
 		{"low priority file shrink on SQL Server 2019", func(c context.Context) error {
-			return old.FileRef("f").ShrinkWith(c, ShrinkFileOptions{Wait: ShrinkWaitLowPriorityBlockers})
+			return shrinkFile(c, old.FileRef("f"), ShrinkFileOptions{Wait: ShrinkWaitLowPriorityBlockers})
 		}, ErrUnsupportedVersion},
 		{"low priority on Azure is allowed", func(c context.Context) error {
 			return azure.Shrink(c, ShrinkDatabaseOptions{Wait: ShrinkWaitLowPrioritySelf})

@@ -321,7 +321,7 @@ func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, va
 	if opt.NeedsExclusiveAccess() {
 		d.server.releaseIdle(ctx)
 	}
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set %s %s on %q: %w", opt, value, d.Name, err)
 	}
 	return nil
@@ -330,7 +330,7 @@ func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, va
 // SetOwner transfers database ownership to a new principal.
 func (d *Database) SetOwner(ctx context.Context, principal string) error {
 	q := fmt.Sprintf("ALTER AUTHORIZATION ON DATABASE::%s TO %s", quoteIdent(d.Name), quoteIdent(principal))
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set owner of %q to %q: %w", d.Name, principal, err)
 	}
 	return nil
