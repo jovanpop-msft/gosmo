@@ -70,12 +70,6 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 	}
 	s := ag.server
 
-	major := s.serverMajorVersion()
-	lag := "ISNULL(drs.secondary_lag_seconds, 0)"
-	if major < int(SQLServer2016) {
-		lag = "CAST(0 AS bigint)"
-	}
-
 	// Cross-joining the cluster-wide database list with the replica list is
 	// what makes a not-yet-seeded database show up as an empty row instead of
 	// vanishing: dm_hadr_database_replica_states only has rows for databases a
@@ -91,7 +85,7 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 	       ISNULL(drs.is_suspended, 0), ISNULL(drs.suspend_reason_desc,''),
 	       ISNULL(drs.log_send_queue_size, 0), ISNULL(drs.log_send_rate, 0),
 	       ISNULL(drs.redo_queue_size, 0), ISNULL(drs.redo_rate, 0),
-	       ` + lag + `,
+	       ISNULL(drs.secondary_lag_seconds, 0),
 	       drs.last_sent_time, drs.last_received_time,
 	       drs.last_hardened_time, drs.last_redone_time, drs.last_commit_time
 	FROM sys.availability_databases_cluster adc

@@ -164,7 +164,7 @@ func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Build
 // definition instead, unnamed. Below SQL Server 2025 there is no vector type
 // and no read.
 func (d *Database) float16Parameters(ctx context.Context, schema, name string) ([]string, error) {
-	if m := d.serverMajorVersion(); m != 0 && m < int(SQLServer2025) {
+	if d.before(SQLServer2025) {
 		return nil, nil
 	}
 	rows, err := d.query(ctx, `

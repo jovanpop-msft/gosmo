@@ -162,15 +162,15 @@ func TestQSMetricDefsArePinnedByName(t *testing.T) {
 		unit    QSUnit
 		version ServerVersion
 	}{
-		{QSMetricDuration, "duration", QSUnitMicroseconds, SQLServer2016},
-		{QSMetricCPUTime, "cpu_time", QSUnitMicroseconds, SQLServer2016},
-		{QSMetricLogicalReads, "logical_io_reads", QSUnitPages, SQLServer2016},
-		{QSMetricLogicalWrites, "logical_io_writes", QSUnitPages, SQLServer2016},
-		{QSMetricPhysicalReads, "physical_io_reads", QSUnitPages, SQLServer2016},
-		{QSMetricCLRTime, "clr_time", QSUnitMicroseconds, SQLServer2016},
-		{QSMetricDOP, "dop", QSUnitCount, SQLServer2016},
-		{QSMetricMemory, "query_max_used_memory", QSUnitPages, SQLServer2016},
-		{QSMetricRowCount, "rowcount", QSUnitCount, SQLServer2016},
+		{QSMetricDuration, "duration", QSUnitMicroseconds, 0},
+		{QSMetricCPUTime, "cpu_time", QSUnitMicroseconds, 0},
+		{QSMetricLogicalReads, "logical_io_reads", QSUnitPages, 0},
+		{QSMetricLogicalWrites, "logical_io_writes", QSUnitPages, 0},
+		{QSMetricPhysicalReads, "physical_io_reads", QSUnitPages, 0},
+		{QSMetricCLRTime, "clr_time", QSUnitMicroseconds, 0},
+		{QSMetricDOP, "dop", QSUnitCount, 0},
+		{QSMetricMemory, "query_max_used_memory", QSUnitPages, 0},
+		{QSMetricRowCount, "rowcount", QSUnitCount, 0},
 		{QSMetricLogMemory, "log_bytes_used", QSUnitBytes, SQLServer2017},
 		{QSMetricTempDBMemory, "tempdb_space_used", QSUnitPages, SQLServer2017},
 	}

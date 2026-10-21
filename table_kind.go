@@ -55,8 +55,8 @@ func (k TableKind) String() string {
 // Substituting a zero bit makes the predicate false for every row there,
 // which is the truth: an instance with no graph columns has no graph tables.
 func graphPredicate(major int) string {
-	return "(" + colSince(major, SQLServer2017, "t.is_node", "CAST(0 AS bit)") + " = 1 OR " +
-		colSince(major, SQLServer2017, "t.is_edge", "CAST(0 AS bit)") + " = 1)"
+	return "(" + bitSince(major, SQLServer2017, "t.is_node") + " = 1 OR " +
+		bitSince(major, SQLServer2017, "t.is_edge") + " = 1)"
 }
 
 // kindClause is the WHERE fragment selecting one kind, including the
@@ -83,9 +83,9 @@ func kindClause(major int, k TableKind) string {
 // The read would otherwise succeed and return nothing, which reads as "this
 // database has no graph tables" rather than "this server cannot have any".
 func (d *Database) requireGraphTables() error {
-	if major := d.serverMajorVersion(); major != 0 && major < int(SQLServer2017) {
+	if d.before(SQLServer2017) {
 		return unsupportedVersionf(
-			"gosmo: graph tables need SQL Server 2017 or later; this instance is major %d", major)
+			"gosmo: graph tables need SQL Server 2017 or later; this instance is major %d", d.serverMajorVersion())
 	}
 	return nil
 }

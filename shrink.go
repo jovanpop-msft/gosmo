@@ -182,8 +182,8 @@ func shrinkStatement(cmd string, args []string, wait ShrinkWait, s *Server) (str
 	default:
 		return "", invalidf("unknown wait %d", wait)
 	}
-	if major := s.serverMajorVersion(); major != 0 && major < int(SQLServer2022) {
-		return "", unsupportedVersionf("WAIT_AT_LOW_PRIORITY needs SQL Server 2022 or later; this instance is major %d", major)
+	if !s.info.SupportsShrinkLowPriority() {
+		return "", unsupportedVersionf("WAIT_AT_LOW_PRIORITY needs SQL Server 2022 or later; this instance is major %d", s.serverMajorVersion())
 	}
 	return stmt + " WITH WAIT_AT_LOW_PRIORITY (ABORT_AFTER_WAIT = " + abort + ")", nil
 }

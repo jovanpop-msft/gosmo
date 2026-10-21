@@ -284,9 +284,9 @@ func (l *ExternalLibrary) Database() *Database { return l.db }
 // substitute, and the server's own answer would be "Invalid object name"
 // naming a view the caller never wrote.
 func (d *Database) requireExternalLibraries() error {
-	if major := d.serverMajorVersion(); major != 0 && major < int(SQLServer2017) {
+	if d.before(SQLServer2017) {
 		return unsupportedVersionf(
-			"gosmo: external libraries need SQL Server 2017 or later; this instance is major %d", major)
+			"gosmo: external libraries need SQL Server 2017 or later; this instance is major %d", d.serverMajorVersion())
 	}
 	return nil
 }

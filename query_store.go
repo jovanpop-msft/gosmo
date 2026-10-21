@@ -201,7 +201,7 @@ func (d *Database) SetQueryStoreOptions(ctx context.Context, opts QueryStoreOpti
 	// WAIT_STATS_CAPTURE_MODE is SQL Server 2017 and later. Below it the
 	// setting does not exist — the read has no column to report and returns
 	// "" — so the clause is omitted rather than sent and rejected.
-	waitStats := d.serverMajorVersion() == 0 || d.serverMajorVersion() >= int(SQLServer2017)
+	waitStats := d.atLeast(SQLServer2017)
 	withs, err := queryStoreOnOptions(opts, waitStats)
 	if err != nil {
 		return fmt.Errorf("gosmo: set query store options on %q: %w", d.Name, err)

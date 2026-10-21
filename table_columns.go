@@ -153,7 +153,7 @@ SELECT c.name, c.column_id,
        ISNULL(mc.masking_function, ''),
        c.generated_always_type, c.is_hidden, c.is_filestream,
        ` + colSince(major, SQLServer2017, "ISNULL(c.graph_type, 0)", "CAST(0 AS int)") + `,
-       ` + colSince(major, SQLServer2022, "c.is_dropped_ledger_column", "CAST(0 AS bit)") + `,
+       ` + bitSince(major, SQLServer2022, "c.is_dropped_ledger_column") + `,
        ISNULL(cek.name, ''), ISNULL(c.encryption_type_desc, ''), ISNULL(c.encryption_algorithm_name, ''),
        ISNULL(SCHEMA_NAME(xsc.schema_id), ''), ISNULL(xsc.name, ''), c.is_xml_document,
        ` + colSince(major, SQLServer2025, "ISNULL(c.vector_dimensions, 0)", "CAST(0 AS int)") + `,
@@ -337,8 +337,7 @@ func (t *Table) AlterColumn(ctx context.Context, col ColumnDefinition) error {
 		return invalidf("gosmo: alter column %q on %s: the column is SPARSE, which requires NULL; drop SPARSE first",
 			col.Name, t.FullName())
 	}
-	if major := t.db.serverMajorVersion(); current.sparse && current.mask != "" &&
-		major != 0 && major < int(SQLServer2017) {
+	if current.sparse && current.mask != "" && t.db.before(SQLServer2017) {
 		return unsupportedf("gosmo: alter column %q on %s: the column is SPARSE and masked, and SQL Server 2016 cannot keep both through ALTER COLUMN",
 			col.Name, t.FullName())
 	}

@@ -54,7 +54,7 @@ func (s *Server) listenerSelect() string {
 	SELECT CONVERT(varchar(36), l.group_id), CONVERT(varchar(36), l.listener_id),
 	       ISNULL(l.dns_name,''), ISNULL(l.port, 0), ISNULL(l.is_conformant, 0),
 	       ISNULL(l.ip_configuration_string_from_cluster,''),
-	       ` + colSince(major, SQLServer2019, "ISNULL(l.is_distributed_network_name, 0)", "CAST(0 AS bit)") + `
+	       ` + bitSince(major, SQLServer2019, "ISNULL(l.is_distributed_network_name, 0)") + `
 	FROM sys.availability_group_listeners l
 	WHERE l.group_id = @p1
 	ORDER BY l.dns_name`

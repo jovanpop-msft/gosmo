@@ -213,15 +213,15 @@ func (req CreateIndexRequest) orderClause() string {
 // clustered columnstore index before SQL Server 2022, on a nonclustered one
 // before 2025. major 0 (unknown, or Azure) passes.
 func (req CreateIndexRequest) checkVersion(major int) error {
-	if len(req.ColumnstoreOrder) == 0 || major == 0 {
+	if len(req.ColumnstoreOrder) == 0 {
 		return nil
 	}
-	if req.Type == IndexTypeClusteredColumnStore && major < int(SQLServer2022) {
+	if req.Type == IndexTypeClusteredColumnStore && majorBefore(major, SQLServer2022) {
 		return unsupportedVersionf(
 			"gosmo: create index %q: an ordered clustered columnstore index needs SQL Server 2022 or later; this instance is major %d",
 			req.Name, major)
 	}
-	if req.Type == IndexTypeColumnStore && major < int(SQLServer2025) {
+	if req.Type == IndexTypeColumnStore && majorBefore(major, SQLServer2025) {
 		return unsupportedVersionf(
 			"gosmo: create index %q: an ordered nonclustered columnstore index needs SQL Server 2025 or later; this instance is major %d",
 			req.Name, major)

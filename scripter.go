@@ -321,7 +321,7 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 	// Only with ADR on: turned on without the clause, it moves the version
 	// store back to PRIMARY, so a filegroup kept from before it was turned
 	// off has nothing to restate.
-	if l.opts.AcceleratedDatabaseRecovery && (l.major == 0 || l.major >= int(SQLServer2019)) {
+	if l.opts.AcceleratedDatabaseRecovery && majorAtLeast(l.major, SQLServer2019) {
 		switch l.pvsFileGroup, err = d.PersistentVersionStoreFileGroup(ctx); {
 		case IsPermissionDenied(err):
 			l.pvsRefused = true
@@ -669,9 +669,7 @@ func writeDatabaseSettings(sb *strings.Builder, d *Database, l *databaseLayout) 
 		case "DISABLED", "ALLOWED", "FORCED":
 			set("DELAYED_DURABILITY = " + o.DelayedDurability)
 		}
-		// Not hasColumnSince, which is reserved for GROUP BY gates (the
-		// version-gate inventory counts its calls); same rule, major 0 newest.
-		if l.major == 0 || l.major >= int(SQLServer2019) {
+		if majorAtLeast(l.major, SQLServer2019) {
 			// The one option here spelled with "=". The version store's
 			// filegroup exists by now: CREATE DATABASE made every one.
 			switch {

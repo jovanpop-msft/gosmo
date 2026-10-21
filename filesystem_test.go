@@ -44,22 +44,23 @@ func TestEnumFileSystemPicksSourceByVersion(t *testing.T) {
 	}
 }
 
-// Same split for the drive list: sys.dm_os_enumerate_fixed_drives is 2019+.
+// Same split for the drive list: sys.dm_os_enumerate_fixed_drives is 2017+,
+// confirmed live on 14.0.2140.2 (and absent on 13.0.6500.1).
 func TestFixedDrivesPicksSourceByVersion(t *testing.T) {
-	s := captureServer(t, 15)
-	if _, err := s.FixedDrives(t.Context()); err != nil {
-		t.Fatalf("FixedDrives (2019): %v", err)
-	}
-	if captured.find("sys.dm_os_enumerate_fixed_drives") == "" {
-		t.Fatalf("2019+ did not query sys.dm_os_enumerate_fixed_drives, got %v", captured.qs)
-	}
-
-	s = captureServer(t, 14)
+	s := captureServer(t, 14)
 	if _, err := s.FixedDrives(t.Context()); err != nil {
 		t.Fatalf("FixedDrives (2017): %v", err)
 	}
+	if captured.find("sys.dm_os_enumerate_fixed_drives") == "" {
+		t.Fatalf("2017+ did not query sys.dm_os_enumerate_fixed_drives, got %v", captured.qs)
+	}
+
+	s = captureServer(t, 13)
+	if _, err := s.FixedDrives(t.Context()); err != nil {
+		t.Fatalf("FixedDrives (2016): %v", err)
+	}
 	if captured.find("xp_fixeddrives") == "" {
-		t.Fatalf("pre-2019 did not fall back to xp_fixeddrives, got %v", captured.qs)
+		t.Fatalf("2016 did not fall back to xp_fixeddrives, got %v", captured.qs)
 	}
 }
 

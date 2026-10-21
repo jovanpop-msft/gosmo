@@ -134,6 +134,12 @@ exercise the write, drop them; never mutate pre-existing objects.
   (`perDatabaseExec`): a literal `EXEC [db].sys.sp_executesql` is resolved at
   compile, so one database that cannot be entered (Msg 924) fails the whole
   batch before its TRY runs — hidden while the plan is cached.
+- **Gate a version only through `version_gate.go`** — `colSince`/`bitSince`
+  for a column, `atLeast`/`before` (on `Server`/`Database`, or
+  `majorAtLeast`/`majorBefore` on a `major int`) for everything else. Major 0
+  (unread, or Azure) is newest; a bare `major < int(…)` forgets that and blanked
+  AG columns on every Managed Instance. Never gate at or below 2016, the floor.
+  `TestVersionGatesGoThroughMajorAtLeast` enforces it.
 - **Zoneless server clocks are `time.UTC`, never `time.Local`** — go-mssqldb
   returns `datetime` in UTC, so hand-decoded values (`parseSQLAgentDate`,
   error-log lines) must match or they are off by the client's offset.

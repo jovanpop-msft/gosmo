@@ -51,7 +51,9 @@ const (
 // list: a pair of parallel slices cancels its own faults out, and a metric
 // silently reading another metric's column is invisible in any round-trip
 // test. minVersion is the first release carrying the column — below it the
-// metric is not offered rather than producing "Invalid column name".
+// metric is not offered rather than producing "Invalid column name". 0 marks a
+// column every supported version has (gosmo's floor is 2016, where Query
+// Store itself arrived), so no gate applies.
 type qsMetricDef struct {
 	Metric     QSMetric
 	column     string
@@ -62,15 +64,15 @@ type qsMetricDef struct {
 // qsMetricDefs is every metric, in the order SSMS lists them. The slice is
 // the display order as well as the lookup table, so the two cannot diverge.
 var qsMetricDefs = []qsMetricDef{
-	{QSMetricDuration, "duration", QSUnitMicroseconds, SQLServer2016},
-	{QSMetricCPUTime, "cpu_time", QSUnitMicroseconds, SQLServer2016},
-	{QSMetricLogicalReads, "logical_io_reads", QSUnitPages, SQLServer2016},
-	{QSMetricLogicalWrites, "logical_io_writes", QSUnitPages, SQLServer2016},
-	{QSMetricPhysicalReads, "physical_io_reads", QSUnitPages, SQLServer2016},
-	{QSMetricCLRTime, "clr_time", QSUnitMicroseconds, SQLServer2016},
-	{QSMetricDOP, "dop", QSUnitCount, SQLServer2016},
-	{QSMetricMemory, "query_max_used_memory", QSUnitPages, SQLServer2016},
-	{QSMetricRowCount, "rowcount", QSUnitCount, SQLServer2016},
+	{QSMetricDuration, "duration", QSUnitMicroseconds, 0},
+	{QSMetricCPUTime, "cpu_time", QSUnitMicroseconds, 0},
+	{QSMetricLogicalReads, "logical_io_reads", QSUnitPages, 0},
+	{QSMetricLogicalWrites, "logical_io_writes", QSUnitPages, 0},
+	{QSMetricPhysicalReads, "physical_io_reads", QSUnitPages, 0},
+	{QSMetricCLRTime, "clr_time", QSUnitMicroseconds, 0},
+	{QSMetricDOP, "dop", QSUnitCount, 0},
+	{QSMetricMemory, "query_max_used_memory", QSUnitPages, 0},
+	{QSMetricRowCount, "rowcount", QSUnitCount, 0},
 	{QSMetricLogMemory, "log_bytes_used", QSUnitBytes, SQLServer2017},
 	{QSMetricTempDBMemory, "tempdb_space_used", QSUnitPages, SQLServer2017},
 }
@@ -89,13 +91,11 @@ func qsMetric(m QSMetric) (qsMetricDef, bool) {
 // display order. Metrics the instance is too old to have are left out, so a
 // caller building a selector from this never offers one that cannot be read.
 func (d *Database) QueryStoreMetrics() []QSMetric {
-	major := d.serverMajorVersion()
 	out := make([]QSMetric, 0, len(qsMetricDefs))
 	for _, def := range qsMetricDefs {
-		// major == 0 means the version was never read (a Server built without
-		// loadInfo); offer everything rather than nothing, and let the query
-		// itself be the authority.
-		if major == 0 || major >= int(def.minVersion) {
+		// An unread version offers everything rather than nothing, and lets
+		// the query itself be the authority (majorAtLeast).
+		if d.atLeast(def.minVersion) {
 			out = append(out, def.Metric)
 		}
 	}

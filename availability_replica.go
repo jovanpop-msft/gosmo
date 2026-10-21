@@ -77,12 +77,6 @@ func (ag *AvailabilityGroup) Replicas(ctx context.Context) ([]*AvailabilityRepli
 	}
 	s := ag.server
 
-	major := s.serverMajorVersion()
-	seedingMode := "ISNULL(ar.seeding_mode_desc,'')"
-	if major < int(SQLServer2016) {
-		seedingMode = "CAST('' AS nvarchar(60))"
-	}
-
 	q := `
 	SELECT CONVERT(varchar(36), ar.group_id), CONVERT(varchar(36), ar.replica_id),
 	       ar.replica_server_name, ISNULL(ar.endpoint_url,''),
@@ -91,7 +85,7 @@ func (ag *AvailabilityGroup) Replicas(ctx context.Context) ([]*AvailabilityRepli
 	       ISNULL(ar.primary_role_allow_connections_desc,''),
 	       ISNULL(ar.secondary_role_allow_connections_desc,''),
 	       ar.backup_priority, ISNULL(ar.read_only_routing_url,''),
-	       ` + seedingMode + `,
+	       ISNULL(ar.seeding_mode_desc,''),
 	       ar.create_date, ar.modify_date,
 	       ISNULL(rs.is_local, 0),
 	       ISNULL(rs.role_desc,''), ISNULL(rs.operational_state_desc,''),

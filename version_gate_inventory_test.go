@@ -22,7 +22,7 @@ import (
 type gatedColumn struct {
 	view    string        // catalog view, unqualified, in the sys schema
 	column  string        // the column as the catalog names it
-	expr    string        // the col argument of the colSince call, verbatim
+	expr    string        // the col argument of the colSince or bitSince call, verbatim
 	since   ServerVersion // the release that introduced the column
 	groupBy bool          // a hasColumnSince call drops a GROUP BY term with it
 
@@ -54,11 +54,8 @@ var gatedColumns = []gatedColumn{
 	{"column_master_keys", "allow_enclave_computations", "allow_enclave_computations", SQLServer2019, false, ""},
 	{"column_master_keys", "signature", "signature", SQLServer2019, false, ""},
 
-	// sys.availability_groups — 2016 flags, 2017 external cluster, 2022 contained AGs.
-	{"availability_groups", "basic_features", "ag.basic_features", SQLServer2016, false, ""},
-	{"availability_groups", "dtc_support", "ag.dtc_support", SQLServer2016, false, ""},
-	{"availability_groups", "db_failover", "ag.db_failover", SQLServer2016, false, ""},
-	{"availability_groups", "is_distributed", "ag.is_distributed", SQLServer2016, false, ""},
+	// sys.availability_groups — 2017 external cluster, 2022 contained AGs. The
+	// 2016 flags are at gosmo's floor and carry no gate.
 	{"availability_groups", "cluster_type_desc", "UPPER(ISNULL(ag.cluster_type_desc,''))", SQLServer2017, false, ""},
 	{"availability_groups", "required_synchronized_secondaries_to_commit", "ag.required_synchronized_secondaries_to_commit", SQLServer2017, false, ""},
 	{"availability_groups", "is_contained", "ag.is_contained", SQLServer2022, false, ""},
@@ -185,7 +182,7 @@ func TestServiceBrokerReadsNeedNoVersionGate(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		if text := string(src); strings.Contains(text, "colSince(") ||
-			strings.Contains(text, "hasColumnSince(") {
+			strings.Contains(text, "bitSince(") || strings.Contains(text, "hasColumnSince(") {
 			t.Errorf("%s gates a column by version, but no Service Broker column "+
 				"needs one on gosmo's major-13 floor — add it to gatedColumns and "+
 				"update this test if the catalog has genuinely changed", path)
@@ -193,11 +190,11 @@ func TestServiceBrokerReadsNeedNoVersionGate(t *testing.T) {
 	}
 }
 
-// colSinceCall matches a colSince call site's version argument and its col
-// argument, which is always a double-quoted literal — a computed expression
+// colSinceCall matches a colSince or bitSince call site's version argument
+// and its col argument, which is always a double-quoted literal — a computed expression
 // there would be invisible to this scan, so the test below insists the two
 // counts agree rather than only that every call it saw is known.
-var colSinceCall = regexp.MustCompile(`colSince\([^,]+,\s*(SQLServer\d+),\s*"((?:[^"\\]|\\.)*)"`)
+var colSinceCall = regexp.MustCompile(`(?:colSince|bitSince)\([^,]+,\s*(SQLServer\d+),\s*"((?:[^"\\]|\\.)*)"`)
 
 // A gate the inventory does not know about is a gate nothing checks against a
 // real catalog, and a stale entry is a check of a query that no longer exists.
@@ -216,7 +213,7 @@ func TestEveryVersionGateIsInTheInventory(t *testing.T) {
 		for _, m := range colSinceCall.FindAllStringSubmatch(text, -1) {
 			inSource[m[1]+" "+m[2]]++
 		}
-		colSinceSites += strings.Count(text, "colSince(")
+		colSinceSites += strings.Count(text, "colSince(") + strings.Count(text, "bitSince(")
 		hasColumnSites += strings.Count(text, "hasColumnSince(")
 	}
 	if sum := sumCounts(inSource); sum != colSinceSites {

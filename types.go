@@ -569,7 +569,7 @@ func (i *ServerInfo) SupportsBackupCompression() bool {
 //
 // A nil ServerInfo answers true, as SupportsBackupCompression does.
 func (i *ServerInfo) SupportsShrinkLowPriority() bool {
-	return i == nil || i.IsAzure() || i.VersionMajor >= int(SQLServer2022)
+	return majorAtLeast(i.featureMajor(), SQLServer2022)
 }
 
 // BackupInfo holds metadata about a specific database backup.

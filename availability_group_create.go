@@ -213,7 +213,7 @@ func (req CreateAvailabilityGroupRequest) createStatement(major int) (string, er
 	if len(req.Replicas) == 0 {
 		return "", invalidf("availability group %q has no replicas", req.Name)
 	}
-	before := func(v ServerVersion) bool { return major != 0 && major < int(v) }
+	before := func(v ServerVersion) bool { return majorBefore(major, v) }
 
 	var options []string
 	if req.ClusterType != "" {

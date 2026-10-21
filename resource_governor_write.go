@@ -436,7 +436,7 @@ func (o WorkloadGroupOptions) render(major int) (*rgOptions, string, error) {
 		}
 	}
 	if v := o.RequestMaxMemoryGrantPercent; v != nil && *v != float64(int64(*v)) &&
-		major != 0 && major < int(SQLServer2019) {
+		majorBefore(major, SQLServer2019) {
 		return nil, "", unsupportedVersionf(
 			"a fractional request max memory grant percent (%s) needs SQL Server 2019 or later; this instance is major %d",
 			formatRGNumber(*v), major)
@@ -447,7 +447,7 @@ func (o WorkloadGroupOptions) render(major int) (*rgOptions, string, error) {
 	}
 	if (o.GroupMaxTempdbDataPercent != nil || o.GroupMaxTempdbDataMB != nil ||
 		o.ClearGroupMaxTempdbDataPercent || o.ClearGroupMaxTempdbDataMB) &&
-		major != 0 && major < int(SQLServer2025) {
+		majorBefore(major, SQLServer2025) {
 		return nil, "", unsupportedVersionf(
 			"tempdb limits on a workload group need SQL Server 2025 or later; this instance is major %d", major)
 	}

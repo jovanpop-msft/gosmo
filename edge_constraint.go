@@ -52,7 +52,7 @@ func (t *Table) EdgeConstraints(ctx context.Context) ([]*EdgeConstraint, error) 
 	if err := t.requireLoaded("list edge constraints for"); err != nil {
 		return nil, err
 	}
-	if m := t.db.serverMajorVersion(); m != 0 && m < int(SQLServer2019) {
+	if t.db.before(SQLServer2019) {
 		return nil, nil
 	}
 	rows, err := t.db.query(ctx, edgeConstraintSelect, t.ObjectID)

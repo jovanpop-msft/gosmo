@@ -173,7 +173,7 @@ func (idx *Index) Rename(ctx context.Context, newName string) error {
 // https://learn.microsoft.com/sql/relational-databases/system-catalog-views/sys-partitions-transact-sql
 func partitionCompressionList(major int, objectID, indexID string) string {
 	return jsonRows("pp.partition_number AS n, pp.data_compression_desc AS c, "+
-		colSince(major, SQLServer2022, "pp.xml_compression", "CAST(0 AS bit)")+" AS x",
+		bitSince(major, SQLServer2022, "pp.xml_compression")+" AS x",
 		"\n        FROM sys.partitions pp WHERE pp.object_id = "+objectID+" AND pp.index_id = "+indexID,
 		"pp.partition_number")
 }

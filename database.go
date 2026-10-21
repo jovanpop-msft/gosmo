@@ -655,8 +655,8 @@ SELECT t.object_id, SCHEMA_NAME(t.schema_id), t.name,
        t.create_date, t.modify_date,
        t.has_replication_filter, t.is_memory_optimized,
        t.is_ms_shipped, t.is_filetable, t.is_external,
-       ` + colSince(major, SQLServer2017, "t.is_node", "CAST(0 AS bit)") + `,
-       ` + colSince(major, SQLServer2017, "t.is_edge", "CAST(0 AS bit)") + `
+       ` + bitSince(major, SQLServer2017, "t.is_node") + `,
+       ` + bitSince(major, SQLServer2017, "t.is_edge") + `
 FROM   sys.tables t`
 }
 
