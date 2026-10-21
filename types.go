@@ -562,6 +562,16 @@ func (i *ServerInfo) SupportsBackupCompression() bool {
 	return false
 }
 
+// SupportsShrinkLowPriority reports whether DBCC SHRINKDATABASE and DBCC
+// SHRINKFILE accept WITH WAIT_AT_LOW_PRIORITY: SQL Server 2022 (16) and
+// later, and the Azure editions, whose VersionMajor is not a feature level
+// (see IsAzure). Earlier versions refuse the clause as a syntax error.
+//
+// A nil ServerInfo answers true, as SupportsBackupCompression does.
+func (i *ServerInfo) SupportsShrinkLowPriority() bool {
+	return i == nil || i.IsAzure() || i.VersionMajor >= int(SQLServer2022)
+}
+
 // BackupInfo holds metadata about a specific database backup.
 type BackupInfo struct {
 	DatabaseName  string

@@ -13,6 +13,7 @@ classDiagram
         +State string
         +SizeKB int64
         +SizeOnDiskKB int64
+        +SpaceUsedKB int64
         +MaxSizeKB int64
         +GrowthKB int64
         +GrowthPercent int
@@ -21,6 +22,7 @@ classDiagram
         +IsPrimaryFile() bool
         +Alter(m) error
         +Shrink(targetKB) int64
+        +ShrinkWith(opts) error
         +Drop() error
     }
 

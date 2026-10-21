@@ -39,7 +39,15 @@ type DatabaseFileInfo struct {
 	// Server.DatabaseFiles only. 0 means unknown: Database.Files does not
 	// read it, the login lacks VIEW SERVER STATE (VIEW SERVER PERFORMANCE
 	// STATE from 2022), or the database is not online.
-	SizeOnDiskKB    int64
+	SizeOnDiskKB int64
+	// SpaceUsedKB is the space allocated inside the file
+	// (FILEPROPERTY(name, 'SpaceUsed')) — SizeKB less it is what a shrink
+	// can give back, and it is the smallest size a shrink can reach. Filled
+	// by Database.Files only. 0 means unknown: the other reads do not fill
+	// it, FILEPROPERTY answers NULL without the permission to see the
+	// file, and a FILESTREAM container has no pages to count. A ROWS or LOG
+	// file always holds at least its header pages.
+	SpaceUsedKB     int64
 	MaxSizeKB       int64 // -1 = unlimited
 	GrowthKB        int64 // 0 when IsPercentGrowth is true
 	GrowthPercent   int   // 0 when IsPercentGrowth is false
@@ -66,7 +74,8 @@ func (d *Database) Files(ctx context.Context) ([]*DatabaseFileInfo, error) {
 	const q = `
 SELECT df.file_id, df.name, df.physical_name, df.type_desc,
        ISNULL(fg.name, ''), df.state_desc,
-       CAST(df.size AS bigint) * 8, df.max_size, df.growth, df.is_percent_growth
+       CAST(df.size AS bigint) * 8, df.max_size, df.growth, df.is_percent_growth,
+       ISNULL(CAST(FILEPROPERTY(df.name, 'SpaceUsed') AS bigint), 0) * 8
 FROM   sys.database_files df
 LEFT   JOIN sys.filegroups fg ON fg.data_space_id = df.data_space_id
 ORDER  BY df.type_desc, df.file_id`
@@ -76,7 +85,7 @@ ORDER  BY df.type_desc, df.file_id`
 		f := &DatabaseFileInfo{db: d}
 		var maxSizePages, growthRaw int64
 		if err := scan(&f.FileID, &f.Name, &f.PhysicalName, &f.Type, &f.FileGroup, &f.State,
-			&f.SizeKB, &maxSizePages, &growthRaw, &f.IsPercentGrowth); err != nil {
+			&f.SizeKB, &maxSizePages, &growthRaw, &f.IsPercentGrowth, &f.SpaceUsedKB); err != nil {
 			return nil, err
 		}
 		f.MaxSizeKB, f.GrowthKB, f.GrowthPercent = normalizeFileGrowth(maxSizePages, growthRaw, f.IsPercentGrowth)

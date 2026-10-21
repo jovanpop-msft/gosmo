@@ -154,6 +154,7 @@ classDiagram
         +Capabilities() *DatabaseCapabilities
         +RecoveryStatus() *DatabaseRecoveryStatus
         +SpaceUsed() SpaceInfo
+        +Shrink(opts) error
         +DiskUsage() DiskUsage
         +ResourceStats(max) []*DatabaseResourceStat
         +LatestResourceStats() *DatabaseResourceStat
