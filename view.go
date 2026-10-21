@@ -17,6 +17,10 @@ type View struct {
 	Name       string
 	CreateDate time.Time
 	ModifyDate time.Time
+	// IsSchemaBound is whether the view was created WITH SCHEMABINDING
+	// (OBJECTPROPERTY IsSchemaBound) — what an indexed view requires before
+	// its first index, a unique clustered one, can be created.
+	IsSchemaBound bool
 }
 
 // Views returns all views in the database.
@@ -40,22 +44,51 @@ var viewFilterColumns = filterColumns{
 }
 
 func (d *Database) viewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
-	q := `
-SELECT v.object_id, SCHEMA_NAME(v.schema_id), v.name,
-       v.create_date, v.modify_date
-FROM   sys.views v
+	q := viewSelect + `
 WHERE  v.is_ms_shipped = 0 ` + where + `
 ORDER  BY SCHEMA_NAME(v.schema_id), v.name`
 
 	rows, err := d.query(ctx, q, args...)
 	return scanRows(rows, err, fmt.Sprintf("list views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		v := &View{db: d}
-		if err := scan(&v.ObjectID, &v.Schema, &v.Name,
-			&v.CreateDate, &v.ModifyDate); err != nil {
-			return nil, err
-		}
-		return v, nil
+		return scanView(d, scan)
 	})
+}
+
+// viewSelect is the column list Views and ViewByName share, so a view
+// carries the same fields however it was fetched.
+const viewSelect = `
+SELECT v.object_id, SCHEMA_NAME(v.schema_id), v.name,
+       v.create_date, v.modify_date,
+       CAST(ISNULL(OBJECTPROPERTY(v.object_id, 'IsSchemaBound'), 0) AS bit)
+FROM   sys.views v`
+
+func scanView(d *Database, scan func(...any) error) (*View, error) {
+	v := &View{db: d}
+	if err := scan(&v.ObjectID, &v.Schema, &v.Name,
+		&v.CreateDate, &v.ModifyDate, &v.IsSchemaBound); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// ViewByName returns one view by schema and name from sys.views — the
+// populated counterpart of ViewRef, carrying the ObjectID its index and
+// statistics reads are keyed by. The sys schema's catalog views are not in
+// sys.views and are not found here (see SystemViews).
+//
+// It returns an error satisfying errors.Is(err, ErrNotFound) when there is
+// no such view.
+func (d *Database) ViewByName(ctx context.Context, schema, name string) (*View, error) {
+	if err := requireSchema("view by name", schema, name); err != nil {
+		return nil, err
+	}
+	q := viewSelect + `
+WHERE  SCHEMA_NAME(v.schema_id) COLLATE DATABASE_DEFAULT = @p1
+  AND  v.name                                           = @p2`
+
+	return readByName(ctx, d, scanView, q, []any{schema, name},
+		notFoundf("gosmo: view %s not found in %q", qualifiedName(schema, name), d.Name),
+		fmt.Sprintf("find view %s in %q", qualifiedName(schema, name), d.Name))
 }
 
 // SystemViews returns every catalog view SQL Server ships in the "sys"
@@ -81,19 +114,15 @@ func (d *Database) SystemViewsFiltered(ctx context.Context, filter ObjectFilter)
 func (d *Database) systemViewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
 	q := `
 SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name,
-       o.create_date, o.modify_date
+       o.create_date, o.modify_date,
+       CAST(ISNULL(OBJECTPROPERTY(o.object_id, 'IsSchemaBound'), 0) AS bit)
 FROM   sys.all_objects o
 WHERE  o.type = 'V' AND o.is_ms_shipped = 1 AND SCHEMA_NAME(o.schema_id) = 'sys' ` + where + `
 ORDER  BY o.name`
 
 	rows, err := d.query(ctx, q, args...)
 	return scanRows(rows, err, fmt.Sprintf("list system views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		v := &View{db: d}
-		if err := scan(&v.ObjectID, &v.Schema, &v.Name,
-			&v.CreateDate, &v.ModifyDate); err != nil {
-			return nil, err
-		}
-		return v, nil
+		return scanView(d, scan)
 	})
 }
 
@@ -136,6 +165,9 @@ func (d *Database) ViewRef(schema, name string) *View {
 
 // Database returns the database the view belongs to.
 func (v *View) Database() *Database { return v.db }
+
+// FullName returns [Schema].[Name].
+func (v *View) FullName() string { return qualifiedName(v.Schema, v.Name) }
 
 // Definition returns the view's T-SQL text: "" for an encrypted view,
 // ErrNotFound when there is no such view. Listings do not carry it; this

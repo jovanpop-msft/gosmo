@@ -13,10 +13,12 @@ import (
 
 // Index mirrors Microsoft.SqlServer.Management.Smo.Index.
 //
-// It carries the table it is on, so every write and read on it names that
-// table itself; Table returns it.
+// It carries the object it is on — a table, or an indexed view; exactly one
+// of table and view is set — so every write and read on it names that object
+// itself; Table or View returns it.
 type Index struct {
 	table              *Table
+	view               *View
 	Name               string
 	IndexID            int
 	Type               IndexType

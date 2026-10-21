@@ -239,6 +239,22 @@ func TestDropStatements(t *testing.T) {
 			want: "DROP STATISTICS [sa]]les].[Or'ders].[st]]1]",
 		},
 		{
+			// A view's index and statistic name the view where a table's name
+			// the table — the statements are the same DDL.
+			name: "View index Drop",
+			write: func(ctx context.Context, d *Database) error {
+				return d.ViewRef("sa]les", "vOr'ders").IndexRef("CIX]1").Drop(ctx)
+			},
+			want: "DROP INDEX [CIX]]1] ON [sa]]les].[vOr'ders]",
+		},
+		{
+			name: "View statistic Drop",
+			write: func(ctx context.Context, d *Database) error {
+				return d.ViewRef("sa]les", "vOr'ders").StatisticRef("st]1").Drop(ctx)
+			},
+			want: "DROP STATISTICS [sa]]les].[vOr'ders].[st]]1]",
+		},
+		{
 			name: "DatabaseSnapshot.Drop is a DROP DATABASE",
 			write: func(ctx context.Context, d *Database) error {
 				return (&DatabaseSnapshot{server: d.server, Name: "AppDB_snap]1"}).Drop(ctx)
@@ -334,6 +350,13 @@ func TestRenameStatements(t *testing.T) {
 				return t.RenameColumn(ctx, "no'te", "note")
 			},
 			want: []string{"EXEC sp_rename", "N'[dbo].[Or]]ders].[no''te]'", "N'note'", "N'COLUMN'"},
+		},
+		{
+			name: "View index Rename",
+			write: func(ctx context.Context, d *Database) error {
+				return d.ViewRef("dbo", "vOrders").IndexRef("ix_old").Rename(ctx, "ix_new")
+			},
+			want: []string{"EXEC sp_rename", "N'[dbo].[vOrders].[ix_old]'", "N'ix_new'", "N'INDEX'"},
 		},
 		{
 			name: "Statistic.Rename",

@@ -380,7 +380,7 @@ The instance and database halves pair up: `ServerResourceStat` and
 | `Database.Tables`               | `db.Tables(ctx)` / `db.TablesBySchema(ctx, schema)` |
 | One family of tables (System, FileTables, External, Graph) | `db.TablesOfKind(ctx, kind)` / `db.TablesOfKindFiltered(ctx, kind, f)` / `db.TableKindsPresent(ctx)` — see [Table kinds](#table-kinds) |
 | Bulk table/view + column snapshot | `db.Catalog(ctx)` (user objects) / `db.SystemCatalog(ctx)` (`sys` schema); `Catalog.Functions` holds the table-valued functions (`IF`/`TF`/`FT`) and their result columns, kept out of `Objects`; `Catalog.Aggregates` the user-defined (CLR, `AF`) aggregates and their return types |
-| `Database.Views`                | `db.Views(ctx)` / `db.ViewRef(schema, name)` (no-I/O handle) / `v.Drop(ctx)` / `v.Triggers(ctx)` |
+| `Database.Views`                | `db.Views(ctx)` / `db.ViewByName(ctx, schema, name)` / `db.ViewRef(schema, name)` (no-I/O handle) / `v.Drop(ctx)` / `v.Triggers(ctx)` / `v.Columns(ctx)`; an indexed view's `v.Indexes` / `IndexByName` / `IndexRef` / `CreateIndex` / `RebuildAllIndexes` and `v.Statistics` / `StatisticByName` / `StatisticRef` / `CreateStatistic` / `UpdateAllStatistics` — a table's, through a carrier `Table`; the results answer `View()`, and `Table()` nil (see `view_indexes.go`) |
 | `Database.StoredProcedures`     | `db.StoredProcedures(ctx)` / `db.StoredProcedureByName(ctx, schema, name)` / `db.StoredProcedureRef(schema, name)` (no-I/O handle) / `db.CreateStoredProcedure(ctx, req)` / `p.Drop(ctx)` |
 | `Database.UserDefinedFunctions` | `db.UserDefinedFunctions(ctx)` (T-SQL and CLR; `f.FuncType` is a `FunctionType` — `IsScalar()`, `IsCLR()`) / `db.UserDefinedFunctionRef(schema, name)` (no-I/O handle) / `f.Drop(ctx)` |
 | System Views/Procedures/Functions | `db.SystemViews(ctx)` / `db.SystemStoredProcedures(ctx)` / `db.SystemFunctions(ctx)` |
@@ -514,7 +514,7 @@ that would read as "this database has none".
 | gosmo                               |
 | ----------------------------------- |
 | `t.IndexByName(ctx, name)` / `t.IndexRef(name)` (no-I/O handle) |
-| `idx.Table()` — the table it is on; every method below names it itself |
+| `idx.Table()` — the table it is on, or `idx.View()` for an indexed view's (`Table()` nil then); every method below names it itself |
 | `idx.Rebuild(ctx, gosmo.IndexRebuildOptions{FillFactor, PadIndex, DataCompression})` — the zero value is a plain `REBUILD` |
 | `idx.Reorganize(ctx)`                 |
 | `idx.Disable(ctx)` / `idx.Enable(ctx)` |

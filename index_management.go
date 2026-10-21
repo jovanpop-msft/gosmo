@@ -9,8 +9,21 @@ import (
 
 // -- Index management ----------------------------------------------------------
 
-// Table returns the table the index is on.
+// Table returns the table the index is on, or nil for an indexed view's
+// index — see View.
 func (idx *Index) Table() *Table { return idx.table }
+
+// View returns the indexed view the index is on, or nil for a table's index.
+func (idx *Index) View() *View { return idx.view }
+
+// on is the object the index is on as the Table every statement and read
+// is built from: its table, or its view's carrier (View.carrier).
+func (idx *Index) on() *Table {
+	if idx.view != nil {
+		return idx.view.carrier()
+	}
+	return idx.table
+}
 
 // IndexRef returns a lightweight handle for name on the table without
 // querying the server at all — unlike IndexByName, it doesn't verify the
@@ -29,7 +42,7 @@ func (t *Table) IndexRef(name string) *Index {
 // target is the `[index] ON [schema].[table]` pair every ALTER/DROP INDEX
 // statement names.
 func (idx *Index) target() string {
-	return quoteIdent(idx.Name) + " ON " + idx.table.FullName()
+	return quoteIdent(idx.Name) + " ON " + idx.on().FullName()
 }
 
 // Reorganize reorganizes the index (ALTER INDEX ... REORGANIZE).
@@ -38,7 +51,7 @@ func (idx *Index) Reorganize(ctx context.Context) error {
 		return err
 	}
 	q := fmt.Sprintf("ALTER INDEX %s REORGANIZE", idx.target())
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: reorganize index %q: %w", idx.Name, err)
 	}
 	return nil
@@ -50,7 +63,7 @@ func (idx *Index) Disable(ctx context.Context) error {
 		return err
 	}
 	q := fmt.Sprintf("ALTER INDEX %s DISABLE", idx.target())
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: disable index %q: %w", idx.Name, err)
 	}
 	setIfApplied(ctx, &idx.IsDisabled, true)
@@ -66,7 +79,7 @@ func (idx *Index) Enable(ctx context.Context) error {
 // Drop drops the index.
 func (idx *Index) Drop(ctx context.Context) error {
 	q := fmt.Sprintf("DROP INDEX %s", idx.target())
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop index %q: %w", idx.Name, err)
 	}
 	return nil
@@ -140,7 +153,7 @@ func (idx *Index) SetOptions(ctx context.Context, opts IndexSetOptions) error {
 		return invalidf("gosmo: set options on index %q: a %s index takes none of IGNORE_DUP_KEY, ALLOW_ROW_LOCKS, ALLOW_PAGE_LOCKS", idx.Name, idx.Type)
 	}
 	q := fmt.Sprintf("ALTER INDEX %s SET (%s)", idx.target(), strings.Join(set, ", "))
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set options on index %q: %w", idx.Name, err)
 	}
 	return nil
@@ -150,8 +163,8 @@ func (idx *Index) SetOptions(ctx context.Context, opts IndexSetOptions) error {
 // renaming a PRIMARY KEY or UNIQUE constraint, since its name is the
 // backing index's name in sys.indexes.
 func (idx *Index) Rename(ctx context.Context, newName string) error {
-	objName := idx.table.FullName() + "." + quoteIdent(idx.Name)
-	if _, err := idx.table.exec(ctx,
+	objName := idx.on().FullName() + "." + quoteIdent(idx.Name)
+	if _, err := idx.on().exec(ctx,
 		"EXEC sp_rename @objname = @p1, @newname = @p2, @objtype = N'INDEX'",
 		objName, newName,
 	); err != nil {
@@ -315,7 +328,7 @@ func (idx *Index) Rebuild(ctx context.Context, opts IndexRebuildOptions) error {
 	if len(withParts) > 0 {
 		q += " WITH (" + strings.Join(withParts, ", ") + ")"
 	}
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: rebuild index %q: %w", idx.Name, err)
 	}
 	// A rebuild is what enables a disabled index (Enable is this call). Left
@@ -353,11 +366,11 @@ func (idx *Index) SetIncludedColumns(ctx context.Context, columns []string) erro
 	for i, c := range columns {
 		next.IncludedColumns[i] = IndexColumn{Name: c, IsIncluded: true}
 	}
-	q := rowstoreIndexCreate(&next, idx.table.FullName(), indexWithClause(&next, "\n    ", "DROP_EXISTING = ON"), on)
+	q := rowstoreIndexCreate(&next, idx.on().FullName(), indexWithClause(&next, "\n    ", "DROP_EXISTING = ON"), on)
 	if idx.IsDisabled {
 		q += fmt.Sprintf(";\nALTER INDEX %s DISABLE", idx.target())
 	}
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set included columns on index %q: %w", idx.Name, err)
 	}
 	setIfApplied(ctx, &idx.IncludedColumns, next.IncludedColumns)
@@ -398,8 +411,8 @@ func (idx *Index) UpdateStatistics(ctx context.Context, samplePct int) error {
 	if err := checkSamplePct("update statistics for index "+idx.Name, samplePct); err != nil {
 		return err
 	}
-	q := fmt.Sprintf("UPDATE STATISTICS %s (%s) WITH %s", idx.table.FullName(), quoteIdent(idx.Name), sampleClause(samplePct))
-	if _, err := idx.table.exec(ctx, q); err != nil {
+	q := fmt.Sprintf("UPDATE STATISTICS %s (%s) WITH %s", idx.on().FullName(), quoteIdent(idx.Name), sampleClause(samplePct))
+	if _, err := idx.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: update statistics for index %q: %w", idx.Name, err)
 	}
 	return nil
@@ -437,7 +450,7 @@ type IndexStorageInfo struct {
 // TableRef with no ObjectID.
 func (idx *Index) StorageInfo(ctx context.Context) (*IndexStorageInfo, error) {
 	const target = "i.object_id = OBJECT_ID(@p2) AND i.name = @p1"
-	table := idx.table.FullName()
+	table := idx.on().FullName()
 	headerQ := `
 SELECT
     ds.name, ds.type,
@@ -458,7 +471,7 @@ LEFT   JOIN sys.allocation_units a ON a.container_id = p.partition_id
 WHERE  ` + target + `
 GROUP  BY ds.name, ds.type, pf.name, i.object_id, i.index_id`
 
-	db := idx.table.db
+	db := idx.on().db
 	info := &IndexStorageInfo{}
 	var dsType string
 	var fgOrPS string
@@ -535,11 +548,11 @@ WHERE  i.object_id = OBJECT_ID(@p2) AND i.name = @p1
 GROUP  BY i.name, i.index_id`
 
 	var f *IndexFragmentation
-	if err := idx.table.db.queryRow(ctx, func(row *sql.Row) error {
+	if err := idx.on().db.queryRow(ctx, func(row *sql.Row) error {
 		var err error
 		f, err = scanFragmentation(row.Scan)
 		return err
-	}, q, idx.Name, idx.table.FullName()); err != nil {
+	}, q, idx.Name, idx.on().FullName()); err != nil {
 		return nil, fmt.Errorf("gosmo: fragmentation for index %q: %w", idx.Name, err)
 	}
 	return f, nil
