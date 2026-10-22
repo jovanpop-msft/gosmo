@@ -103,7 +103,7 @@ func (r *ServerRole) Drop(ctx context.Context) error {
 	if r.Name == "" {
 		return invalidf("gosmo: drop server role: name is required")
 	}
-	if err := r.server.exec(ctx, "DROP SERVER ROLE "+quoteIdent(r.Name)); err != nil {
+	if _, err := r.server.exec(ctx, "DROP SERVER ROLE "+quoteIdent(r.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop server role %q: %w", r.Name, err)
 	}
 	return nil
@@ -112,7 +112,7 @@ func (r *ServerRole) Drop(ctx context.Context) error {
 // Rename changes the server role's name.
 func (r *ServerRole) Rename(ctx context.Context, newName string) error {
 	q := fmt.Sprintf("ALTER SERVER ROLE %s WITH NAME = %s", quoteIdent(r.Name), quoteIdent(newName))
-	if err := r.server.exec(ctx, q); err != nil {
+	if _, err := r.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: rename server role %q to %q: %w", r.Name, newName, err)
 	}
 	setIfApplied(ctx, &r.Name, newName)
@@ -122,7 +122,7 @@ func (r *ServerRole) Rename(ctx context.Context, newName string) error {
 // SetOwner transfers ownership of the server role to a new principal.
 func (r *ServerRole) SetOwner(ctx context.Context, newOwner string) error {
 	q := fmt.Sprintf("ALTER AUTHORIZATION ON SERVER ROLE::%s TO %s", quoteIdent(r.Name), quoteIdent(newOwner))
-	if err := r.server.exec(ctx, q); err != nil {
+	if _, err := r.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: change server role %q owner to %q: %w", r.Name, newOwner, err)
 	}
 	setIfApplied(ctx, &r.Owner, newOwner)
@@ -156,7 +156,7 @@ ORDER  BY m.name`
 // role.
 func (r *ServerRole) AddMember(ctx context.Context, member string) error {
 	q := fmt.Sprintf("ALTER SERVER ROLE %s ADD MEMBER %s", quoteIdent(r.Name), quoteIdent(member))
-	if err := r.server.exec(ctx, q); err != nil {
+	if _, err := r.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: add %q to server role %q: %w", member, r.Name, err)
 	}
 	return nil
@@ -165,7 +165,7 @@ func (r *ServerRole) AddMember(ctx context.Context, member string) error {
 // RemoveMember removes member from the role.
 func (r *ServerRole) RemoveMember(ctx context.Context, member string) error {
 	q := fmt.Sprintf("ALTER SERVER ROLE %s DROP MEMBER %s", quoteIdent(r.Name), quoteIdent(member))
-	if err := r.server.exec(ctx, q); err != nil {
+	if _, err := r.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: remove %q from server role %q: %w", member, r.Name, err)
 	}
 	return nil

@@ -407,7 +407,7 @@ func (s *Server) ApplyPermission(ctx context.Context, verb PermissionVerb, sec S
 	if err != nil {
 		return err
 	}
-	err = s.exec(ctx, "USE master; "+stmt)
+	_, err = s.exec(ctx, "USE master; "+stmt)
 	if t := txFrom(ctx, s); t != nil {
 		// No pool reset inside a transaction: the session stays in master,
 		// which the transaction's USE tracking has to hear of.

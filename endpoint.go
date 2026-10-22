@@ -33,7 +33,7 @@ type DatabaseMirroringEndpoint struct {
 	// State is STARTED, STOPPED or DISABLED. Only a STARTED endpoint accepts
 	// connections, and an endpoint left STOPPED is the usual reason a replica
 	// that looks correctly configured never synchronizes.
-	State string
+	State EndpointState
 
 	// Role is ALL, PARTNER or WITNESS. Availability groups need ALL.
 	Role string
@@ -237,7 +237,7 @@ func (spec CreateDatabaseMirroringEndpointRequest) handle(s *Server) *DatabaseMi
 		server:              s,
 		Name:                n.Name,
 		Port:                n.Port,
-		State:               "STARTED",
+		State:               EndpointStarted,
 		Role:                n.Role,
 		IsEncryptionEnabled: n.Encryption != "DISABLED",
 		EncryptionAlgorithm: n.EncryptionAlgorithm,
@@ -255,7 +255,7 @@ func (s *Server) CreateDatabaseMirroringEndpoint(ctx context.Context, spec Creat
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create database mirroring endpoint on %q: %w", s.Name(), err)
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create database mirroring endpoint %q on %q: %w", spec.Name, s.Name(), err)
 	}
 	if Scripting(ctx) {
@@ -278,16 +278,16 @@ func (s *Server) CreateDatabaseMirroringEndpoint(ctx context.Context, spec Creat
 // Start starts a stopped endpoint. An endpoint that is not STARTED accepts no
 // connections, so a replica behind one never synchronizes.
 func (e *DatabaseMirroringEndpoint) Start(ctx context.Context) error {
-	return e.setState(ctx, "STARTED")
+	return e.setState(ctx, EndpointStarted)
 }
 
 // Stop stops the endpoint, breaking every replica connection through it.
 func (e *DatabaseMirroringEndpoint) Stop(ctx context.Context) error {
-	return e.setState(ctx, "STOPPED")
+	return e.setState(ctx, EndpointStopped)
 }
 
-func (e *DatabaseMirroringEndpoint) setState(ctx context.Context, state string) error {
-	if err := e.server.exec(ctx,
+func (e *DatabaseMirroringEndpoint) setState(ctx context.Context, state EndpointState) error {
+	if _, err := e.server.exec(ctx,
 		fmt.Sprintf("ALTER ENDPOINT %s STATE = %s", quoteIdent(e.Name), state)); err != nil {
 		return fmt.Errorf("gosmo: set endpoint %q state to %s: %w", e.Name, state, err)
 	}
@@ -297,7 +297,7 @@ func (e *DatabaseMirroringEndpoint) setState(ctx context.Context, state string) 
 
 // Drop deletes the endpoint.
 func (e *DatabaseMirroringEndpoint) Drop(ctx context.Context) error {
-	if err := e.server.exec(ctx, "DROP ENDPOINT "+quoteIdent(e.Name)); err != nil {
+	if _, err := e.server.exec(ctx, "DROP ENDPOINT "+quoteIdent(e.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop endpoint %q: %w", e.Name, err)
 	}
 	return nil
@@ -309,7 +309,7 @@ func (e *DatabaseMirroringEndpoint) GrantConnect(ctx context.Context, login stri
 	if strings.TrimSpace(login) == "" {
 		return invalidf("gosmo: grant connect on endpoint %q: empty login", e.Name)
 	}
-	if err := e.server.exec(ctx, fmt.Sprintf("GRANT CONNECT ON ENDPOINT::%s TO %s",
+	if _, err := e.server.exec(ctx, fmt.Sprintf("GRANT CONNECT ON ENDPOINT::%s TO %s",
 		quoteIdent(e.Name), quoteIdent(login))); err != nil {
 		return fmt.Errorf("gosmo: grant connect on endpoint %q to %q: %w", e.Name, login, err)
 	}
@@ -379,7 +379,7 @@ type Endpoint struct {
 
 	// State is STARTED, STOPPED or DISABLED. Only a STARTED endpoint accepts
 	// connections.
-	State string
+	State EndpointState
 
 	// IsAdmin marks the Dedicated Admin Connection.
 	IsAdmin bool
@@ -457,10 +457,10 @@ func (e *Endpoint) SetState(ctx context.Context, state EndpointState) error {
 		return invalidf("gosmo: set state of endpoint %q: unknown state %q", e.Name, state)
 	}
 	stmt := fmt.Sprintf("ALTER ENDPOINT %s STATE = %s", quoteIdent(e.Name), state)
-	if err := e.server.exec(ctx, stmt); err != nil {
+	if _, err := e.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: set state of endpoint %q: %w", e.Name, err)
 	}
-	setIfApplied(ctx, &e.State, string(state))
+	setIfApplied(ctx, &e.State, state)
 	return nil
 }
 
@@ -472,7 +472,7 @@ func (e *Endpoint) Drop(ctx context.Context) error {
 	if err := e.refuseSystem("drop"); err != nil {
 		return err
 	}
-	if err := e.server.exec(ctx, "DROP ENDPOINT "+quoteIdent(e.Name)); err != nil {
+	if _, err := e.server.exec(ctx, "DROP ENDPOINT "+quoteIdent(e.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop endpoint %q: %w", e.Name, err)
 	}
 	return nil

@@ -34,7 +34,7 @@ func optionsOf(idx *Index) indexOptions {
 		Type: idx.Type, Unique: idx.IsUnique, Padded: idx.IsPadded, IgnoreDup: idx.IgnoreDupKey,
 		NoRecompute: idx.StatisticsNoRecompute, RowLocks: idx.AllowRowLocks, PageLocks: idx.AllowPageLocks,
 		SeqKey: idx.OptimizeForSequentialKey, Disabled: idx.IsDisabled, FillFactor: idx.FillFactor,
-		Compression: string(idx.DataCompression), Filter: idx.FilterDefinition, DataSpace: idx.DataSpace.Name,
+		Compression: string(idx.DataCompression()), Filter: idx.FilterDefinition, DataSpace: idx.DataSpace.Name,
 		Keys: indexColumnList(idx.KeyColumns),
 	}
 }
@@ -91,7 +91,7 @@ func TestLiveSetIncludedColumnsKeepsEveryOption(t *testing.T) {
 	// The read path first: an option read as its default would make the
 	// before/after comparison below vacuous for it.
 	if !before.IsPadded || before.FillFactor != 70 || before.AllowPageLocks || !before.StatisticsNoRecompute ||
-		!before.IgnoreDupKey || before.DataCompression != "PAGE" || before.DataSpace.Name != "FG2" ||
+		!before.IgnoreDupKey || before.DataCompression() != "PAGE" || before.DataSpace.Name != "FG2" ||
 		before.OptimizeForSequentialKey != seqKey {
 		t.Fatalf("index read back as %+v — the options were not read, so nothing below is tested", optionsOf(before))
 	}

@@ -35,9 +35,9 @@ type AvailabilityDatabase struct {
 	IsLocal          bool
 	IsPrimaryReplica bool
 
-	SynchronizationState  string
-	SynchronizationHealth string
-	DatabaseState         string
+	SynchronizationState  SynchronizationState
+	SynchronizationHealth SynchronizationHealth
+	DatabaseState         DatabaseState
 
 	IsSuspended   bool
 	SuspendReason string
@@ -58,6 +58,19 @@ type AvailabilityDatabase struct {
 	LastCommitTime   time.Time
 }
 
+// SynchronizationState is an availability database's
+// synchronization_state_desc. NOT SYNCHRONIZING is spelled with a space, as
+// the DMV reports it.
+type SynchronizationState string
+
+const (
+	SyncNotSynchronizing SynchronizationState = "NOT SYNCHRONIZING"
+	SyncSynchronizing    SynchronizationState = "SYNCHRONIZING"
+	SyncSynchronized     SynchronizationState = "SYNCHRONIZED"
+	SyncReverting        SynchronizationState = "REVERTING"
+	SyncInitializing     SynchronizationState = "INITIALIZING"
+)
+
 // Databases returns the per-replica synchronization state of every database in
 // the group.
 //
@@ -69,12 +82,6 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 		return nil, err
 	}
 	s := ag.server
-
-	major := s.serverMajorVersion()
-	lag := "ISNULL(drs.secondary_lag_seconds, 0)"
-	if major < int(SQLServer2016) {
-		lag = "CAST(0 AS bigint)"
-	}
 
 	// Cross-joining the cluster-wide database list with the replica list is
 	// what makes a not-yet-seeded database show up as an empty row instead of
@@ -91,7 +98,7 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 	       ISNULL(drs.is_suspended, 0), ISNULL(drs.suspend_reason_desc,''),
 	       ISNULL(drs.log_send_queue_size, 0), ISNULL(drs.log_send_rate, 0),
 	       ISNULL(drs.redo_queue_size, 0), ISNULL(drs.redo_rate, 0),
-	       ` + lag + `,
+	       ISNULL(drs.secondary_lag_seconds, 0),
 	       drs.last_sent_time, drs.last_received_time,
 	       drs.last_hardened_time, drs.last_redone_time, drs.last_commit_time
 	FROM sys.availability_databases_cluster adc
@@ -157,7 +164,7 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 type AvailabilityDatabaseCandidate struct {
 	Name          string
 	ID            int
-	State         string // state_desc: ONLINE, RESTORING, ...
+	State         DatabaseState
 	RecoveryModel RecoveryModel
 
 	IsReadOnly    bool   // true of every snapshot as well
@@ -200,7 +207,7 @@ ORDER  BY d.name`
 			&c.IsMirrored, &c.LogBackupChainStarted); err != nil {
 			return nil, err
 		}
-		c.State, c.RecoveryModel, c.UserAccess = state.String, RecoveryModel(recovery.String), access.String
+		c.State, c.RecoveryModel, c.UserAccess = DatabaseState(state.String), RecoveryModel(recovery.String), access.String
 		return c, nil
 	})
 }
@@ -251,8 +258,9 @@ func (ag *AvailabilityGroup) RemoveDatabase(ctx context.Context, name string) er
 
 // alterDatabaseHADR runs one ALTER DATABASE <name> SET HADR <clause> statement.
 func (ag *AvailabilityGroup) alterDatabaseHADR(ctx context.Context, name, clause string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER DATABASE %s SET HADR %s", quoteIdent(name), clause))
+	return err
 }
 
 // JoinDatabase joins a restored secondary copy of a database to the group.

@@ -62,7 +62,7 @@ FROM   tempdb.sys.dm_db_file_space_usage`, nil, &total, &free, &version, &user, 
 type TempDBFile struct {
 	FileID int
 	Name   string
-	Type   string // "ROWS" or "LOG"
+	Type   FileType // FileRows or FileLog
 	SizeMB float64
 	UsedMB float64
 	// GrowthMB is the autogrowth increment, or the percentage when

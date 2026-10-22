@@ -107,7 +107,7 @@ func TestLiveEndpointsReadAndGuard(t *testing.T) {
 	// that — leaving AGEP STOPPED on the way out.
 	was := e.State
 	defer func() {
-		if err := e.SetState(ctx, EndpointState(was)); err != nil {
+		if err := e.SetState(ctx, was); err != nil {
 			t.Errorf("restoring endpoint %q to %s: %v", e.Name, was, err)
 		}
 	}()

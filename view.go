@@ -17,45 +17,60 @@ type View struct {
 	Name       string
 	CreateDate time.Time
 	ModifyDate time.Time
+	// IsSchemaBound is whether the view was created WITH SCHEMABINDING
+	// (OBJECTPROPERTY IsSchemaBound) — what an indexed view requires before
+	// its first index, a unique clustered one, can be created.
+	IsSchemaBound bool
 }
 
-// Views returns all views in the database.
-func (d *Database) Views(ctx context.Context) ([]*View, error) {
-	return d.viewsWhere(ctx, "", nil)
+// Views returns the views an ObjectFilter matches, narrowed by the server
+// rather than by the caller. The zero ObjectFilter returns every view.
+func (d *Database) Views(ctx context.Context, filter ObjectFilter) ([]*View, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "views", userViews, viewExtra, where, args, scanView)
 }
 
-// ViewsFiltered returns the views an ObjectFilter matches, narrowed by the
-// server rather than by the caller. An empty filter is Views.
-func (d *Database) ViewsFiltered(ctx context.Context, filter ObjectFilter) ([]*View, error) {
-	where, args := filter.clause(viewFilterColumns, 1)
-	return d.viewsWhere(ctx, where, args)
+var (
+	userViews   = moduleSource{from: "sys.views o", kind: "o.is_ms_shipped = 0"}
+	systemViews = moduleSource{from: "sys.all_objects o", kind: "o.type = 'V' AND o.is_ms_shipped = 1 AND o.schema_id = 4", system: true}
+)
+
+// viewSelect is the column list Views and ViewByName share, so a view
+// carries the same fields however it was fetched.
+const viewSelect = moduleColumns + viewExtra + `
+FROM   sys.views o`
+
+// viewExtra is the column a view carries beyond moduleColumns.
+const viewExtra = `,
+       CAST(ISNULL(OBJECTPROPERTY(o.object_id, 'IsSchemaBound'), 0) AS bit)`
+
+func scanView(d *Database, scan func(...any) error) (*View, error) {
+	v := &View{db: d}
+	if err := scan(&v.ObjectID, &v.Schema, &v.Name,
+		&v.CreateDate, &v.ModifyDate, &v.IsSchemaBound); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
-// viewFilterColumns maps an ObjectFilter onto sys.views as viewsWhere aliases
-// it. There is no memory-optimized column outside sys.tables.
-var viewFilterColumns = filterColumns{
-	name:    "v.name",
-	schema:  "SCHEMA_NAME(v.schema_id) COLLATE DATABASE_DEFAULT",
-	created: "v.create_date",
-}
+// ViewByName returns one view by schema and name from sys.views — the
+// populated counterpart of ViewRef, carrying the ObjectID its index and
+// statistics reads are keyed by. The sys schema's catalog views are not in
+// sys.views and are not found here (see SystemViews).
+//
+// It returns an error satisfying errors.Is(err, ErrNotFound) when there is
+// no such view.
+func (d *Database) ViewByName(ctx context.Context, schema, name string) (*View, error) {
+	if err := requireSchema("view by name", schema, name); err != nil {
+		return nil, err
+	}
+	q := viewSelect + `
+WHERE  SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1
+  AND  o.name                                           = @p2`
 
-func (d *Database) viewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
-	q := `
-SELECT v.object_id, SCHEMA_NAME(v.schema_id), v.name,
-       v.create_date, v.modify_date
-FROM   sys.views v
-WHERE  v.is_ms_shipped = 0 ` + where + `
-ORDER  BY SCHEMA_NAME(v.schema_id), v.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		v := &View{db: d}
-		if err := scan(&v.ObjectID, &v.Schema, &v.Name,
-			&v.CreateDate, &v.ModifyDate); err != nil {
-			return nil, err
-		}
-		return v, nil
-	})
+	return readByName(ctx, d, scanView, q, []any{schema, name},
+		notFoundf("gosmo: view %s not found in %q", qualifiedName(schema, name), d.Name),
+		fmt.Sprintf("find view %s in %q", qualifiedName(schema, name), d.Name))
 }
 
 // SystemViews returns every catalog view SQL Server ships in the "sys"
@@ -66,43 +81,10 @@ ORDER  BY SCHEMA_NAME(v.schema_id), v.name`
 // (is_ms_shipped=1), invisible through the non-"all_" catalog views — same
 // reasoning as SystemCatalog. The "sys" schema's catalog views are
 // defined identically in every database on a server, so a caller only needs to
-// load this once per connection.
-func (d *Database) SystemViews(ctx context.Context) ([]*View, error) {
-	return d.systemViewsWhere(ctx, "", nil)
-}
-
-// SystemViewsFiltered returns the system views an ObjectFilter matches,
-// narrowed by the server. An empty filter is SystemViews.
-func (d *Database) SystemViewsFiltered(ctx context.Context, filter ObjectFilter) ([]*View, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.systemViewsWhere(ctx, where, args)
-}
-
-func (d *Database) systemViewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
-	q := `
-SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name,
-       o.create_date, o.modify_date
-FROM   sys.all_objects o
-WHERE  o.type = 'V' AND o.is_ms_shipped = 1 AND SCHEMA_NAME(o.schema_id) = 'sys' ` + where + `
-ORDER  BY o.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list system views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		v := &View{db: d}
-		if err := scan(&v.ObjectID, &v.Schema, &v.Name,
-			&v.CreateDate, &v.ModifyDate); err != nil {
-			return nil, err
-		}
-		return v, nil
-	})
-}
-
-// allObjectsFilterColumns maps an ObjectFilter onto the sys.all_objects
-// listings the three System* families share.
-var allObjectsFilterColumns = filterColumns{
-	name:    "o.name",
-	schema:  "SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT",
-	created: "o.create_date",
+// load this once per connection. The zero ObjectFilter returns every one.
+func (d *Database) SystemViews(ctx context.Context, filter ObjectFilter) ([]*View, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "system views", systemViews, viewExtra, where, args, scanView)
 }
 
 // ObjectTriggers returns the DML triggers defined on one table or view —
@@ -136,6 +118,9 @@ func (d *Database) ViewRef(schema, name string) *View {
 
 // Database returns the database the view belongs to.
 func (v *View) Database() *Database { return v.db }
+
+// FullName returns [Schema].[Name].
+func (v *View) FullName() string { return qualifiedName(v.Schema, v.Name) }
 
 // Definition returns the view's T-SQL text: "" for an encrypted view,
 // ErrNotFound when there is no such view. Listings do not carry it; this

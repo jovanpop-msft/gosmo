@@ -168,9 +168,13 @@ func TestIndexesUsesOneQueryForEveryIndexColumn(t *testing.T) {
 		if w.name == "IX_covering" {
 			wantParts = []DataCompression{DataCompressionPage, DataCompressionNone}
 		}
-		if !slices.Equal(got.PartitionCompression, wantParts) || got.DataCompression != wantParts[0] {
+		var gotParts []DataCompression
+		for _, p := range got.Partitions {
+			gotParts = append(gotParts, p.DataCompression)
+		}
+		if !slices.Equal(gotParts, wantParts) || got.DataCompression() != wantParts[0] {
 			t.Errorf("%s compression = %q / %q, want %q / %q",
-				w.name, got.DataCompression, got.PartitionCompression, wantParts[0], wantParts)
+				w.name, got.DataCompression(), gotParts, wantParts[0], wantParts)
 		}
 		// compression_delay is the last column, and only IX_empty's is set.
 		if want := map[bool]int{true: 45}[w.name == "IX_empty"]; got.CompressionDelay != want {

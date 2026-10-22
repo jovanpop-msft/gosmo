@@ -229,7 +229,8 @@ func (es *EventSession) exec(ctx context.Context, stmt string) error {
 		_, err := es.db.exec(ctx, stmt)
 		return err
 	}
-	return es.server.exec(ctx, stmt)
+	_, err := es.server.exec(ctx, stmt)
+	return err
 }
 
 // -- Lookups --------------------------------------------------------------------

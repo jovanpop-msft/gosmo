@@ -147,6 +147,31 @@ func TestServerInfoSupportsBackupCompression(t *testing.T) {
 	}
 }
 
+// TestServerInfoSupported pins the floor at 2016 SP1 (13.0.4001). Answering
+// false on Azure — whose Managed Instance reports VersionMajor 12 — or on an
+// unread version would warn on every such connection.
+func TestServerInfoSupported(t *testing.T) {
+	for _, c := range []struct {
+		info *ServerInfo
+		want bool
+	}{
+		{nil, true},
+		{&ServerInfo{}, true},
+		{&ServerInfo{VersionMajor: 11, VersionBuild: 7001}, false},
+		{&ServerInfo{VersionMajor: 12, VersionBuild: 6024}, false},
+		{&ServerInfo{VersionMajor: 13, VersionBuild: 1601}, false},
+		{&ServerInfo{VersionMajor: 13, VersionBuild: 4001}, true},
+		{&ServerInfo{VersionMajor: 13, VersionBuild: 6300}, true},
+		{&ServerInfo{VersionMajor: 14, VersionBuild: 1000}, true},
+		{&ServerInfo{VersionMajor: 12, EngineEdition: int(EngineAzureManagedInst)}, true},
+		{&ServerInfo{VersionMajor: 12, EngineEdition: int(EngineAzureSQLDatabase)}, true},
+	} {
+		if got := c.info.Supported(); got != c.want {
+			t.Errorf("%+v: Supported = %v, want %v", c.info, got, c.want)
+		}
+	}
+}
+
 // TestQueryStoreInfoIsReadable. READ_ONLY is what a Query Store that filled its
 // quota degrades to: it stopped collecting, but everything it already holds is
 // still worth reporting. Treating it as off would blank every report at exactly

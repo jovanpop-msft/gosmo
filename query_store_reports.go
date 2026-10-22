@@ -508,11 +508,10 @@ WHERE  q.query_id = @p1`, qsObjectName)
 // wait reports return an error rather than an empty result, so a caller
 // building a report list should leave them out.
 func (d *Database) QueryStoreWaitStatsSupported() bool {
-	major := d.serverMajorVersion()
 	// An unread version is treated as supported for the same reason QueryStoreMetrics
 	// treats it as supporting everything: the query is a better authority than
 	// a version we never learned.
-	return major == 0 || major >= int(SQLServer2017)
+	return d.atLeast(SQLServer2017)
 }
 
 // errWaitStatsUnsupported explains the version gate in the terms a caller can
@@ -680,15 +679,4 @@ func (d *Database) QueryStoreUnforcePlan(ctx context.Context, queryID, planID in
 		return fmt.Errorf("gosmo: unforce plan %d for query %d in %q: %w", planID, queryID, d.Name, err)
 	}
 	return nil
-}
-
-// serverMajorVersion is the instance's major version, or 0 when it was never
-// read — a Database built from a Server that skipped loadInfo — or when the
-// instance is an Azure edition. Server.serverMajorVersion documents why Azure
-// is 0; this is the same rule for the database-scoped gates.
-func (d *Database) serverMajorVersion() int {
-	if d.server == nil {
-		return 0
-	}
-	return d.server.serverMajorVersion()
 }

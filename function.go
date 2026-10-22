@@ -2,7 +2,6 @@ package gosmo
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -47,49 +46,38 @@ func (t FunctionType) IsCLR() bool {
 	return t == FunctionTypeCLRScalar || t == FunctionTypeCLRTable
 }
 
-// UserDefinedFunctions returns all UDFs in the database, T-SQL and CLR.
-func (d *Database) UserDefinedFunctions(ctx context.Context) ([]*UserDefinedFunction, error) {
-	return d.UserDefinedFunctionsFiltered(ctx, ObjectFilter{})
+// UserDefinedFunctions returns the UDFs, T-SQL and CLR, an ObjectFilter
+// matches, narrowed by the server. The zero ObjectFilter returns every one.
+func (d *Database) UserDefinedFunctions(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "UDFs", userFunctions, functionExtra, where, args, scanFunction)
 }
 
-// UserDefinedFunctionsFiltered returns the UDFs an ObjectFilter matches,
-// narrowed by the server. An empty filter is UserDefinedFunctions.
-func (d *Database) UserDefinedFunctionsFiltered(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.functionsWhere(ctx, "o.type IN ('FN','TF','IF','FS','FT') AND o.is_ms_shipped = 0", where, args)
+// ExternalFunctions returns Fabric external functions (sys.objects type XF)
+// matching filter, separately from the T-SQL and CLR UserDefinedFunctions.
+// The zero ObjectFilter returns every external function.
+func (d *Database) ExternalFunctions(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "external UDFs", externalFunctions, functionExtra, where, args, scanFunction)
 }
 
-// ExternalFunctions returns Fabric external functions (sys.objects type XF).
-// These are separate from the T-SQL and CLR UserDefinedFunctions listing.
-func (d *Database) ExternalFunctions(ctx context.Context) ([]*UserDefinedFunction, error) {
-	return d.ExternalFunctionsFiltered(ctx, ObjectFilter{})
-}
+var (
+	userFunctions     = moduleSource{from: "sys.objects o", kind: "o.type IN ('FN','TF','IF','FS','FT') AND o.is_ms_shipped = 0"}
+	systemFunctions   = moduleSource{from: "sys.all_objects o", kind: "o.type IN ('FN','TF','IF') AND o.is_ms_shipped = 1 AND o.schema_id = 4", system: true}
+	externalFunctions = moduleSource{from: "sys.objects o", kind: "o.type = 'XF'"}
+)
 
-// ExternalFunctionsFiltered returns the external functions an ObjectFilter
-// matches, narrowed by the server. An empty filter is ExternalFunctions.
-func (d *Database) ExternalFunctionsFiltered(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.functionsWhere(ctx, "o.type = 'XF'", where, args)
-}
+// functionExtra is the column a function carries beyond moduleColumns.
+const functionExtra = `, o.type`
 
-func (d *Database) functionsWhere(ctx context.Context, kind, where string, args []any) ([]*UserDefinedFunction, error) {
-	q := `
-SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, o.type,
-       o.create_date, o.modify_date
-FROM   sys.objects o
-WHERE  ` + kind + ` ` + where + `
-ORDER  BY SCHEMA_NAME(o.schema_id), o.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list UDFs in %q", d.Name), func(scan func(...any) error) (*UserDefinedFunction, error) {
-		f := &UserDefinedFunction{db: d}
-		if err := scan(&f.ObjectID, &f.Schema, &f.Name, &f.FuncType,
-			&f.CreateDate, &f.ModifyDate); err != nil {
-			return nil, err
-		}
-		f.FuncType = FunctionType(strings.TrimSpace(string(f.FuncType)))
-		return f, nil
-	})
+func scanFunction(d *Database, scan func(...any) error) (*UserDefinedFunction, error) {
+	f := &UserDefinedFunction{db: d}
+	if err := scan(&f.ObjectID, &f.Schema, &f.Name,
+		&f.CreateDate, &f.ModifyDate, &f.FuncType); err != nil {
+		return nil, err
+	}
+	f.FuncType = FunctionType(strings.TrimSpace(string(f.FuncType)))
+	return f, nil
 }
 
 // SystemFunctions returns every system function SQL Server ships in the
@@ -102,36 +90,10 @@ ORDER  BY SCHEMA_NAME(o.schema_id), o.name`
 // the three T-SQL types ('FN'/'TF'/'IF'): the shipped functions are T-SQL,
 // and aggregates ('AF') are not functions DROP FUNCTION removes. The "sys"
 // schema is identical in every database on a server, so this only needs
-// loading once per connection.
-func (d *Database) SystemFunctions(ctx context.Context) ([]*UserDefinedFunction, error) {
-	return d.systemFunctionsWhere(ctx, "", nil)
-}
-
-// SystemFunctionsFiltered returns the system functions an ObjectFilter
-// matches, narrowed by the server. An empty filter is SystemFunctions.
-func (d *Database) SystemFunctionsFiltered(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.systemFunctionsWhere(ctx, where, args)
-}
-
-func (d *Database) systemFunctionsWhere(ctx context.Context, where string, args []any) ([]*UserDefinedFunction, error) {
-	q := `
-SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, o.type,
-       o.create_date, o.modify_date
-FROM   sys.all_objects o
-WHERE  o.type IN ('FN','TF','IF') AND o.is_ms_shipped = 1 AND SCHEMA_NAME(o.schema_id) = 'sys' ` + where + `
-ORDER  BY o.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list system UDFs in %q", d.Name), func(scan func(...any) error) (*UserDefinedFunction, error) {
-		f := &UserDefinedFunction{db: d}
-		if err := scan(&f.ObjectID, &f.Schema, &f.Name, &f.FuncType,
-			&f.CreateDate, &f.ModifyDate); err != nil {
-			return nil, err
-		}
-		f.FuncType = FunctionType(strings.TrimSpace(string(f.FuncType)))
-		return f, nil
-	})
+// loading once per connection. The zero ObjectFilter returns every one.
+func (d *Database) SystemFunctions(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "system UDFs", systemFunctions, functionExtra, where, args, scanFunction)
 }
 
 // UserDefinedFunctionRef returns a lightweight handle for the function [schema].[name] — no

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -117,10 +116,10 @@ type User struct {
 	db   *Database
 	Name string
 	ID   int
-	// UserType is type_desc: "SQL_USER", "WINDOWS_USER", "WINDOWS_GROUP",
-	// "EXTERNAL_USER", "EXTERNAL_GROUPS", "CERTIFICATE_MAPPED_USER" or
-	// "ASYMMETRIC_KEY_MAPPED_USER".
-	UserType      string
+	// UserType is type_desc: SQL_USER, WINDOWS_USER, WINDOWS_GROUP,
+	// EXTERNAL_USER, EXTERNAL_GROUPS, CERTIFICATE_MAPPED_USER or
+	// ASYMMETRIC_KEY_MAPPED_USER.
+	UserType      PrincipalType
 	DefaultSchema string
 	AuthType      string
 	CreateDate    time.Time
@@ -150,13 +149,13 @@ func (u *User) Database() *Database { return u.db }
 // (CERTIFICATE_MAPPED_USER, ASYMMETRIC_KEY_MAPPED_USER). Such a user has no
 // login and no password, and cannot be given either.
 func (u *User) IsMapped() bool {
-	return u.UserType == "CERTIFICATE_MAPPED_USER" || u.UserType == "ASYMMETRIC_KEY_MAPPED_USER"
+	return u.UserType == PrincipalCertificateMappedUser || u.UserType == PrincipalAsymmetricKeyMappedUser
 }
 
 // IsExternal reports whether u is a Microsoft Entra user or group: AuthType
 // EXTERNAL, or an EXTERNAL_* UserType for a listing that read no AuthType.
 func (u *User) IsExternal() bool {
-	return u.AuthType == "EXTERNAL" || strings.HasPrefix(u.UserType, "EXTERNAL_")
+	return u.AuthType == "EXTERNAL" || u.UserType == PrincipalExternalUser || u.UserType == PrincipalExternalGroups
 }
 
 // Drop drops the database user.

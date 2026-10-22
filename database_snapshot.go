@@ -35,7 +35,7 @@ type DatabaseSnapshot struct {
 	// State is the snapshot's own state_desc. A snapshot whose sparse files
 	// have run out of disk goes SUSPECT and stays there; there is no repair
 	// but dropping it.
-	State string
+	State DatabaseState
 
 	CreateDate time.Time
 }
@@ -159,7 +159,7 @@ func (s *Server) SnapshotFileDefaults(ctx context.Context, source, snapshotName 
 	var specs []SnapshotFileSpec
 	taken := map[string]bool{}
 	for _, f := range files {
-		if f.Type != "ROWS" {
+		if f.Type != FileRows {
 			continue
 		}
 		specs = append(specs, SnapshotFileSpec{
@@ -239,7 +239,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 		var err error
 		files, err = s.SnapshotFileDefaults(ctx, req.SourceDatabase, req.Name)
 		if err != nil {
-			return nil, fmt.Errorf("gosmo: create database snapshot %q: %w", req.Name, err)
+			return nil, err // already "gosmo: <its operation>"
 		}
 	}
 
@@ -257,7 +257,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 	}
 	fmt.Fprintf(&sb, "\nAS SNAPSHOT OF %s", quoteIdent(req.SourceDatabase))
 
-	if err := s.exec(ctx, sb.String()); err != nil {
+	if _, err := s.exec(ctx, sb.String()); err != nil {
 		return nil, fmt.Errorf("gosmo: create database snapshot %q of %q: %w", req.Name, req.SourceDatabase, err)
 	}
 	return createdObject(ctx, &DatabaseSnapshot{server: s, Name: req.Name, SourceDatabase: req.SourceDatabase}, func() (*DatabaseSnapshot, error) {
@@ -282,7 +282,7 @@ func (s *Server) CreateDatabaseSnapshot(ctx context.Context, req CreateDatabaseS
 func (s *Server) RestoreFromSnapshot(ctx context.Context, database, snapshot string) error {
 	stmt := fmt.Sprintf("RESTORE DATABASE %s FROM DATABASE_SNAPSHOT = %s",
 		quoteIdent(database), QuoteLiteral(snapshot))
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: restore %q from snapshot %q: %w", database, snapshot, err)
 	}
 	return nil
@@ -299,7 +299,7 @@ func (s *DatabaseSnapshot) Restore(ctx context.Context) error {
 // Drop drops the snapshot. Dropping a snapshot deletes its sparse files and
 // leaves the source database untouched.
 func (s *DatabaseSnapshot) Drop(ctx context.Context) error {
-	if err := s.server.exec(ctx, "DROP DATABASE "+quoteIdent(s.Name)); err != nil {
+	if _, err := s.server.exec(ctx, "DROP DATABASE "+quoteIdent(s.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop database snapshot %q: %w", s.Name, err)
 	}
 	return nil

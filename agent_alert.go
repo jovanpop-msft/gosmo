@@ -209,7 +209,7 @@ func (s *Server) CreateAlert(ctx context.Context, req CreateAlertRequest) (*Aler
 	if req.Category != "" {
 		q += fmt.Sprintf(", @category_name = N'%s'", escapeSingle(req.Category))
 	}
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return nil, fmt.Errorf("gosmo: create alert %q: %w", req.Name, err)
 	}
 	return createdObject(ctx, s.AlertRef(req.Name), func() (*Alert, error) {
@@ -278,7 +278,7 @@ func (a *Alert) SetJobResponse(ctx context.Context, jobName string) error {
 // Drop deletes the alert via sp_delete_alert.
 func (a *Alert) Drop(ctx context.Context) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_delete_alert @name = N'%s'", escapeSingle(a.Name))
-	if err := a.server.exec(ctx, q); err != nil {
+	if _, err := a.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop alert %q: %w", a.Name, err)
 	}
 	return nil
@@ -294,7 +294,7 @@ type AlertNotification struct {
 func (a *Alert) Notify(ctx context.Context, operatorName string, method NotificationMethod) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_add_notification @alert_name = N'%s', @operator_name = N'%s', @notification_method = %d",
 		escapeSingle(a.Name), escapeSingle(operatorName), int(method))
-	if err := a.server.exec(ctx, q); err != nil {
+	if _, err := a.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: add notification for alert %q to operator %q: %w", a.Name, operatorName, err)
 	}
 	return nil
@@ -305,7 +305,7 @@ func (a *Alert) Notify(ctx context.Context, operatorName string, method Notifica
 func (a *Alert) RemoveNotification(ctx context.Context, operatorName string) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_delete_notification @alert_name = N'%s', @operator_name = N'%s'",
 		escapeSingle(a.Name), escapeSingle(operatorName))
-	if err := a.server.exec(ctx, q); err != nil {
+	if _, err := a.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: remove notification for alert %q from operator %q: %w", a.Name, operatorName, err)
 	}
 	return nil

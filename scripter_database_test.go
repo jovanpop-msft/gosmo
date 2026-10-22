@@ -161,7 +161,7 @@ func TestScriptDatabaseDropNeedsNoRefresh(t *testing.T) {
 	}
 }
 
-func layoutFile(id int, name, path, typ string, sizeKB, maxKB, growthKB int64, pct int) *DatabaseFileInfo {
+func layoutFile(id int, name, path string, typ FileType, sizeKB, maxKB, growthKB int64, pct int) *DatabaseFileInfo {
 	return &DatabaseFileInfo{FileID: id, Name: name, PhysicalName: path, Type: typ,
 		SizeKB: sizeKB, MaxSizeKB: maxKB, GrowthKB: growthKB, GrowthPercent: pct, IsPercentGrowth: pct > 0}
 }

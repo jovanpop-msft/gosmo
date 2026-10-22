@@ -20,7 +20,7 @@ func fullyOptionedIndex() *Index {
 		Name: "IX_probe", Type: IndexTypeNonClustered, IsUnique: true,
 		FillFactor: 70, IsPadded: true, IgnoreDupKey: true, StatisticsNoRecompute: true,
 		AllowRowLocks: true, AllowPageLocks: false, OptimizeForSequentialKey: true,
-		DataCompression:  "PAGE",
+		Partitions:       partitions(DataCompressionPage),
 		KeyColumns:       []IndexColumn{{Name: "a"}, {Name: "b", Descending: true}},
 		IncludedColumns:  []IndexColumn{{Name: "c", IsIncluded: true}},
 		FilterDefinition: "([a]>(0))",

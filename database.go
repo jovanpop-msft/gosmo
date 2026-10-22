@@ -22,7 +22,7 @@ type Database struct {
 
 	Name               string
 	ID                 int
-	State              string // state_desc: ONLINE, OFFLINE, RESTORING, ...
+	State              DatabaseState
 	RecoveryModel      RecoveryModel
 	CompatibilityLevel CompatibilityLevel
 	Collation          string
@@ -610,22 +610,34 @@ func (d *Database) CreateSchema(ctx context.Context, req CreateSchemaRequest) (*
 
 // -- Tables --------------------------------------------------------------------
 
-// Tables returns all user tables in the database.
-func (d *Database) Tables(ctx context.Context) ([]*Table, error) {
-	return d.tablesWhere(ctx, userTablesClause, nil)
+// TableQuery selects which tables Tables returns. The zero value is every
+// table SQL Server did not ship (TableKindAll), unfiltered.
+type TableQuery struct {
+	// Kind narrows the listing to one family; see TableKind.
+	Kind TableKind
+	// Filter narrows it at the server; the zero value matches every table.
+	Filter ObjectFilter
+}
+
+// Tables returns the tables a TableQuery selects, narrowed by the server
+// rather than by the caller. Tables(ctx, TableQuery{}) is every user table.
+//
+// TableKindGraph is refused below SQL Server 2017 (errors.Is
+// ErrUnsupportedVersion) rather than answered with an empty list.
+func (d *Database) Tables(ctx context.Context, q TableQuery) ([]*Table, error) {
+	if q.Kind == TableKindGraph {
+		if err := d.requireGraphTables(); err != nil {
+			return nil, err
+		}
+	}
+	where, args := q.Filter.clause(tableFilterColumns, 1)
+	return d.tablesWhere(ctx, kindClause(d.serverMajorVersion(), q.Kind)+" "+where, args)
 }
 
 // userTablesClause is the "not SQL Server's own" test every listing that is
-// not asked for a specific TableKind applies. The kind listings supply their
-// own is_ms_shipped test instead — see kindClause.
+// not asked for a specific TableKind applies (TableKindAll's clause). The kind
+// listings supply their own is_ms_shipped test instead — see kindClause.
 const userTablesClause = "AND t.is_ms_shipped = 0"
-
-// TablesFiltered returns the user tables an ObjectFilter matches, narrowed by
-// the server rather than by the caller. An empty filter is Tables.
-func (d *Database) TablesFiltered(ctx context.Context, filter ObjectFilter) ([]*Table, error) {
-	where, args := filter.clause(tableFilterColumns, 1)
-	return d.tablesWhere(ctx, userTablesClause+" "+where, args)
-}
 
 // tableFilterColumns maps an ObjectFilter onto sys.tables as tablesWhere
 // aliases it.
@@ -655,8 +667,8 @@ SELECT t.object_id, SCHEMA_NAME(t.schema_id), t.name,
        t.create_date, t.modify_date,
        t.has_replication_filter, t.is_memory_optimized,
        t.is_ms_shipped, t.is_filetable, t.is_external,
-       ` + colSince(major, SQLServer2017, "t.is_node", "CAST(0 AS bit)") + `,
-       ` + colSince(major, SQLServer2017, "t.is_edge", "CAST(0 AS bit)") + `
+       ` + bitSince(major, SQLServer2017, "t.is_node") + `,
+       ` + bitSince(major, SQLServer2017, "t.is_edge") + `
 FROM   sys.tables t`
 }
 
@@ -736,18 +748,18 @@ func (d *Database) Drop(ctx context.Context, term Termination) error {
 		// Nothing here set the access mode, so nothing is repaired: a
 		// MULTI_USER on the way out would silently undo a RESTRICTED_USER or
 		// SINGLE_USER the database was deliberately left in.
-		if err := s.exec(ctx, drop); err != nil {
+		if _, err := s.exec(ctx, drop); err != nil {
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
 	case s.refusesSingleUser():
 		// One batch for the same reason as exclusiveBatch: a session that
 		// reconnects between the KILLs and the DROP makes the DROP fail.
-		if err := s.exec(ctx, killDatabaseSessionsBatch(name)+";\n"+drop+";"); err != nil {
+		if _, err := s.exec(ctx, killDatabaseSessionsBatch(name)+";\n"+drop+";"); err != nil {
 			return fmt.Errorf("gosmo: drop database %q: %w", name, err)
 		}
 	default:
 		mode := s.accessModeBefore(ctx, name)
-		if err := s.exec(ctx, exclusiveBatch(name, drop)); err != nil {
+		if _, err := s.exec(ctx, exclusiveBatch(name, drop)); err != nil {
 			// The drop can genuinely fail after the alter succeeded — the
 			// database belongs to an availability group, the login may set
 			// state but not drop — and the batch puts it back to the access
@@ -805,7 +817,7 @@ func (d *Database) rename(ctx context.Context, newName string, term Termination)
 		q = killDatabaseSessionsBatch(oldName) + ";\n" + q + ";"
 	default:
 		mode := s.accessModeBefore(ctx, oldName)
-		if err := s.exec(ctx, renameExclusiveBatch(oldName, newName)); err != nil {
+		if _, err := s.exec(ctx, renameExclusiveBatch(oldName, newName)); err != nil {
 			if batchCutShort(err) {
 				_ = s.restoreAccessModeAfterRename(ctx, oldName, newName, mode)
 			}
@@ -813,7 +825,7 @@ func (d *Database) rename(ctx context.Context, newName string, term Termination)
 		}
 		return nil
 	}
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: rename database %q to %q: %w", oldName, newName, err)
 	}
 	return nil

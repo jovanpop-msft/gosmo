@@ -402,7 +402,7 @@ SELECT @id`, liveMailProfile).Scan(&id); err != nil {
 			t.Errorf("db_datareader MailEvents has no event naming no item")
 		}
 	}
-	if v, err := reader.ReadLog(ctx, ErrorLogDatabaseMail, 0); err != nil || len(v) == 0 {
+	if v, err := reader.ReadLog(ctx, ErrorLogDatabaseMail, 0, LogSearch{}); err != nil || len(v) == 0 {
 		t.Errorf("db_datareader ReadLog(Database Mail) = %d, %v; want the whole log", len(v), err)
 	}
 	// A DENY on the table sends the read back to the view: HAS_PERMS_BY_NAME
@@ -802,10 +802,10 @@ EXEC sp_configure 'Database Mail XPs', 1; RECONFIGURE;`)
 	if err != nil || len(files) != 1 || files[0].Number != 0 || files[0].LastWritten.IsZero() {
 		t.Errorf("EnumErrorLogs(Database Mail) = %+v, %v", files, err)
 	}
-	entries, err := srv.ReadLogFiltered(ctx, ErrorLogDatabaseMail, 0, LogSearch{
+	entries, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 0, LogSearch{
 		Text1: "COULD NOT CONNECT", From: item.SendRequestDate.Add(-time.Second)})
 	if err != nil {
-		t.Fatalf("ReadLogFiltered(Database Mail): %v", err)
+		t.Fatalf("ReadLog(Database Mail): %v", err)
 	}
 	if len(entries) == 0 || entries[0].Process != "error" || entries[0].Source() != "error" ||
 		!strings.Contains(strings.ToLower(entries[0].Text), "could not connect") || entries[0].Date.IsZero() {
@@ -814,16 +814,16 @@ EXEC sp_configure 'Database Mail XPs', 1; RECONFIGURE;`)
 	// An entry's own Date bounds it inclusively both ways — a datetime read
 	// back rounded to the millisecond must not fall outside its own range.
 	for _, e := range entries {
-		if got, err := srv.ReadLogFiltered(ctx, ErrorLogDatabaseMail, 0, LogSearch{From: e.Date, To: e.Date}); err != nil ||
+		if got, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 0, LogSearch{From: e.Date, To: e.Date}); err != nil ||
 			!slices.ContainsFunc(got, func(g *ErrorLogEntry) bool { return g.Text == e.Text }) {
-			t.Errorf("ReadLogFiltered(From = To = %s) = %d entries, %v; want the entry itself", e.LogDate, len(got), err)
+			t.Errorf("ReadLog(From = To = %s) = %d entries, %v; want the entry itself", e.LogDate, len(got), err)
 		}
 	}
-	if all, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 0); err != nil || len(all) < len(entries) ||
+	if all, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 0, LogSearch{}); err != nil || len(all) < len(entries) ||
 		(len(all) > 1 && all[0].Date.After(all[len(all)-1].Date)) {
 		t.Errorf("ReadLog(Database Mail) = %d entries, %v; want at least the search's, oldest first", len(all), err)
 	}
-	if _, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 1); err == nil {
+	if _, err := srv.ReadLog(ctx, ErrorLogDatabaseMail, 1, LogSearch{}); err == nil {
 		t.Error("ReadLog(Database Mail, 1) returned no error")
 	}
 

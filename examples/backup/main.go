@@ -155,7 +155,7 @@ func main() {
 	relocate := make([]gosmo.RelocateFile, 0, len(files))
 	for _, f := range files {
 		ext := ".mdf"
-		if f.Type == "L" {
+		if f.Type == gosmo.BackupFileLog {
 			ext = ".ldf"
 		}
 		relocate = append(relocate, gosmo.RelocateFile{

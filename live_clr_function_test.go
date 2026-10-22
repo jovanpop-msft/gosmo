@@ -43,7 +43,7 @@ func TestLiveCLRFunctions(t *testing.T) {
 		`CREATE FUNCTION dbo.tsql_fn(@x int) RETURNS int AS BEGIN RETURN @x END`,
 	)
 
-	fns, err := d.UserDefinedFunctions(ctx)
+	fns, err := d.UserDefinedFunctions(ctx, ObjectFilter{})
 	if err != nil {
 		t.Fatalf("UserDefinedFunctions: %v", err)
 	}

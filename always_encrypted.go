@@ -46,7 +46,7 @@ func (d *Database) columnMasterKeySelect() string {
 	return `
 SELECT name, column_master_key_id,
        key_store_provider_name, key_path,
-       ` + colSince(major, SQLServer2019, "allow_enclave_computations", "CAST(0 AS bit)") + `,
+       ` + bitSince(major, SQLServer2019, "allow_enclave_computations") + `,
        ` + colSince(major, SQLServer2019, "signature", "CAST(NULL AS varbinary(max))") + `
 FROM   sys.column_master_keys`
 }
@@ -117,8 +117,7 @@ type CreateColumnMasterKeyRequest struct {
 // An unread version (0) is treated as supported, the convention every version
 // gate here follows.
 func (d *Database) EnclaveComputationsSupported() bool {
-	major := d.serverMajorVersion()
-	return major == 0 || major >= int(SQLServer2019)
+	return d.atLeast(SQLServer2019)
 }
 
 // CreateColumnMasterKey creates a column master key metadata entry, and

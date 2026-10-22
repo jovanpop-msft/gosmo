@@ -105,10 +105,8 @@ func (d *Database) SequenceRef(schema, name string) *Sequence {
 }
 
 func scanSequence(d *Database, scan func(...any) error) (*Sequence, error) {
-	// The colSince test, spelled out: hasColumnSince is reserved for
-	// GROUP BY gates, and version_gate_inventory_test counts it.
-	major := d.serverMajorVersion()
-	seq := &Sequence{db: d, noLastUsed: major != 0 && major < int(SQLServer2017)}
+	// The colSince test, spelled out: the select substitutes NULL below 2017.
+	seq := &Sequence{db: d, noLastUsed: d.before(SQLServer2017)}
 	var lastUsed sql.NullString
 	if err := scan(
 		&seq.Name, &seq.Schema, &seq.ObjectID,

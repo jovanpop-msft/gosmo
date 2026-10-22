@@ -3,6 +3,7 @@ package gosmo
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,19 @@ func TestWithScriptBindsParametersIntoTheStatement(t *testing.T) {
 				t.Errorf("captured script still has an unbound placeholder:\n%s", all)
 			}
 		})
+	}
+}
+
+// A server-scoped write's arguments are bound into the captured text, as a
+// database-scoped one's are: nothing binds @p1 when the script is run by hand.
+func TestWithScriptBindsServerScopeParameters(t *testing.T) {
+	s := &Server{}
+	ctx, script := WithScript(context.Background())
+	if _, err := s.exec(ctx, "EXEC sp_x @p1, @p2", "it's", 7); err != nil {
+		t.Fatalf("exec under WithScript: %v", err)
+	}
+	if got, want := script.Statements(), []string{"EXEC sp_x N'it''s', 7"}; !slices.Equal(got, want) {
+		t.Errorf("Statements = %q, want %q", got, want)
 	}
 }
 
@@ -518,13 +532,13 @@ func TestScriptedSetterDoesNotMirrorOntoTheReceiver(t *testing.T) {
 			name:   "SetOffline",
 			set:    func(ctx context.Context, d *Database, _ *ConfigurationOption) error { return d.SetOffline(ctx) },
 			got:    func(d *Database, _ *ConfigurationOption) any { return d.State },
-			server: "ONLINE", want: "OFFLINE",
+			server: DatabaseOnline, want: DatabaseOffline,
 		},
 		{
 			name:   "SetOnline",
 			set:    func(ctx context.Context, d *Database, _ *ConfigurationOption) error { return d.SetOnline(ctx) },
 			got:    func(d *Database, _ *ConfigurationOption) any { return d.State },
-			server: "OFFLINE", want: "ONLINE",
+			server: DatabaseOffline, want: DatabaseOnline,
 		},
 		{
 			name: "SetValue",

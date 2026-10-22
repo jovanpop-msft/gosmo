@@ -196,8 +196,8 @@ func TestInTransactionSendsUSEOnlyWhenMoving(t *testing.T) {
 		{"alternating", func(ctx context.Context, s *Server) error {
 			d := s.DatabaseRef("app")
 			_, _ = d.exec(ctx, "W1")
-			_ = s.exec(ctx, "S1")
-			_ = s.exec(ctx, "S2")
+			_, _ = s.exec(ctx, "S1")
+			_, _ = s.exec(ctx, "S2")
 			_, err := d.exec(ctx, "W2")
 			return err
 		}, []string{"USE [app]", "W1", "USE [master]", "S1", "S2", "USE [app]", "W2"}},

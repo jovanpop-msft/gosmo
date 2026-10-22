@@ -34,7 +34,7 @@ func TestLiveAgentCounts(t *testing.T) {
 	perfCreated := true
 	// The object name carries the instance ("MSSQL$X:General Statistics" on
 	// a named instance), so read it from the DMV rather than spell it.
-	if err := srv.exec(ctx, `
+	if _, err := srv.exec(ctx, `
 DECLARE @obj nvarchar(128) = (SELECT TOP (1) RTRIM(object_name)
                               FROM sys.dm_os_performance_counters
                               WHERE counter_name = N'User Connections');

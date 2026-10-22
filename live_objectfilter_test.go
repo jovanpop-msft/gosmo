@@ -89,7 +89,7 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 	defer drop()
 	liveFilterFixture(t, d, ctx)
 
-	all, err := d.Tables(ctx)
+	all, err := d.Tables(ctx, TableQuery{})
 	if err != nil {
 		t.Fatalf("Tables: %v", err)
 	}
@@ -117,9 +117,9 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 					want = append(want, tb)
 				}
 			}
-			got, err := d.TablesFiltered(ctx, ObjectFilter{Name: []TextCriterion{c.crit}})
+			got, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{Name: []TextCriterion{c.crit}}})
 			if err != nil {
-				t.Fatalf("TablesFiltered: %v", err)
+				t.Fatalf("Tables: %v", err)
 			}
 			if g, w := tableNames(got), tableNames(want); !slices.Equal(g, w) {
 				t.Errorf("filtered = %v\nlocal    = %v", g, w)
@@ -132,11 +132,11 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 	}
 
 	t.Run("schema criterion", func(t *testing.T) {
-		got, err := d.TablesFiltered(ctx, ObjectFilter{
+		got, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{
 			Schema: []TextCriterion{{Op: TextEquals, Value: "SALES"}},
-		})
+		}})
 		if err != nil {
-			t.Fatalf("TablesFiltered: %v", err)
+			t.Fatalf("Tables: %v", err)
 		}
 		if g := tableNames(got); !slices.Equal(g, []string{"sales.CustLedger"}) {
 			t.Errorf("filtered by schema = %v, want just sales.CustLedger", g)
@@ -144,12 +144,12 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 	})
 
 	t.Run("criteria AND together", func(t *testing.T) {
-		got, err := d.TablesFiltered(ctx, ObjectFilter{
+		got, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{
 			Name:   []TextCriterion{{Op: TextContains, Value: "cust"}},
 			Schema: []TextCriterion{{Op: TextEquals, Value: "dbo"}},
-		})
+		}})
 		if err != nil {
-			t.Fatalf("TablesFiltered: %v", err)
+			t.Fatalf("Tables: %v", err)
 		}
 		if g := tableNames(got); !slices.Equal(g, []string{"dbo.CustOrders", "dbo.custarchive"}) {
 			t.Errorf("name+schema = %v, want the two dbo cust tables", g)
@@ -179,9 +179,9 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 			{"that day at -12:00", DateCriterion{Op: DateOn, Day: inZone(today, -12)}, len(all)},
 		} {
 			t.Run(c.name, func(t *testing.T) {
-				got, err := d.TablesFiltered(ctx, ObjectFilter{Created: []DateCriterion{c.crit}})
+				got, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{Created: []DateCriterion{c.crit}}})
 				if err != nil {
-					t.Fatalf("TablesFiltered: %v", err)
+					t.Fatalf("Tables: %v", err)
 				}
 				if len(got) != c.wantN {
 					t.Errorf("got %d tables, want %d (criterion day %s, rows created %s)",
@@ -193,17 +193,17 @@ func TestLiveObjectFilterMatchesTheCallerSideAnswer(t *testing.T) {
 
 	t.Run("memory optimized", func(t *testing.T) {
 		no := false
-		got, err := d.TablesFiltered(ctx, ObjectFilter{MemoryOptimized: &no})
+		got, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{MemoryOptimized: &no}})
 		if err != nil {
-			t.Fatalf("TablesFiltered: %v", err)
+			t.Fatalf("Tables: %v", err)
 		}
 		if len(got) != len(all) {
 			t.Errorf("not-memory-optimized returned %d of %d tables", len(got), len(all))
 		}
 		yes := true
-		got, err = d.TablesFiltered(ctx, ObjectFilter{MemoryOptimized: &yes})
+		got, err = d.Tables(ctx, TableQuery{Filter: ObjectFilter{MemoryOptimized: &yes}})
 		if err != nil {
-			t.Fatalf("TablesFiltered: %v", err)
+			t.Fatalf("Tables: %v", err)
 		}
 		if len(got) != 0 {
 			t.Errorf("memory-optimized returned %d tables, want none", len(got))
@@ -236,33 +236,33 @@ func TestLiveObjectFilterAcrossEveryFamily(t *testing.T) {
 		{
 			name: "views",
 			all: func() ([]string, error) {
-				v, err := d.Views(ctx)
+				v, err := d.Views(ctx, ObjectFilter{})
 				return named(v, func(x *View) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				v, err := d.ViewsFiltered(ctx, filter)
+				v, err := d.Views(ctx, filter)
 				return named(v, func(x *View) (string, string) { return x.Schema, x.Name }), err
 			},
 		},
 		{
 			name: "stored procedures",
 			all: func() ([]string, error) {
-				p, err := d.StoredProcedures(ctx)
+				p, err := d.StoredProcedures(ctx, ObjectFilter{})
 				return named(p, func(x *StoredProcedure) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				p, err := d.StoredProceduresFiltered(ctx, filter)
+				p, err := d.StoredProcedures(ctx, filter)
 				return named(p, func(x *StoredProcedure) (string, string) { return x.Schema, x.Name }), err
 			},
 		},
 		{
 			name: "functions",
 			all: func() ([]string, error) {
-				f, err := d.UserDefinedFunctions(ctx)
+				f, err := d.UserDefinedFunctions(ctx, ObjectFilter{})
 				return named(f, func(x *UserDefinedFunction) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				f, err := d.UserDefinedFunctionsFiltered(ctx, filter)
+				f, err := d.UserDefinedFunctions(ctx, filter)
 				return named(f, func(x *UserDefinedFunction) (string, string) { return x.Schema, x.Name }), err
 			},
 		},
@@ -270,11 +270,11 @@ func TestLiveObjectFilterAcrossEveryFamily(t *testing.T) {
 			name:         "system views",
 			systemFamily: true,
 			all: func() ([]string, error) {
-				v, err := d.SystemViews(ctx)
+				v, err := d.SystemViews(ctx, ObjectFilter{})
 				return named(v, func(x *View) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				v, err := d.SystemViewsFiltered(ctx, filter)
+				v, err := d.SystemViews(ctx, filter)
 				return named(v, func(x *View) (string, string) { return x.Schema, x.Name }), err
 			},
 		},
@@ -282,11 +282,11 @@ func TestLiveObjectFilterAcrossEveryFamily(t *testing.T) {
 			name:         "system stored procedures",
 			systemFamily: true,
 			all: func() ([]string, error) {
-				p, err := d.SystemStoredProcedures(ctx)
+				p, err := d.SystemStoredProcedures(ctx, ObjectFilter{})
 				return named(p, func(x *StoredProcedure) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				p, err := d.SystemStoredProceduresFiltered(ctx, filter)
+				p, err := d.SystemStoredProcedures(ctx, filter)
 				return named(p, func(x *StoredProcedure) (string, string) { return x.Schema, x.Name }), err
 			},
 		},
@@ -294,11 +294,11 @@ func TestLiveObjectFilterAcrossEveryFamily(t *testing.T) {
 			name:         "system functions",
 			systemFamily: true,
 			all: func() ([]string, error) {
-				f, err := d.SystemFunctions(ctx)
+				f, err := d.SystemFunctions(ctx, ObjectFilter{})
 				return named(f, func(x *UserDefinedFunction) (string, string) { return x.Schema, x.Name }), err
 			},
 			filtered: func() ([]string, error) {
-				f, err := d.SystemFunctionsFiltered(ctx, filter)
+				f, err := d.SystemFunctions(ctx, filter)
 				return named(f, func(x *UserDefinedFunction) (string, string) { return x.Schema, x.Name }), err
 			},
 		},

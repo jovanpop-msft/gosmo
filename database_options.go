@@ -143,8 +143,8 @@ SELECT SUSER_SNAME(d.owner_sid), d.page_verify_option_desc, d.user_access_desc,
        d.is_db_chaining_on, d.is_parameterization_forced, d.is_date_correlation_on,
        d.is_honor_broker_priority_on, d.delayed_durability_desc,
        ISNULL(d.target_recovery_time_in_seconds, -1),
-       ` + colSince(d.server.serverMajorVersion(), SQLServer2019, "d.is_accelerated_database_recovery_on", "CAST(0 AS bit)") + `,
-       ` + colSince(d.server.serverMajorVersion(), SQLServer2022, "d.is_ledger_on", "CAST(0 AS bit)") + `
+       ` + bitSince(d.server.serverMajorVersion(), SQLServer2019, "d.is_accelerated_database_recovery_on") + `,
+       ` + bitSince(d.server.serverMajorVersion(), SQLServer2022, "d.is_ledger_on") + `
 FROM   sys.databases d
 LEFT   JOIN sys.database_filestream_options fo ON fo.database_id = d.database_id
 WHERE  d.name = @p1`
@@ -165,7 +165,7 @@ WHERE  d.name = @p1`
 // takes a server-level grant. A refusal is Msg 262/297, which
 // IsPermissionDenied recognises.
 func (d *Database) PersistentVersionStoreFileGroup(ctx context.Context) (string, error) {
-	if m := d.serverMajorVersion(); m != 0 && m < int(SQLServer2019) {
+	if d.before(SQLServer2019) {
 		return "", nil
 	}
 	var name sql.NullString
@@ -321,7 +321,7 @@ func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, va
 	if opt.NeedsExclusiveAccess() {
 		d.server.releaseIdle(ctx)
 	}
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set %s %s on %q: %w", opt, value, d.Name, err)
 	}
 	return nil
@@ -330,7 +330,7 @@ func (d *Database) SetDatabaseOption(ctx context.Context, opt DatabaseOption, va
 // SetOwner transfers database ownership to a new principal.
 func (d *Database) SetOwner(ctx context.Context, principal string) error {
 	q := fmt.Sprintf("ALTER AUTHORIZATION ON DATABASE::%s TO %s", quoteIdent(d.Name), quoteIdent(principal))
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set owner of %q to %q: %w", d.Name, principal, err)
 	}
 	return nil

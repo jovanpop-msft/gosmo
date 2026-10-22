@@ -548,7 +548,7 @@ func TestLiveScriptDatabaseSnapshotRoundTrips(t *testing.T) {
 		}
 		var out []string
 		for _, f := range fs {
-			out = append(out, f.Type+"|"+f.Name+"|"+f.PhysicalName)
+			out = append(out, string(f.Type)+"|"+f.Name+"|"+f.PhysicalName)
 		}
 		return out
 	}

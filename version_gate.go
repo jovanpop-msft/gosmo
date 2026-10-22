@@ -22,11 +22,66 @@ package gosmo
 // info.VersionMajor keeps its 12 — callers that display a version want what
 // the server says.
 func (s *Server) serverMajorVersion() int {
-	if s == nil || s.info == nil || s.info.IsAzure() {
+	if s == nil {
 		return 0
 	}
-	return s.info.VersionMajor
+	return s.info.featureMajor()
 }
+
+// serverMajorVersion is the Server rule for the database-scoped gates: 0 for a
+// Database with no Server as well.
+func (d *Database) serverMajorVersion() int {
+	if d == nil || d.server == nil {
+		return 0
+	}
+	return d.server.serverMajorVersion()
+}
+
+// featureMajor is VersionMajor as a feature level: 0 on a nil ServerInfo and
+// on an Azure edition, for the reasons serverMajorVersion gives.
+func (i *ServerInfo) featureMajor() int {
+	if i == nil || i.IsAzure() {
+		return 0
+	}
+	return i.VersionMajor
+}
+
+// majorAtLeast is the one version comparison in gosmo: major is at least v, or
+// 0 — never read, or an Azure edition — which counts as newest. Every gate goes
+// through it (or majorBefore, or the Server/Database forms below), never
+// through a bare comparison: the 2026-10-21 review found the AG lag and
+// seeding-mode reads gated with a bare `major < 13`, which blanked both columns
+// on every Managed Instance. TestVersionGatesGoThroughMajorAtLeast enforces it.
+func majorAtLeast(major int, v ServerVersion) bool {
+	return major == 0 || major >= int(v)
+}
+
+// majorBefore is !majorAtLeast: major is known and older than v. It is the
+// form a refusal ("needs SQL Server 2019 or later") reads naturally in.
+func majorBefore(major int, v ServerVersion) bool {
+	return !majorAtLeast(major, v)
+}
+
+// majorKnownAtLeast is the positive gate: major is known (not 0) and at least
+// v. Only a choice where guessing "newest" fails hard while guessing "older"
+// merely degrades uses it — EnumFileSystem's DMV-or-xp_dirtree pick. Every
+// read and refusal gate uses majorAtLeast.
+func majorKnownAtLeast(major int, v ServerVersion) bool {
+	return major != 0 && major >= int(v)
+}
+
+// atLeast reports whether the connected instance is v or later, with an
+// unread version and Azure counting as newest (majorAtLeast).
+func (s *Server) atLeast(v ServerVersion) bool { return majorAtLeast(s.serverMajorVersion(), v) }
+
+// before reports whether the connected instance is known to be older than v.
+func (s *Server) before(v ServerVersion) bool { return majorBefore(s.serverMajorVersion(), v) }
+
+// atLeast is Server.atLeast for a database-scoped gate.
+func (d *Database) atLeast(v ServerVersion) bool { return majorAtLeast(d.serverMajorVersion(), v) }
+
+// before is Server.before for a database-scoped gate.
+func (d *Database) before(v ServerVersion) bool { return majorBefore(d.serverMajorVersion(), v) }
 
 // colSince names col when major is at least since, and otherwise substitutes
 // zero, a typed literal of col's type. The scan destination list is unchanged
@@ -42,10 +97,17 @@ func (s *Server) serverMajorVersion() int {
 // column of whatever type the literal parsed as, and a destination expecting a
 // bit or a bigint fails to scan it.
 func colSince(major int, since ServerVersion, col, zero string) string {
-	if major != 0 && major < int(since) {
-		return zero
+	if majorAtLeast(major, since) {
+		return col
 	}
-	return col
+	return zero
+}
+
+// bitSince is colSince for a bit column, whose zero is CAST(0 AS bit) — most
+// gated columns are flags, and spelling the CAST at every site is how one of
+// them would end up uncast.
+func bitSince(major int, since ServerVersion, col string) string {
+	return colSince(major, since, col, "CAST(0 AS bit)")
 }
 
 // hasColumnSince reports what colSince decides, for the rare gate that cannot
@@ -53,6 +115,9 @@ func colSince(major int, since ServerVersion, col, zero string) string {
 // rejects a constant ("Each GROUP BY expression must contain at least one
 // column that is not an outer reference") and the term has to be dropped
 // outright rather than replaced.
+//
+// It answers exactly as majorAtLeast does; the separate name is what lets the
+// gate inventory count GROUP BY gates.
 func hasColumnSince(major int, since ServerVersion) bool {
-	return major == 0 || major >= int(since)
+	return majorAtLeast(major, since)
 }

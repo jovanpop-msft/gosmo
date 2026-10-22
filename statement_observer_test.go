@@ -36,11 +36,11 @@ func TestStatementObserverReportsExecutedStatementsOnly(t *testing.T) {
 	ctx, got := observed(context.Background())
 
 	for _, stmt := range []string{"SELECT 'one'", "SELECT 'two'"} {
-		if err := srv.exec(ctx, stmt); err != nil {
+		if _, err := srv.exec(ctx, stmt); err != nil {
 			t.Fatalf("exec %q: %v", stmt, err)
 		}
 	}
-	if err := srv.exec(ctx, "SELECT 'fails'"); !errors.Is(err, refused) {
+	if _, err := srv.exec(ctx, "SELECT 'fails'"); !errors.Is(err, refused) {
 		t.Fatalf("exec of the failing statement = %v, want %v", err, refused)
 	}
 
@@ -70,6 +70,25 @@ func TestStatementObserverDatabaseScope(t *testing.T) {
 	}
 }
 
+// A server-scoped write takes arguments the way a database-scoped one does
+// (Server.exec and Database.exec share a shape), and is reported with them
+// bound and no database.
+func TestStatementObserverServerScopeBindsArguments(t *testing.T) {
+	srv := auditServer(t, &auditScript{})
+	ctx, got := observed(context.Background())
+
+	if _, err := srv.exec(ctx, "EXEC sp_x @p1", "it's"); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("observed %d entries, want 1: %v", len(*got), *got)
+	}
+	e := (*got)[0]
+	if e.Database != "" || e.SQL != "EXEC sp_x N'it''s'" {
+		t.Errorf("entry = %+v, want no database and the parameter bound", e)
+	}
+}
+
 // Under WithScript nothing is executed, so nothing is observed — Script
 // Changes must never look like a partly applied change.
 func TestStatementObserverSilentUnderWithScript(t *testing.T) {
@@ -77,7 +96,7 @@ func TestStatementObserverSilentUnderWithScript(t *testing.T) {
 	ctx, got := observed(context.Background())
 	ctx, col := WithScript(ctx)
 
-	if err := srv.exec(ctx, "SELECT 1"); err != nil {
+	if _, err := srv.exec(ctx, "SELECT 1"); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 	if _, err := srv.DatabaseRef("sales").exec(ctx, "SELECT 2"); err != nil {
@@ -138,7 +157,7 @@ func TestStatementObserverChains(t *testing.T) {
 	ctx, outer := observed(context.Background())
 	ctx, inner := observed(ctx)
 
-	if err := srv.exec(ctx, "SELECT 1"); err != nil {
+	if _, err := srv.exec(ctx, "SELECT 1"); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 	if len(*outer) != 1 || len(*inner) != 1 {

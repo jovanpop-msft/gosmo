@@ -26,9 +26,9 @@ type DatabaseFileInfo struct {
 	FileID       int
 	Name         string
 	PhysicalName string
-	Type         string // "ROWS", "LOG", or "FILESTREAM" (sys.database_files.type_desc)
+	Type         FileType
 	FileGroup    string // "" for log files, which don't belong to one
-	State        string // e.g. "ONLINE"
+	State        FileState
 	// SizeKB is the file's catalog size. For a database snapshot's sparse
 	// file that is a ceiling, not a footprint: the source file's size when
 	// the snapshot was taken, the most the sparse file can grow to.
@@ -146,8 +146,8 @@ ELSE` + cols + `CAST(NULL AS bigint)` + from + where
 // DATABASE's file definitions.
 type DatabaseFileSpec struct {
 	Name      string
-	FileGroup string // ignored when Type is "LOG"
-	Type      string // "LOG" adds a log file; anything else (including "") adds a data file
+	FileGroup string   // ignored when Type is "LOG"
+	Type      FileType // FileLog adds a log file; anything else (including "") adds a data file
 	Path      string
 	SizeKB    int64
 	// GrowthKB and GrowthPercent are mutually exclusive; GrowthPercent
@@ -172,7 +172,7 @@ func (d *Database) AddFile(ctx context.Context, spec DatabaseFileSpec) error {
 	if err != nil {
 		return err
 	}
-	if err := d.server.exec(ctx, stmt); err != nil {
+	if _, err := d.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: add file %q to %q: %w", spec.Name, d.Name, err)
 	}
 	return nil
@@ -236,7 +236,7 @@ func buildAddFileStatement(dbName string, spec DatabaseFileSpec) (string, error)
 	if spec.Path == "" {
 		return "", invalidf("gosmo: add file: path is required")
 	}
-	isLog := spec.Type == "LOG"
+	isLog := spec.Type == FileLog
 	clause := "ADD FILE"
 	if isLog {
 		clause = "ADD LOG FILE"
@@ -286,7 +286,7 @@ func (f *DatabaseFileInfo) Alter(ctx context.Context, m FileModify) error {
 	if stmt == "" {
 		return nil
 	}
-	if err := f.db.server.exec(ctx, stmt); err != nil {
+	if _, err := f.db.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: alter file %q in %q: %w", f.Name, f.db.Name, err)
 	}
 	if m.NewName != "" {
@@ -328,61 +328,12 @@ func buildAlterFileStatement(dbName, name string, m FileModify) (string, error) 
 	return fmt.Sprintf("ALTER DATABASE %s MODIFY FILE (%s)", quoteIdent(dbName), strings.Join(props, ", ")), nil
 }
 
-// Shrink shrinks the file towards targetKB (DBCC SHRINKFILE), rounded up to
-// whole MB as the command takes them; 0 shrinks it as far as its contents
-// allow, and is sent as 1 MB — SHRINKFILE's own target 0 stops at the file's
-// minimum size, its creation size, however little it holds. Lowering a
-// file's size cannot go through Alter — MODIFY FILE with a smaller SIZE is
-// Msg 5039.
-//
-// It returns the size the file reached, in KB, which can be above targetKB:
-// a shrink stops at the space the file's data occupies. It is slow on a
-// large file, moves pages and so fragments the indexes it touches. Under
-// WithScript it captures the statement and returns 0.
-//
-// It refuses a file whose Type reads "FILESTREAM": a container takes only
-// EMPTYFILE (ShrinkWith), never a target. A FileRef has no type, so the
-// server answers that one.
-func (f *DatabaseFileInfo) Shrink(ctx context.Context, targetKB int64) (int64, error) {
-	if f.Type == "FILESTREAM" {
-		return 0, invalidf("gosmo: shrink file %q in %q: a FILESTREAM container can only be emptied (EMPTYFILE)", f.Name, f.db.Name)
-	}
-	if targetKB < 0 {
-		return 0, invalidf("gosmo: shrink file %q in %q: target size %d KB is negative", f.Name, f.db.Name, targetKB)
-	}
-	stmt := buildShrinkFileStatement(f.Name, targetKB)
-	if Scripting(ctx) {
-		_, err := f.db.exec(ctx, stmt)
-		return 0, err
-	}
-	// DBCC SHRINKFILE answers with one row: DbId, FileId, CurrentSize,
-	// MinimumSize, UsedPages, EstimatedPages — sizes in 8 KB pages.
-	var dbID, fileID int
-	var current, minimum, used, estimated int64
-	err := f.db.withConn(ctx, func(ctx context.Context, c sqlConn) error {
-		return c.QueryRowContext(ctx, stmt).Scan(&dbID, &fileID, &current, &minimum, &used, &estimated)
-	})
-	if err != nil {
-		return 0, fmt.Errorf("gosmo: shrink file %q in %q: %w", f.Name, f.db.Name, err)
-	}
-	observe(ctx, f.db.server, ScriptEntry{Server: scriptServerName(ctx, f.db.server), Database: f.db.Name, SQL: stmt})
-	setIfApplied(ctx, &f.SizeKB, current*8)
-	return current * 8, nil
-}
-
-// buildShrinkFileStatement renders Shrink's DBCC SHRINKFILE, naming the file
-// by its logical name as a literal — the handle may be a FileRef, with no
-// file_id. The target is never below 1 MB: see Shrink.
-func buildShrinkFileStatement(name string, targetKB int64) string {
-	return fmt.Sprintf("DBCC SHRINKFILE (%s, %d)", QuoteLiteral(name), max((targetKB+1023)/1024, 1))
-}
-
 // Drop removes the file from its database (ALTER DATABASE ... REMOVE FILE).
 // The file must be empty (0 bytes of used space) — SQL Server itself
 // enforces this, not gosmo.
 func (f *DatabaseFileInfo) Drop(ctx context.Context) error {
 	q := fmt.Sprintf("ALTER DATABASE %s REMOVE FILE %s", quoteIdent(f.db.Name), quoteIdent(f.Name))
-	if err := f.db.server.exec(ctx, q); err != nil {
+	if _, err := f.db.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: remove file %q from %q: %w", f.Name, f.db.Name, err)
 	}
 	return nil
@@ -420,7 +371,8 @@ ORDER  BY fg.name, df.file_id`
 	fgMap := make(map[string]*FileGroup)
 	var order []string
 	for rows.Next() {
-		var fgName, fgType string
+		var fgName string
+		var fgType FileGroupType
 		var fgDefault, fgReadOnly bool
 		// The file columns are NULL on the one row an empty filegroup gets
 		// from the LEFT JOIN.
@@ -445,7 +397,7 @@ ORDER  BY fg.name, df.file_id`
 		}
 		f := &DatabaseFileInfo{
 			db: d, FileID: int(fID.Int64), Name: fName.String, PhysicalName: fPath.String,
-			Type: fType.String, FileGroup: fgName, State: fState.String,
+			Type: FileType(fType.String), FileGroup: fgName, State: FileState(fState.String),
 			SizeKB: fSize.Int64, IsPercentGrowth: isPctGrowth.Bool,
 		}
 		// max_size and growth are 8 KB pages (growth a percentage when
@@ -468,7 +420,7 @@ ORDER  BY fg.name, df.file_id`
 // AddFileGroup adds a new (empty) filegroup to the database.
 func (d *Database) AddFileGroup(ctx context.Context, name string) error {
 	q := fmt.Sprintf("ALTER DATABASE %s ADD FILEGROUP %s", quoteIdent(d.Name), quoteIdent(name))
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: add filegroup %q to %q: %w", name, d.Name, err)
 	}
 	return nil
@@ -480,7 +432,7 @@ func (d *Database) AddFileGroup(ctx context.Context, name string) error {
 func (fg *FileGroup) Drop(ctx context.Context) error {
 	d := fg.db
 	q := fmt.Sprintf("ALTER DATABASE %s REMOVE FILEGROUP %s", quoteIdent(d.Name), quoteIdent(fg.Name))
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: remove filegroup %q from %q: %w", fg.Name, d.Name, err)
 	}
 	return nil
@@ -491,7 +443,7 @@ func (fg *FileGroup) Drop(ctx context.Context) error {
 func (fg *FileGroup) SetDefault(ctx context.Context) error {
 	d := fg.db
 	q := fmt.Sprintf("ALTER DATABASE %s MODIFY FILEGROUP %s DEFAULT", quoteIdent(d.Name), quoteIdent(fg.Name))
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set default filegroup %q on %q: %w", fg.Name, d.Name, err)
 	}
 	setIfApplied(ctx, &fg.IsDefault, true)
@@ -528,7 +480,7 @@ func (fg *FileGroup) SetReadOnly(ctx context.Context, readOnly bool, term Termin
 		q = killDatabaseSessionsBatch(d.Name) + ";\n" + q + ";"
 	}
 	d.server.releaseIdle(ctx)
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set filegroup %q read-only=%v on %q: %w", name, readOnly, d.Name, err)
 	}
 	setIfApplied(ctx, &fg.IsReadOnly, readOnly)

@@ -23,16 +23,14 @@ func TestScriptFileAndFileGroupWrites(t *testing.T) {
 			})
 		}, `ALTER DATABASE [App'DB] ADD FILE (NAME = [App]]Dat2], FILENAME = N'C:\d\a''2.ndf', SIZE = 8192KB, MAXSIZE = UNLIMITED, FILEGROWTH = 4096KB) TO FILEGROUP [FG'1]`},
 		// M5 (review plan 2026-10-13): a smaller size is a shrink, not MODIFY
-		// FILE (Msg 5039). The KB target rounds up to whole MB.
+		// FILE (Msg 5039).
 		{"File Shrink", func(c context.Context) error {
-			_, err := scriptTestDB().FileRef("App'Dat]2").Shrink(c, 16*1024+1)
-			return err
+			return shrinkFile(c, scriptTestDB().FileRef("App'Dat]2"), ShrinkFileOptions{TargetMB: new(int64(17))})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'App''Dat]2', 17)"},
 		// N2 (review plan 2026-10-13): SHRINKFILE's target 0 stops at the
 		// file's creation size, so "as small as the data allows" is 1 MB.
 		{"File Shrink to the minimum", func(c context.Context) error {
-			_, err := scriptTestDB().FileRef("AppLog").Shrink(c, 0)
-			return err
+			return shrinkFile(c, scriptTestDB().FileRef("AppLog"), ShrinkFileOptions{TargetMB: new(int64(0))})
 		}, scriptUsePrefix + "DBCC SHRINKFILE (N'AppLog', 1)"},
 		{"AddFile log with percentage growth", func(c context.Context) error {
 			return scriptTestDB().AddFile(c, DatabaseFileSpec{

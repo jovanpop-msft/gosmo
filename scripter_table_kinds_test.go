@@ -389,7 +389,7 @@ func TestBuildTableScriptMemoryOptimized(t *testing.T) {
 			{Name: "PK_MO", IsPrimaryKey: true, IsUnique: true, Type: IndexTypeNonClusteredHash, BucketCount: 1024,
 				KeyColumns: []IndexColumn{{Name: "id"}}},
 		},
-		table: tableScriptOptions{IsMemoryOptimized: true, Durability: "SCHEMA_ONLY", HeapCompression: "NONE"},
+		table: tableScriptOptions{IsMemoryOptimized: true, Durability: "SCHEMA_ONLY", HeapPartitions: partitions(DataCompressionNone)},
 	}
 	script := buildTableScript("dbo", "MO", "M", p, DefaultScriptOptions())
 

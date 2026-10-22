@@ -128,18 +128,11 @@ type tableScriptOptions struct {
 	// PeriodStart and PeriodEnd are the PERIOD FOR SYSTEM_TIME columns; ""
 	// when the table has no period.
 	PeriodStart, PeriodEnd string
-	// HeapCompression is a heap's DATA_COMPRESSION ("NONE" when it is not
-	// compressed, "" when the table is not a heap). A clustered table's
-	// compression is its clustered index's, and is rendered with that.
-	HeapCompression string
-	// HeapPartitionCompression is each of the heap's partitions'
-	// compression, in partition_number order; nil when the table is not a
-	// heap.
-	HeapPartitionCompression []DataCompression
-	// HeapPartitionXMLCompression is each of the heap's partitions'
-	// XML_COMPRESSION (SQL Server 2022), in partition_number order; nil
-	// when the table is not a heap.
-	HeapPartitionXMLCompression []bool
+	// HeapPartitions is each of the heap's partitions' DATA_COMPRESSION and
+	// XML_COMPRESSION, in partition_number order; nil when the table is not
+	// a heap. A clustered table's compression is its clustered index's, and
+	// is rendered with that.
+	HeapPartitions []PartitionOptions
 	// DatabaseCollation is the database default, against which a column's
 	// own collation is compared: a column that differs from it gets a
 	// COLLATE clause, since the script would otherwise recreate it with
@@ -225,13 +218,9 @@ func (t *Table) scriptOptions(ctx context.Context) (tableScriptOptions, error) {
 			&e.RejectedRowLocation, &e.TableOptions); err != nil {
 			return err
 		}
-		parts, xml, err := decodePartitionCompression(heap)
-		if err != nil {
+		var err error
+		if o.HeapPartitions, err = decodePartitionCompression(heap); err != nil {
 			return err
-		}
-		o.HeapPartitionCompression, o.HeapPartitionXMLCompression = parts, xml
-		if len(parts) > 0 {
-			o.HeapCompression = string(parts[0])
 		}
 		// Read last-first, so the four come back in view order.
 		if o.LedgerViewColumns, err = decodeJSONList(ledgerCols); err != nil {
@@ -276,7 +265,7 @@ SELECT CAST(CASE WHEN t.temporal_type = 2 THEN 1 ELSE 0 END AS BIT),
        ISNULL(lds.name, ''), CAST(CASE WHEN lds.type = 'FG' THEN 1 ELSE 0 END AS bit),
        ISNULL(fds.name, ''),
        ` + colSince(major, SQLServer2022, "t.ledger_type", "CAST(0 AS tinyint)") + `,
-       ` + colSince(major, SQLServer2022, "t.is_dropped_ledger_table", "CAST(0 AS bit)") + `,
+       ` + bitSince(major, SQLServer2022, "t.is_dropped_ledger_table") + `,
        ` + colSince(major, SQLServer2022, "ISNULL(OBJECT_SCHEMA_NAME(t.ledger_view_id), '')", "CAST('' AS sysname)") + `,
        ` + colSince(major, SQLServer2022, "ISNULL(OBJECT_NAME(t.ledger_view_id), '')", "CAST('' AS sysname)") + `,
        ` + colSince(major, SQLServer2022, "(SELECT TOP (4) lv.name AS v FROM sys.columns lv WHERE lv.object_id = t.ledger_view_id ORDER BY lv.column_id DESC FOR JSON PATH)",
@@ -408,9 +397,8 @@ func buildTableScript(schema, name, dbName string, p tableScriptParts, opts Scri
 				tableOpts = append(tableOpts, "DURABILITY = "+p.table.Durability)
 			}
 		} else {
-			tableOpts = append(tableOpts, compressionOptions(
-				DataCompression(p.table.HeapCompression), p.table.HeapPartitionCompression, rowstoreCompressed)...)
-			tableOpts = append(tableOpts, xmlCompressionOptions(p.table.HeapPartitionXMLCompression)...)
+			tableOpts = append(tableOpts, compressionOptions(p.table.HeapPartitions, rowstoreCompressed)...)
+			tableOpts = append(tableOpts, xmlCompressionOptions(p.table.HeapPartitions)...)
 		}
 		if p.table.SystemVersioned {
 			tableOpts = append(tableOpts, systemVersioningOption(p.table))

@@ -151,7 +151,7 @@ func (t *ServerTrigger) SetEnabled(ctx context.Context, on bool) error {
 		verb = "ENABLE"
 	}
 	stmt := fmt.Sprintf("%s TRIGGER %s ON ALL SERVER", verb, quoteIdent(t.Name))
-	if err := t.server.exec(ctx, stmt); err != nil {
+	if _, err := t.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: %s server trigger %q: %w", strings.ToLower(verb), t.Name, err)
 	}
 	setIfApplied(ctx, &t.IsEnabled, on)
@@ -162,7 +162,7 @@ func (t *ServerTrigger) SetEnabled(ctx context.Context, on bool) error {
 // not a silent success — see the note on Table.Drop.
 func (t *ServerTrigger) Drop(ctx context.Context) error {
 	stmt := fmt.Sprintf("DROP TRIGGER %s ON ALL SERVER", quoteIdent(t.Name))
-	if err := t.server.exec(ctx, stmt); err != nil {
+	if _, err := t.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: drop server trigger %q: %w", t.Name, err)
 	}
 	return nil

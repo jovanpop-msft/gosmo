@@ -79,7 +79,9 @@ func (s *Server) EnumFileSystemIsLegacy() bool {
 	if s.info.IsAzure() {
 		return false
 	}
-	return s.info.VersionMajor < 14
+	// Positive, unlike every other gate: an unread version (0) takes the
+	// legacy path — see EnumFileSystem.
+	return !majorKnownAtLeast(s.info.VersionMajor, SQLServer2017)
 }
 
 func (s *Server) enumFileSystemDMF(ctx context.Context, path string) ([]*FileSystemEntry, error) {
@@ -146,21 +148,23 @@ func (s *Server) enumFileSystemDirTree(ctx context.Context, path string) ([]*Fil
 
 // FixedDrives returns the fixed drives visible to the SQL Server host.
 //
-// It reads sys.dm_os_enumerate_fixed_drives on SQL Server 2019 and later, and
+// It reads sys.dm_os_enumerate_fixed_drives on SQL Server 2017 and later, and
 // falls back to xp_fixeddrives — which reports the drive letter and free
-// megabytes only — on older instances.
+// megabytes only — on 2016. The DMV is documented from 2017; it was gated at
+// 2019 until a live check (2026-10-21) found it answering on 14.0.2140.2 and
+// missing (Msg 208) on 13.0.6500.1.
 //
 // The fallback is Windows-only: xp_fixeddrives does not exist on SQL Server
-// on Linux, so a pre-2019 Linux instance returns an error here rather than
+// on Linux, so a 2016 Linux instance returns an error here rather than
 // the single root filesystem FixedDrive documents. That is deliberate rather
 // than unnoticed — a Linux host has no drive list to browse, and goSSMS's
 // file dialog only asks for one when a path walks above a root, which
 // "/"-separated paths never do (PosixPathRules.Parent("/") == "/"). Do not
 // "fix" it by synthesizing a "/" entry; there is no caller that would see it.
 func (s *Server) FixedDrives(ctx context.Context) ([]*FixedDrive, error) {
-	// serverMajorVersion, not info.VersionMajor: it is 0 on an Azure edition,
-	// which has sys.dm_os_enumerate_fixed_drives despite reporting 12.
-	if major := s.serverMajorVersion(); major > 0 && major < 15 {
+	// before, not info.VersionMajor: an Azure edition has
+	// sys.dm_os_enumerate_fixed_drives despite reporting 12.
+	if s.before(SQLServer2017) {
 		return s.fixedDrivesXP(ctx)
 	}
 

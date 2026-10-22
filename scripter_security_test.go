@@ -150,7 +150,7 @@ func TestBuildLoginScriptCarriesTheSID(t *testing.T) {
 	// SID is a SQL-login clause. A Windows or external login's SID comes from
 	// the directory and naming one does not parse, so it must not be emitted
 	// even though the field is populated for both.
-	for _, typ := range []string{"WINDOWS_LOGIN", "WINDOWS_GROUP", "EXTERNAL_LOGIN", "EXTERNAL_GROUP"} {
+	for _, typ := range []PrincipalType{"WINDOWS_LOGIN", "WINDOWS_GROUP", "EXTERNAL_LOGIN", "EXTERNAL_GROUP"} {
 		got := buildLoginScript(&Login{Name: "svc", LoginType: typ, SID: sid}, DefaultScriptOptions())
 		if strings.Contains(got, "SID =") {
 			t.Errorf("%s must not carry a SID clause:\n%s", typ, got)
@@ -196,7 +196,7 @@ func TestBuildLoginScriptOpensWithFromTheBranchNotTheText(t *testing.T) {
 func TestBuildLoginScriptMappedLogins(t *testing.T) {
 	sid := []byte{0x01, 0x06, 0x00, 0xAB}
 	for _, tc := range []struct {
-		typ  string
+		typ  PrincipalType
 		want string
 	}{
 		{"CERTIFICATE_MAPPED_LOGIN", "CREATE LOGIN [signer] FROM CERTIFICATE [sig_cert];"},
@@ -219,7 +219,7 @@ func TestBuildLoginScriptMappedLogins(t *testing.T) {
 // FROM EXTERNAL PROVIDER takes no WITH option list, so a DEFAULT_DATABASE
 // named there is a syntax error; it goes out as an ALTER LOGIN instead.
 func TestBuildLoginScriptMovesAnExternalLoginsDefaultDatabaseToAnAlter(t *testing.T) {
-	for _, typ := range []string{"EXTERNAL_LOGIN", "EXTERNAL_GROUP"} {
+	for _, typ := range []PrincipalType{"EXTERNAL_LOGIN", "EXTERNAL_GROUP"} {
 		got := buildLoginScript(&Login{Name: "svc", LoginType: typ, DefaultDatabase: "sales"}, DefaultScriptOptions())
 		create, _, _ := strings.Cut(got, ";")
 		if strings.Contains(create, "DEFAULT_DATABASE") {
@@ -231,7 +231,7 @@ func TestBuildLoginScriptMovesAnExternalLoginsDefaultDatabaseToAnAlter(t *testin
 	}
 
 	// The two types whose CREATE does carry it must not also get an ALTER.
-	for _, typ := range []string{"SQL_LOGIN", "WINDOWS_LOGIN"} {
+	for _, typ := range []PrincipalType{"SQL_LOGIN", "WINDOWS_LOGIN"} {
 		got := buildLoginScript(&Login{Name: "svc", LoginType: typ, DefaultDatabase: "sales"}, DefaultScriptOptions())
 		if strings.Contains(got, "ALTER LOGIN [svc] WITH DEFAULT_DATABASE") {
 			t.Errorf("%s: DEFAULT_DATABASE scripted twice:\n%s", typ, got)
@@ -249,7 +249,7 @@ func TestBuildLoginScriptMovesAnExternalLoginsDefaultDatabaseToAnAlter(t *testin
 // script that carried the value back would fail on the very login it was
 // taken from.
 func TestBuildLoginScriptOmitsAMappedLoginsDefaultDatabase(t *testing.T) {
-	for _, typ := range []string{"CERTIFICATE_MAPPED_LOGIN", "ASYMMETRIC_KEY_MAPPED_LOGIN"} {
+	for _, typ := range []PrincipalType{"CERTIFICATE_MAPPED_LOGIN", "ASYMMETRIC_KEY_MAPPED_LOGIN"} {
 		got := buildLoginScript(&Login{
 			Name: "signer", LoginType: typ, DefaultDatabase: "master", MappedObject: "sig_cert",
 		}, DefaultScriptOptions())

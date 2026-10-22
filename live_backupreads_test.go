@@ -264,7 +264,7 @@ func assertBackupFileList(t *testing.T, files []*BackupFile, database string) {
 	if len(files) != 2 {
 		t.Fatalf("got %d files, want a data file and a log file: %+v", len(files), files)
 	}
-	byType := map[string]*BackupFile{}
+	byType := map[BackupFileType]*BackupFile{}
 	for _, f := range files {
 		byType[f.Type] = f
 	}

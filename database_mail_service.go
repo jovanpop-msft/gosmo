@@ -68,7 +68,7 @@ func (s *Server) SetMailConfiguration(ctx context.Context, o MailConfigurationOp
 		return invalidf("gosmo: set mail configuration: logging level %d is not 1, 2 or 3", int(*o.LoggingLevel))
 	}
 	for _, stmt := range o.stmts() {
-		if err := s.exec(ctx, stmt); err != nil {
+		if _, err := s.exec(ctx, stmt); err != nil {
 			return fmt.Errorf("gosmo: set mail configuration: %w", err)
 		}
 	}
@@ -83,7 +83,7 @@ func (s *Server) SetMailConfiguration(ctx context.Context, o MailConfigurationOp
 // start DatabaseMail.exe — the first queued message does. Refused while
 // 'Database Mail XPs' is 0.
 func (s *Server) StartDatabaseMail(ctx context.Context) error {
-	if err := s.exec(ctx, "EXEC msdb.dbo.sysmail_start_sp"); err != nil {
+	if _, err := s.exec(ctx, "EXEC msdb.dbo.sysmail_start_sp"); err != nil {
 		return fmt.Errorf("gosmo: start database mail: %w", err)
 	}
 	return nil
@@ -93,7 +93,7 @@ func (s *Server) StartDatabaseMail(ctx context.Context) error {
 // queued meanwhile: sp_send_dbmail refuses it, Msg 14641 (probed on 17).
 // Refused while 'Database Mail XPs' is 0.
 func (s *Server) StopDatabaseMail(ctx context.Context) error {
-	if err := s.exec(ctx, "EXEC msdb.dbo.sysmail_stop_sp"); err != nil {
+	if _, err := s.exec(ctx, "EXEC msdb.dbo.sysmail_stop_sp"); err != nil {
 		return fmt.Errorf("gosmo: stop database mail: %w", err)
 	}
 	return nil
@@ -213,7 +213,7 @@ func (s *Server) DeleteMailItems(ctx context.Context, before time.Time, status M
 	if status != "" {
 		a.str("@sent_status", string(status))
 	}
-	if err := s.exec(ctx, a.exec("sysmail_delete_mailitems_sp")); err != nil {
+	if _, err := s.exec(ctx, a.exec("sysmail_delete_mailitems_sp")); err != nil {
 		return fmt.Errorf("gosmo: delete mail items: %w", err)
 	}
 	return nil
@@ -231,7 +231,7 @@ func (s *Server) DeleteMailLog(ctx context.Context, before time.Time, eventType 
 	if eventType != "" {
 		a.str("@event_type", string(eventType))
 	}
-	if err := s.exec(ctx, a.exec("sysmail_delete_log_sp")); err != nil {
+	if _, err := s.exec(ctx, a.exec("sysmail_delete_log_sp")); err != nil {
 		return fmt.Errorf("gosmo: delete mail log: %w", err)
 	}
 	return nil

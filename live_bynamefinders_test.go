@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -315,7 +316,7 @@ func TestLiveSchemaAndTableChildFindersMatchTheirListings(t *testing.T) {
 		}
 		if got.Name != want.Name || got.IndexID != want.IndexID || got.Type != want.Type ||
 			got.IsUnique != want.IsUnique || got.IsPrimaryKey != want.IsPrimaryKey ||
-			got.DataCompression != want.DataCompression || got.FillFactor != want.FillFactor {
+			!slices.Equal(got.Partitions, want.Partitions) || got.FillFactor != want.FillFactor {
 			t.Errorf("by name = %+v, listing = %+v", got, want)
 		}
 		// The columns come from the second query, which the by-name path

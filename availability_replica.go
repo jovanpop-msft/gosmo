@@ -56,11 +56,11 @@ type AvailabilityReplica struct {
 	ModifyDate time.Time
 
 	IsLocal               bool
-	Role                  string
-	OperationalState      string
-	ConnectedState        string
-	RecoveryHealth        string
-	SynchronizationHealth string
+	Role                  ReplicaRole
+	OperationalState      ReplicaOperationalState
+	ConnectedState        ReplicaConnectedState
+	RecoveryHealth        RecoveryHealth
+	SynchronizationHealth SynchronizationHealth
 
 	LastConnectErrorNumber      int
 	LastConnectErrorDescription string
@@ -77,12 +77,6 @@ func (ag *AvailabilityGroup) Replicas(ctx context.Context) ([]*AvailabilityRepli
 	}
 	s := ag.server
 
-	major := s.serverMajorVersion()
-	seedingMode := "ISNULL(ar.seeding_mode_desc,'')"
-	if major < int(SQLServer2016) {
-		seedingMode = "CAST('' AS nvarchar(60))"
-	}
-
 	q := `
 	SELECT CONVERT(varchar(36), ar.group_id), CONVERT(varchar(36), ar.replica_id),
 	       ar.replica_server_name, ISNULL(ar.endpoint_url,''),
@@ -91,7 +85,7 @@ func (ag *AvailabilityGroup) Replicas(ctx context.Context) ([]*AvailabilityRepli
 	       ISNULL(ar.primary_role_allow_connections_desc,''),
 	       ISNULL(ar.secondary_role_allow_connections_desc,''),
 	       ar.backup_priority, ISNULL(ar.read_only_routing_url,''),
-	       ` + seedingMode + `,
+	       ISNULL(ar.seeding_mode_desc,''),
 	       ar.create_date, ar.modify_date,
 	       ISNULL(rs.is_local, 0),
 	       ISNULL(rs.role_desc,''), ISNULL(rs.operational_state_desc,''),
@@ -228,6 +222,59 @@ const (
 	AllowConnectionsNo        AllowConnections = "NO"
 )
 
+// The state values sys.dm_hadr_availability_replica_states and
+// sys.dm_hadr_availability_group_states report. They are read-only: no write
+// takes one. Each field is empty where the DMV has no row or reports NULL.
+
+// ReplicaRole is a replica's role_desc.
+type ReplicaRole string
+
+const (
+	ReplicaPrimary   ReplicaRole = "PRIMARY"
+	ReplicaSecondary ReplicaRole = "SECONDARY"
+	ReplicaResolving ReplicaRole = "RESOLVING"
+)
+
+// ReplicaOperationalState is a replica's operational_state_desc. A secondary
+// reports none.
+type ReplicaOperationalState string
+
+const (
+	ReplicaPendingFailover ReplicaOperationalState = "PENDING_FAILOVER"
+	ReplicaPending         ReplicaOperationalState = "PENDING"
+	ReplicaOnline          ReplicaOperationalState = "ONLINE"
+	ReplicaOffline         ReplicaOperationalState = "OFFLINE"
+	ReplicaFailed          ReplicaOperationalState = "FAILED"
+	ReplicaFailedNoQuorum  ReplicaOperationalState = "FAILED_NO_QUORUM"
+)
+
+// ReplicaConnectedState is a replica's connected_state_desc.
+type ReplicaConnectedState string
+
+const (
+	ReplicaConnected    ReplicaConnectedState = "CONNECTED"
+	ReplicaDisconnected ReplicaConnectedState = "DISCONNECTED"
+)
+
+// RecoveryHealth is a replica's recovery_health_desc, and the group's
+// primary_recovery_health_desc. A secondary reports none.
+type RecoveryHealth string
+
+const (
+	RecoveryOnlineInProgress RecoveryHealth = "ONLINE_IN_PROGRESS"
+	RecoveryOnline           RecoveryHealth = "ONLINE"
+)
+
+// SynchronizationHealth is the synchronization_health_desc of a group, a
+// replica or an availability database.
+type SynchronizationHealth string
+
+const (
+	SyncNotHealthy       SynchronizationHealth = "NOT_HEALTHY"
+	SyncPartiallyHealthy SynchronizationHealth = "PARTIALLY_HEALTHY"
+	SyncHealthy          SynchronizationHealth = "HEALTHY"
+)
+
 // The types' validity checks. The keywords are spliced into DDL, so a value
 // outside the constants — a conversion from an arbitrary string — is refused.
 var (
@@ -253,13 +300,17 @@ func upperKeyword[K ~string](v K) K { return K(strings.ToUpper(string(v))) }
 //
 // The replica is addressed by name as a string literal, not an identifier —
 // that is the syntax ALTER requires — so escapeSingle is what protects it.
+//
+// Its refusal carries no "gosmo:" prefix: every caller wraps it with one plus
+// the setting and the replica.
 func (r *AvailabilityReplica) modifyReplica(ctx context.Context, with string) error {
 	if r.server == nil || r.GroupName == "" {
-		return invalidf("gosmo: modify replica %q: replica did not come from AvailabilityGroup.Replicas", r.ReplicaServerName)
+		return invalidf("replica did not come from AvailabilityGroup.Replicas")
 	}
-	return r.server.exec(ctx, fmt.Sprintf(
+	_, err := r.server.exec(ctx, fmt.Sprintf(
 		"ALTER AVAILABILITY GROUP %s MODIFY REPLICA ON N'%s' WITH (%s)",
 		quoteIdent(r.GroupName), escapeSingle(r.ReplicaServerName), with))
+	return err
 }
 
 // setReplicaKeyword is the shared body of the keyword-valued replica setters:
@@ -497,7 +548,7 @@ func (r *AvailabilityReplica) Drop(ctx context.Context) error {
 	if r.server == nil || r.GroupName == "" {
 		return invalidf("gosmo: drop replica %q: replica did not come from AvailabilityGroup.Replicas", r.ReplicaServerName)
 	}
-	if err := r.server.exec(ctx, fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s",
+	if _, err := r.server.exec(ctx, fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s",
 		quoteIdent(r.GroupName), removeReplicaClause(r.ReplicaServerName))); err != nil {
 		return fmt.Errorf("gosmo: remove replica %q from availability group %q: %w", r.ReplicaServerName, r.GroupName, err)
 	}

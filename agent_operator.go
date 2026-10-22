@@ -111,7 +111,7 @@ func (s *Server) CreateOperator(ctx context.Context, req CreateOperatorRequest) 
 	if req.Category != "" {
 		q += fmt.Sprintf(", @category_name = N'%s'", escapeSingle(req.Category))
 	}
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return nil, fmt.Errorf("gosmo: create operator %q: %w", req.Name, err)
 	}
 	return createdObject(ctx, s.OperatorRef(req.Name), func() (*Operator, error) {
@@ -152,7 +152,7 @@ func (o *Operator) SetCategory(ctx context.Context, category string) error {
 // Drop deletes the operator via sp_delete_operator.
 func (o *Operator) Drop(ctx context.Context) error {
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_delete_operator @name = N'%s'", escapeSingle(o.Name))
-	if err := o.server.exec(ctx, q); err != nil {
+	if _, err := o.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop operator %q: %w", o.Name, err)
 	}
 	return nil

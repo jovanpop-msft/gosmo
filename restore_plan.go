@@ -157,9 +157,9 @@ func (r RestoreRelocation) Moves(files []*BackupFile, source, target string) []R
 	for _, f := range files {
 		dir, ext := dataDir, ServerPathExt(f.PhysicalName)
 		switch {
-		case f.Type == "S" || f.Type == "F":
+		case f.Type == BackupFileStream || f.Type == BackupFileFullText:
 			ext = ""
-		case f.Type == "L":
+		case f.Type == BackupFileLog:
 			dir = logDir
 			if ext == "" {
 				ext = ".ldf"

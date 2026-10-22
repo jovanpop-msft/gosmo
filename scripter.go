@@ -278,7 +278,7 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 	}
 	l := &databaseLayout{groups: groups}
 	for _, f := range files {
-		if f.Type == "LOG" {
+		if f.Type == FileLog {
 			l.logs = append(l.logs, f)
 		}
 	}
@@ -321,7 +321,7 @@ func readDatabaseLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 	// Only with ADR on: turned on without the clause, it moves the version
 	// store back to PRIMARY, so a filegroup kept from before it was turned
 	// off has nothing to restate.
-	if l.opts.AcceleratedDatabaseRecovery && (l.major == 0 || l.major >= int(SQLServer2019)) {
+	if l.opts.AcceleratedDatabaseRecovery && majorAtLeast(l.major, SQLServer2019) {
 		switch l.pvsFileGroup, err = d.PersistentVersionStoreFileGroup(ctx); {
 		case IsPermissionDenied(err):
 			l.pvsRefused = true
@@ -359,7 +359,7 @@ func readSnapshotLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 	}
 	l := &databaseLayout{snapshotOf: snap.SourceDatabase}
 	for _, f := range files {
-		if f.Type == "ROWS" {
+		if f.Type == FileRows {
 			l.snapshotFiles = append(l.snapshotFiles, f)
 		}
 	}
@@ -371,11 +371,11 @@ func readSnapshotLayout(ctx context.Context, d *Database) (*databaseLayout, erro
 
 // fileGroupContains is the CONTAINS keyword CREATE DATABASE needs for a
 // filegroup's type; "" for an ordinary ROWS filegroup.
-func fileGroupContains(fgType string) string {
+func fileGroupContains(fgType FileGroupType) string {
 	switch fgType {
-	case "FILESTREAM_DATA_FILEGROUP":
+	case FileStreamFileGroup:
 		return " CONTAINS FILESTREAM"
-	case "MEMORY_OPTIMIZED_DATA_FILEGROUP":
+	case MemoryOptimizedFileGroup:
 		return " CONTAINS MEMORY_OPTIMIZED_DATA"
 	}
 	return ""
@@ -421,7 +421,7 @@ func writeDatabaseFileClauses(sb *strings.Builder, l *databaseLayout) {
 	}
 	sep := "\n ON PRIMARY\n"
 	writeGroup := func(g *FileGroup) {
-		container := g.Type != "ROWS_FILEGROUP" && g.Type != ""
+		container := g.Type != RowsFileGroup && g.Type != ""
 		for _, f := range g.Files {
 			sb.WriteString(sep)
 			sb.WriteString(scriptFileSpec(f, container))
@@ -437,7 +437,7 @@ func writeDatabaseFileClauses(sb *strings.Builder, l *databaseLayout) {
 		// DEFAULT is per filegroup type: the one FILESTREAM filegroup always
 		// reports it, and saying so is harmless. A memory-optimized
 		// filegroup cannot take it.
-		if g.IsDefault && g.Type != "MEMORY_OPTIMIZED_DATA_FILEGROUP" {
+		if g.IsDefault && g.Type != MemoryOptimizedFileGroup {
 			sb.WriteString(" DEFAULT")
 		}
 		sep = "\n"
@@ -669,9 +669,7 @@ func writeDatabaseSettings(sb *strings.Builder, d *Database, l *databaseLayout) 
 		case "DISABLED", "ALLOWED", "FORCED":
 			set("DELAYED_DURABILITY = " + o.DelayedDurability)
 		}
-		// Not hasColumnSince, which is reserved for GROUP BY gates (the
-		// version-gate inventory counts its calls); same rule, major 0 newest.
-		if l.major == 0 || l.major >= int(SQLServer2019) {
+		if majorAtLeast(l.major, SQLServer2019) {
 			// The one option here spelled with "=". The version store's
 			// filegroup exists by now: CREATE DATABASE made every one.
 			switch {

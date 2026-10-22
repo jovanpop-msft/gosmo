@@ -2,6 +2,8 @@ package gosmo
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -425,6 +427,97 @@ func TestWorkloadGroupSelectGatesItsLateColumns(t *testing.T) {
 		}
 		if got := len(selectExprs(t, selectList(t, q))); got != 14 {
 			t.Errorf("major %d selects %d expressions, want 14 — scanWorkloadGroup scans 14 destinations", c.major, got)
+		}
+	}
+}
+
+func TestMajorAtLeastTreatsZeroAsNewest(t *testing.T) {
+	for _, c := range []struct {
+		major int
+		want  bool
+	}{
+		{0, true}, {12, false}, {13, false}, {14, true}, {17, true},
+	} {
+		if got := majorAtLeast(c.major, SQLServer2017); got != c.want {
+			t.Errorf("majorAtLeast(%d, 2017) = %v, want %v", c.major, got, c.want)
+		}
+		if got := majorBefore(c.major, SQLServer2017); got == c.want {
+			t.Errorf("majorBefore(%d, 2017) = %v, want %v", c.major, got, !c.want)
+		}
+	}
+	mi := &Server{info: azureMI()}
+	if !mi.atLeast(SQLServer2025) || mi.before(SQLServer2016) {
+		t.Error("an Azure edition must count as newest, not as its reported 12")
+	}
+	if !(&Database{}).atLeast(SQLServer2025) {
+		t.Error("a Database with no Server must count as newest")
+	}
+}
+
+// B1 of the 2026-10-21 review: the AG database and replica reads gated
+// secondary_lag_seconds and seeding_mode_desc on a bare `major < 13`, so major
+// 0 — every Azure edition, and a Server whose version was never read — got a
+// zero literal instead of the column. Both are at gosmo's floor and carry no
+// gate at all now.
+func TestAGDatabaseAndReplicaReadsNameTheirColumnsAtEveryMajor(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		info *ServerInfo
+	}{
+		{"never read", &ServerInfo{}},
+		{"Managed Instance", azureMI()},
+		{"2016", &ServerInfo{VersionMajor: 13}},
+		{"2025", &ServerInfo{VersionMajor: 17}},
+	} {
+		s := captureServer(t, 0)
+		s.info = c.info
+		ag := &AvailabilityGroup{server: s, ID: "00000000-0000-0000-0000-000000000001", Name: "ag"}
+		if _, err := ag.Databases(t.Context()); err != nil {
+			t.Fatalf("%s: Databases: %v", c.what, err)
+		}
+		if _, err := ag.Replicas(t.Context()); err != nil {
+			t.Fatalf("%s: Replicas: %v", c.what, err)
+		}
+		for _, col := range []string{"drs.secondary_lag_seconds", "ar.seeding_mode_desc"} {
+			if captured.find(col) == "" {
+				t.Errorf("%s: no AG read names %s", c.what, col)
+			}
+		}
+	}
+}
+
+// versionComparison matches a version compared by hand rather than through
+// majorAtLeast/majorBefore: an ordering against a ServerVersion constant, a
+// major variable or accessor ordered against anything, and the `major == 0`
+// special case the helpers own. Equality with a constant is allowed — the
+// scripter's 2016-only defaults table asks "is it exactly 2016", which is not
+// a gate.
+var versionComparison = regexp.MustCompile(
+	`(<|<=|>|>=)\s*int\(SQLServer\d+\)` +
+		`|int\(SQLServer\d+\)\s*(<|<=|>|>=)` +
+		`|(?i:major)(\(\))?\s*(<|<=|>|>=)` +
+		`|(?i:major)(\(\))?\s*(==|!=)\s*0\b`)
+
+// C1 of the 2026-10-21 review: version gates were spelled five ways, and the
+// one spelling that forgot "0 is newest" blanked AG columns on Azure (B1).
+// Every comparison now lives in version_gate.go.
+func TestVersionGatesGoThroughMajorAtLeast(t *testing.T) {
+	for _, path := range gosmoSourceFiles(t) {
+		if path == "version_gate.go" {
+			continue
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			if m := versionComparison.FindString(line); m != "" {
+				t.Errorf("%s:%d compares a version by hand (%q) — use majorAtLeast/majorBefore or Server/Database.atLeast/before",
+					path, i+1, m)
+			}
 		}
 	}
 }

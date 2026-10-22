@@ -53,6 +53,31 @@ func TestTableRefReadsAreRefused(t *testing.T) {
 	}
 }
 
+// A ViewRef carries no ObjectID either, and its index, statistic and column
+// reads go through the same ObjectID-keyed table reads (View.carrier), so
+// they refuse the handle the same way.
+func TestViewRefReadsAreRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(context.Context, *View) error
+	}{
+		{"Columns", func(c context.Context, v *View) error { return errOnly(v.Columns(c)) }},
+		{"Indexes", func(c context.Context, v *View) error { return errOnly(v.Indexes(c)) }},
+		{"IndexByName", func(c context.Context, v *View) error { return errOnly(v.IndexByName(c, "ix")) }},
+		{"Statistics", func(c context.Context, v *View) error { return errOnly(v.Statistics(c)) }},
+		{"StatisticByName", func(c context.Context, v *View) error { return errOnly(v.StatisticByName(c, "st")) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Database{server: &Server{}, Name: "AppDB"}
+			err := tc.call(context.Background(), d.ViewRef("dbo", "v"))
+			if !errors.Is(err, ErrHandleNotLoaded) {
+				t.Fatalf("err = %v, want ErrHandleNotLoaded", err)
+			}
+		})
+	}
+}
+
 // A create on a TableRef is a valid write — it names the table in the
 // statement — and only its read-back needs the ObjectID the handle lacks.
 // createdObject answers that refusal with the new object's handle, as it does

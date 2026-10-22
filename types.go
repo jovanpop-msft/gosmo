@@ -89,6 +89,48 @@ var recoveryModelNames = map[RecoveryModel]bool{
 // validRecoveryModel reports whether m is a recognized recovery model.
 func validRecoveryModel(m RecoveryModel) bool { return recoveryModelNames[m] }
 
+// DatabaseState is a database's state_desc, as sys.databases and
+// sys.dm_hadr_database_replica_states.database_state_desc report it. Empty
+// means unread (a DatabaseRef handle). Only DatabaseOnline can be entered.
+type DatabaseState string
+
+const (
+	DatabaseOnline           DatabaseState = "ONLINE"
+	DatabaseRestoring        DatabaseState = "RESTORING"
+	DatabaseRecovering       DatabaseState = "RECOVERING"
+	DatabaseRecoveryPending  DatabaseState = "RECOVERY_PENDING"
+	DatabaseSuspect          DatabaseState = "SUSPECT"
+	DatabaseEmergency        DatabaseState = "EMERGENCY"
+	DatabaseOffline          DatabaseState = "OFFLINE"
+	DatabaseCopying          DatabaseState = "COPYING"           // Azure SQL Database geo-replication
+	DatabaseOfflineSecondary DatabaseState = "OFFLINE_SECONDARY" // Azure SQL Database geo-replication
+)
+
+// FileType is a database file's type_desc (sys.database_files,
+// sys.master_files).
+type FileType string
+
+const (
+	FileRows     FileType = "ROWS"
+	FileLog      FileType = "LOG"
+	FileStream   FileType = "FILESTREAM"
+	FileFullText FileType = "FULLTEXT" // pre-2008 full-text catalogs; still a valid type_desc
+)
+
+// FileState is a database file's state_desc (sys.database_files,
+// sys.master_files).
+type FileState string
+
+const (
+	FileOnline          FileState = "ONLINE"
+	FileRestoring       FileState = "RESTORING"
+	FileRecovering      FileState = "RECOVERING"
+	FileRecoveryPending FileState = "RECOVERY_PENDING"
+	FileSuspect         FileState = "SUSPECT"
+	FileOffline         FileState = "OFFLINE"
+	FileDefunct         FileState = "DEFUNCT"
+)
+
 // CompatibilityLevel mirrors SQL Server database compatibility levels.
 type CompatibilityLevel int
 
@@ -241,6 +283,39 @@ const (
 	PermissionGrant  PermissionState = "GRANT"
 	PermissionDeny   PermissionState = "DENY"
 	PermissionRevoke PermissionState = "REVOKE"
+	// PermissionGrantWithGrantOption is a state_desc only a read reports; a
+	// write asks for it with PermissionOptions.WithGrantOption.
+	PermissionGrantWithGrantOption PermissionState = "GRANT_WITH_GRANT_OPTION"
+)
+
+// PrincipalType is a principal's type_desc, as sys.server_principals and
+// sys.database_principals report it. The two catalogs share WINDOWS_GROUP but
+// spell the Microsoft Entra group differently: EXTERNAL_GROUP at server scope,
+// EXTERNAL_GROUPS in a database.
+type PrincipalType string
+
+const (
+	// Server principals.
+	PrincipalSQLLogin                 PrincipalType = "SQL_LOGIN"
+	PrincipalWindowsLogin             PrincipalType = "WINDOWS_LOGIN"
+	PrincipalServerRole               PrincipalType = "SERVER_ROLE"
+	PrincipalCertificateMappedLogin   PrincipalType = "CERTIFICATE_MAPPED_LOGIN"
+	PrincipalAsymmetricKeyMappedLogin PrincipalType = "ASYMMETRIC_KEY_MAPPED_LOGIN"
+	PrincipalExternalLogin            PrincipalType = "EXTERNAL_LOGIN"
+	PrincipalExternalGroup            PrincipalType = "EXTERNAL_GROUP"
+
+	// Either scope.
+	PrincipalWindowsGroup PrincipalType = "WINDOWS_GROUP"
+
+	// Database principals.
+	PrincipalSQLUser                 PrincipalType = "SQL_USER"
+	PrincipalWindowsUser             PrincipalType = "WINDOWS_USER"
+	PrincipalDatabaseRole            PrincipalType = "DATABASE_ROLE"
+	PrincipalApplicationRole         PrincipalType = "APPLICATION_ROLE"
+	PrincipalCertificateMappedUser   PrincipalType = "CERTIFICATE_MAPPED_USER"
+	PrincipalAsymmetricKeyMappedUser PrincipalType = "ASYMMETRIC_KEY_MAPPED_USER"
+	PrincipalExternalUser            PrincipalType = "EXTERNAL_USER"
+	PrincipalExternalGroups          PrincipalType = "EXTERNAL_GROUPS"
 )
 
 // ObjectPermission represents a single permission on a securable.
@@ -428,7 +503,7 @@ type FileGroup struct {
 	// decides what a file added to the group becomes — ALTER DATABASE ADD FILE
 	// has no file-type keyword, so the same clause makes a FILESTREAM file in a
 	// FILESTREAM filegroup and an ordinary data file in a ROWS one.
-	Type string
+	Type FileGroupType
 
 	// IsDefault is per filegroup *type*, not per database: a database with a
 	// FILESTREAM filegroup reports one default ROWS filegroup and one default
@@ -442,11 +517,13 @@ type FileGroup struct {
 	Files []*DatabaseFileInfo
 }
 
-// Filegroup type_desc values, as sys.filegroups reports them.
+// FileGroupType is a filegroup's type_desc, as sys.filegroups reports it.
+type FileGroupType string
+
 const (
-	RowsFileGroup            = "ROWS_FILEGROUP"
-	FileStreamFileGroup      = "FILESTREAM_DATA_FILEGROUP"
-	MemoryOptimizedFileGroup = "MEMORY_OPTIMIZED_DATA_FILEGROUP"
+	RowsFileGroup            FileGroupType = "ROWS_FILEGROUP"
+	FileStreamFileGroup      FileGroupType = "FILESTREAM_DATA_FILEGROUP"
+	MemoryOptimizedFileGroup FileGroupType = "MEMORY_OPTIMIZED_DATA_FILEGROUP"
 )
 
 // IsFileStream reports whether files added to this filegroup are FILESTREAM
@@ -569,7 +646,27 @@ func (i *ServerInfo) SupportsBackupCompression() bool {
 //
 // A nil ServerInfo answers true, as SupportsBackupCompression does.
 func (i *ServerInfo) SupportsShrinkLowPriority() bool {
-	return i == nil || i.IsAzure() || i.VersionMajor >= int(SQLServer2022)
+	return majorAtLeast(i.featureMajor(), SQLServer2022)
+}
+
+// minimumServerBuild is the build of MinimumServerVersion that gosmo needs:
+// 13.0.4001, SQL Server 2016 SP1.
+const minimumServerBuild = 4001
+
+// Supported reports whether the connected instance is one gosmo supports:
+// MinimumServerVersion (SQL Server 2016 SP1) or later. An older instance
+// connects fine and then fails read by read with "Invalid column name", so a
+// caller checks this once on connect and warns rather than refusing — most
+// reads still work.
+//
+// An Azure edition, an unread version and a nil ServerInfo answer true, the
+// "0 = newest" rule every version gate follows (majorAtLeast).
+func (i *ServerInfo) Supported() bool {
+	major := i.featureMajor()
+	if majorBefore(major, MinimumServerVersion) {
+		return false
+	}
+	return i == nil || i.VersionMajor != int(MinimumServerVersion) || i.VersionBuild >= minimumServerBuild
 }
 
 // BackupInfo holds metadata about a specific database backup.

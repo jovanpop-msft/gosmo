@@ -153,7 +153,7 @@ func (s *Server) CreateCategory(ctx context.Context, req CreateCategoryRequest) 
 	}
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_add_category @class = N'%s', @type = N'%s', @name = N'%s'",
 		string(req.Class), addCategoryType(req.Class), escapeSingle(req.Name))
-	if err := s.exec(ctx, q); err != nil {
+	if _, err := s.exec(ctx, q); err != nil {
 		return nil, fmt.Errorf("gosmo: create category %q (%s): %w", req.Name, req.Class, err)
 	}
 	return createdObject(ctx, s.CategoryRef(req.Class, req.Name), func() (*Category, error) {
@@ -168,7 +168,7 @@ func (c *Category) Drop(ctx context.Context) error {
 	}
 	q := fmt.Sprintf("EXEC msdb.dbo.sp_delete_category @class = N'%s', @name = N'%s'",
 		string(c.Class), escapeSingle(c.Name))
-	if err := c.server.exec(ctx, q); err != nil {
+	if _, err := c.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop category %q (%s): %w", c.Name, c.Class, err)
 	}
 	return nil

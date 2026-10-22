@@ -13,10 +13,10 @@ type Login struct {
 	server *Server
 	Name   string
 	SID    []byte
-	// LoginType is the login's type_desc: "SQL_LOGIN", "WINDOWS_LOGIN",
-	// "WINDOWS_GROUP", "EXTERNAL_LOGIN", "EXTERNAL_GROUP",
-	// "CERTIFICATE_MAPPED_LOGIN" or "ASYMMETRIC_KEY_MAPPED_LOGIN".
-	LoginType       string
+	// LoginType is the login's type_desc: SQL_LOGIN, WINDOWS_LOGIN,
+	// WINDOWS_GROUP, EXTERNAL_LOGIN, EXTERNAL_GROUP, CERTIFICATE_MAPPED_LOGIN
+	// or ASYMMETRIC_KEY_MAPPED_LOGIN.
+	LoginType       PrincipalType
 	IsDisabled      bool
 	DefaultDatabase string
 	CreateDate      time.Time
@@ -56,7 +56,7 @@ func (l *Login) IsSystem() bool { return strings.HasPrefix(l.Name, "##") }
 
 // IsSQLLogin reports whether l authenticates with a SQL Server password — the
 // only kind with a password, CHECK_POLICY or CHECK_EXPIRATION.
-func (l *Login) IsSQLLogin() bool { return l.LoginType == "SQL_LOGIN" }
+func (l *Login) IsSQLLogin() bool { return l.LoginType == PrincipalSQLLogin }
 
 // ResolveMapping looks up the certificate or asymmetric key this login maps
 // to and stores its name in MappedObject.
@@ -76,7 +76,7 @@ func (l *Login) ResolveMapping(ctx context.Context) error {
 		return err
 	}
 	switch loginType {
-	case "CERTIFICATE_MAPPED_LOGIN", "ASYMMETRIC_KEY_MAPPED_LOGIN":
+	case PrincipalCertificateMappedLogin, PrincipalAsymmetricKeyMappedLogin:
 	default:
 		return nil
 	}
@@ -94,7 +94,7 @@ SELECT ISNULL((SELECT TOP 1 name FROM master.sys.certificates    WHERE sid = @p1
 
 // Disable disables the login.
 func (l *Login) Disable(ctx context.Context) error {
-	if err := l.server.exec(ctx, "ALTER LOGIN "+quoteIdent(l.Name)+" DISABLE"); err != nil {
+	if _, err := l.server.exec(ctx, "ALTER LOGIN "+quoteIdent(l.Name)+" DISABLE"); err != nil {
 		return fmt.Errorf("gosmo: disable login %q: %w", l.Name, err)
 	}
 	setIfApplied(ctx, &l.IsDisabled, true)
@@ -111,7 +111,7 @@ func (l *Login) SetEnabled(ctx context.Context, on bool) error {
 
 // Enable enables the login.
 func (l *Login) Enable(ctx context.Context) error {
-	if err := l.server.exec(ctx, "ALTER LOGIN "+quoteIdent(l.Name)+" ENABLE"); err != nil {
+	if _, err := l.server.exec(ctx, "ALTER LOGIN "+quoteIdent(l.Name)+" ENABLE"); err != nil {
 		return fmt.Errorf("gosmo: enable login %q: %w", l.Name, err)
 	}
 	setIfApplied(ctx, &l.IsDisabled, false)
@@ -123,7 +123,7 @@ func (l *Login) Drop(ctx context.Context) error {
 	if l.Name == "" {
 		return invalidf("gosmo: drop login: name is required")
 	}
-	if err := l.server.exec(ctx, fmt.Sprintf("DROP LOGIN %s", quoteIdent(l.Name))); err != nil {
+	if _, err := l.server.exec(ctx, fmt.Sprintf("DROP LOGIN %s", quoteIdent(l.Name))); err != nil {
 		return fmt.Errorf("gosmo: drop login %q: %w", l.Name, err)
 	}
 	return nil
@@ -167,10 +167,10 @@ type LoginDetails struct {
 	BadPasswordTime time.Time
 	DefaultLanguage string
 	CredentialName  string
-	// ConnectSQLState is "GRANT", "GRANT_WITH_GRANT_OPTION", "DENY", or ""
+	// ConnectSQLState is GRANT, GRANT_WITH_GRANT_OPTION, DENY, or ""
 	// (default/unset) for the login's explicit CONNECT SQL server permission
 	// — sys.server_permissions.state_desc as read.
-	ConnectSQLState string
+	ConnectSQLState PermissionState
 }
 
 // Details returns the login's password-policy and status information.
@@ -237,7 +237,7 @@ func loginPropertyTime(t sql.NullTime) time.Time {
 // Rename changes the login's name.
 func (l *Login) Rename(ctx context.Context, newName string) error {
 	q := fmt.Sprintf("ALTER LOGIN %s WITH NAME = %s", quoteIdent(l.Name), quoteIdent(newName))
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: rename login %q to %q: %w", l.Name, newName, err)
 	}
 	setIfApplied(ctx, &l.Name, newName)
@@ -247,7 +247,7 @@ func (l *Login) Rename(ctx context.Context, newName string) error {
 // SetDefaultDatabase changes the login's default database.
 func (l *Login) SetDefaultDatabase(ctx context.Context, name string) error {
 	q := fmt.Sprintf("ALTER LOGIN %s WITH DEFAULT_DATABASE = %s", quoteIdent(l.Name), quoteIdent(name))
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set default database for login %q to %q: %w", l.Name, name, err)
 	}
 	setIfApplied(ctx, &l.DefaultDatabase, name)
@@ -259,7 +259,7 @@ func (l *Login) SetDefaultDatabase(ctx context.Context, name string) error {
 // alias for the handle to read as the catalog does.
 func (l *Login) SetDefaultLanguage(ctx context.Context, lang string) error {
 	q := fmt.Sprintf("ALTER LOGIN %s WITH DEFAULT_LANGUAGE = %s", quoteIdent(l.Name), quoteIdent(lang))
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set default language for login %q to %q: %w", l.Name, lang, err)
 	}
 	setIfApplied(ctx, &l.DefaultLanguage, lang)
@@ -284,7 +284,7 @@ func (l *Login) SetPasswordPolicy(ctx context.Context, checkPolicy, checkExpirat
 	}
 	q := fmt.Sprintf("ALTER LOGIN %s WITH CHECK_POLICY = %s, CHECK_EXPIRATION = %s",
 		quoteIdent(l.Name), policy, expiration)
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set password policy for login %q: %w", l.Name, err)
 	}
 	setIfApplied(ctx, &l.IsPolicyChecked, checkPolicy)
@@ -318,7 +318,7 @@ func (l *Login) ChangePassword(ctx context.Context, newPassword string, opts Cha
 		// Two ALTERs on one branch of the batch: all or nothing.
 		err = l.server.execPasswordsAtomic(ctx, []string{stmt}, newPassword)
 	} else {
-		err = l.server.execPasswords(ctx, stmt, newPassword)
+		_, err = l.server.execPasswords(ctx, stmt, newPassword)
 	}
 	if err != nil {
 		return fmt.Errorf("gosmo: change password for login %q: %w", l.Name, err)
@@ -425,7 +425,7 @@ ELSE
 // MapCredential maps a server credential to the login.
 func (l *Login) MapCredential(ctx context.Context, credential string) error {
 	q := fmt.Sprintf("ALTER LOGIN %s ADD CREDENTIAL %s", quoteIdent(l.Name), quoteIdent(credential))
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: map credential %q to login %q: %w", credential, l.Name, err)
 	}
 	return nil
@@ -434,7 +434,7 @@ func (l *Login) MapCredential(ctx context.Context, credential string) error {
 // UnmapCredential removes a credential mapping from the login.
 func (l *Login) UnmapCredential(ctx context.Context, credential string) error {
 	q := fmt.Sprintf("ALTER LOGIN %s DROP CREDENTIAL %s", quoteIdent(l.Name), quoteIdent(credential))
-	if err := l.server.exec(ctx, q); err != nil {
+	if _, err := l.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: unmap credential %q from login %q: %w", credential, l.Name, err)
 	}
 	return nil
@@ -507,12 +507,12 @@ func (s *Server) LoginRef(name string) *Login {
 // was read (SID is never empty on a read login), else looked up by name. The
 // handle is not updated — a read must not write to a receiver another
 // goroutine may be reading.
-func (l *Login) identity(ctx context.Context, what string) ([]byte, string, error) {
+func (l *Login) identity(ctx context.Context, what string) ([]byte, PrincipalType, error) {
 	if l.SID != nil {
 		return l.SID, l.LoginType, nil
 	}
 	var sid []byte
-	var loginType string
+	var loginType PrincipalType
 	err := l.server.queryRowScan(ctx, `
 SELECT sid, type_desc FROM sys.server_principals
 WHERE  name = @p1 AND type IN ('S','U','G','E','X','C','K')`, []any{l.Name}, &sid, &loginType)
@@ -586,10 +586,10 @@ func (s *Server) CreateLogin(ctx context.Context, req CreateLoginRequest) (*Logi
 	}
 	switch {
 	case len(stmts) == 1:
-		err = s.execPasswords(ctx, stmt, password)
+		_, err = s.execPasswords(ctx, stmt, password)
 	case s.info != nil && EngineEdition(s.info.EngineEdition) == EngineAzureSQLDatabase:
 		for _, q := range stmts {
-			if err = s.execPasswords(ctx, q, password); err != nil {
+			if _, err = s.execPasswords(ctx, q, password); err != nil {
 				break
 			}
 		}

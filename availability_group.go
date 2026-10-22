@@ -75,8 +75,8 @@ type AvailabilityGroup struct {
 	IsContained bool
 
 	PrimaryReplicaServerName string
-	PrimaryRecoveryHealth    string
-	SynchronizationHealth    string
+	PrimaryRecoveryHealth    RecoveryHealth
+	SynchronizationHealth    SynchronizationHealth
 }
 
 // IsLocalPrimary reports whether the instance this group was read from is
@@ -94,18 +94,13 @@ func (ag *AvailabilityGroup) IsLocalPrimary() bool {
 func (ag *AvailabilityGroup) Server() *Server { return ag.server }
 
 // agColumns builds the sys.availability_groups select list for the connected
-// server's version. Columns added after 2012 are substituted with typed
-// literals rather than omitted, so the scan destination list stays fixed and
-// callers get a zero value instead of a "column not found" error on an older
-// instance.
+// server's version. Columns added after 2016, gosmo's floor, are substituted
+// with typed literals rather than omitted, so the scan destination list stays
+// fixed and callers get a zero value instead of a "column not found" error on
+// an older instance. The 2016 flags (basic_features, dtc_support, db_failover,
+// is_distributed) are named unconditionally: every supported instance has them.
 func (s *Server) agColumns() string {
 	major := s.serverMajorVersion()
-
-	// 2016 added the basic/DTC/failover/distributed flags.
-	basicFeatures := colSince(major, SQLServer2016, "ag.basic_features", "CAST(0 AS bit)")
-	dtcSupport := colSince(major, SQLServer2016, "ag.dtc_support", "CAST(0 AS bit)")
-	dbFailover := colSince(major, SQLServer2016, "ag.db_failover", "CAST(0 AS bit)")
-	isDistributed := colSince(major, SQLServer2016, "ag.is_distributed", "CAST(0 AS bit)")
 
 	// 2017 added the external-cluster support this whole type keys off.
 	//
@@ -119,7 +114,7 @@ func (s *Server) agColumns() string {
 	requiredSync := colSince(major, SQLServer2017, "ag.required_synchronized_secondaries_to_commit", "CAST(0 AS int)")
 
 	// 2022 added contained availability groups.
-	isContained := colSince(major, SQLServer2022, "ag.is_contained", "CAST(0 AS bit)")
+	isContained := bitSince(major, SQLServer2022, "ag.is_contained")
 
 	return strings.Join([]string{
 		"CONVERT(varchar(36), ag.group_id)",
@@ -131,7 +126,7 @@ func (s *Server) agColumns() string {
 		"ag.failure_condition_level",
 		"ag.health_check_timeout",
 		"ag.version",
-		basicFeatures, dtcSupport, dbFailover, isDistributed,
+		"ag.basic_features", "ag.dtc_support", "ag.db_failover", "ag.is_distributed",
 		requiredSync, isContained,
 		"ISNULL(gs.primary_replica,'')",
 		"ISNULL(gs.primary_recovery_health_desc,'')",
@@ -220,8 +215,9 @@ func (s *Server) AvailabilityGroupByName(ctx context.Context, name string) (*Ava
 
 // alterSet runs one ALTER AVAILABILITY GROUP ... SET (<option>) statement.
 func (ag *AvailabilityGroup) alterSet(ctx context.Context, option string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER AVAILABILITY GROUP %s SET (%s)", quoteIdent(ag.Name), option))
+	return err
 }
 
 // BackupPreference is a group's AUTOMATED_BACKUP_PREFERENCE, spelled as both
@@ -324,7 +320,7 @@ func (ag *AvailabilityGroup) SetRequiredSynchronizedSecondariesToCommit(ctx cont
 	if n < 0 {
 		return invalidf("gosmo: set required synchronized secondaries to commit: %d is negative", n)
 	}
-	if m := ag.server.serverMajorVersion(); m != 0 && m < int(SQLServer2017) {
+	if ag.server.before(SQLServer2017) {
 		return unsupportedVersionf("gosmo: set required synchronized secondaries to commit: requires SQL Server 2017 or later")
 	}
 	if err := ag.alterSet(ctx, fmt.Sprintf("REQUIRED_SYNCHRONIZED_SECONDARIES_TO_COMMIT = %d", n)); err != nil {
@@ -349,8 +345,9 @@ func (ag *AvailabilityGroup) SetRequiredSynchronizedSecondariesToCommit(ctx cont
 
 // alter runs one ALTER AVAILABILITY GROUP <name> <clause> statement.
 func (ag *AvailabilityGroup) alter(ctx context.Context, clause string) error {
-	return ag.server.exec(ctx,
+	_, err := ag.server.exec(ctx,
 		fmt.Sprintf("ALTER AVAILABILITY GROUP %s %s", quoteIdent(ag.Name), clause))
+	return err
 }
 
 // -- The group itself ------------------------------------------------------
@@ -366,7 +363,7 @@ func (ag *AvailabilityGroup) alter(ctx context.Context, clause string) error {
 // each secondary is left with the same unusable copies RemoveDatabase leaves
 // behind.
 func (ag *AvailabilityGroup) Drop(ctx context.Context) error {
-	if err := ag.server.exec(ctx, "DROP AVAILABILITY GROUP "+quoteIdent(ag.Name)); err != nil {
+	if _, err := ag.server.exec(ctx, "DROP AVAILABILITY GROUP "+quoteIdent(ag.Name)); err != nil {
 		return fmt.Errorf("gosmo: drop availability group %q: %w", ag.Name, err)
 	}
 	return nil

@@ -190,7 +190,7 @@ var (
 // d.exec.
 func (d *Database) SetQueryStoreOptions(ctx context.Context, opts QueryStoreOptions) error {
 	if opts.DesiredState == QueryStoreOff {
-		if err := d.server.exec(ctx,
+		if _, err := d.server.exec(ctx,
 			fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE = OFF", quoteIdent(d.Name)),
 		); err != nil {
 			return fmt.Errorf("gosmo: disable query store on %q: %w", d.Name, err)
@@ -201,14 +201,14 @@ func (d *Database) SetQueryStoreOptions(ctx context.Context, opts QueryStoreOpti
 	// WAIT_STATS_CAPTURE_MODE is SQL Server 2017 and later. Below it the
 	// setting does not exist — the read has no column to report and returns
 	// "" — so the clause is omitted rather than sent and rejected.
-	waitStats := d.serverMajorVersion() == 0 || d.serverMajorVersion() >= int(SQLServer2017)
+	waitStats := d.atLeast(SQLServer2017)
 	withs, err := queryStoreOnOptions(opts, waitStats)
 	if err != nil {
 		return fmt.Errorf("gosmo: set query store options on %q: %w", d.Name, err)
 	}
 
 	q := fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE = ON (%s)", quoteIdent(d.Name), withs)
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set query store options on %q: %w", d.Name, err)
 	}
 	return nil
@@ -288,7 +288,7 @@ func (d *Database) FlushQueryStore(ctx context.Context) error {
 // ClearQueryStore discards all captured Query Store data (SSMS's "Clear
 // Query Store" action) without changing its configuration.
 func (d *Database) ClearQueryStore(ctx context.Context) error {
-	if err := d.server.exec(ctx,
+	if _, err := d.server.exec(ctx,
 		fmt.Sprintf("ALTER DATABASE %s SET QUERY_STORE CLEAR", quoteIdent(d.Name)),
 	); err != nil {
 		return fmt.Errorf("gosmo: clear query store on %q: %w", d.Name, err)

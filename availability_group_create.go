@@ -213,7 +213,7 @@ func (req CreateAvailabilityGroupRequest) createStatement(major int) (string, er
 	if len(req.Replicas) == 0 {
 		return "", invalidf("availability group %q has no replicas", req.Name)
 	}
-	before := func(v ServerVersion) bool { return major != 0 && major < int(v) }
+	before := func(v ServerVersion) bool { return majorBefore(major, v) }
 
 	var options []string
 	if req.ClusterType != "" {
@@ -328,7 +328,7 @@ func (s *Server) CreateAvailabilityGroup(ctx context.Context, req CreateAvailabi
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: create availability group: %w", err)
 	}
-	if err := s.exec(ctx, stmt); err != nil {
+	if _, err := s.exec(ctx, stmt); err != nil {
 		return nil, fmt.Errorf("gosmo: create availability group %q: %w", req.Name, err)
 	}
 	// Under Scripting(ctx) the group does not exist yet; the handle carries

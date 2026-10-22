@@ -428,7 +428,8 @@ func (s *Server) restoreAccessMode(ctx context.Context, name string, mode UserAc
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
 	defer cancel()
-	return s.exec(rctx, fmt.Sprintf("ALTER DATABASE %s SET %s", quoteIdent(name), releaseMode(mode)))
+	_, err := s.exec(rctx, fmt.Sprintf("ALTER DATABASE %s SET %s", quoteIdent(name), releaseMode(mode)))
+	return err
 }
 
 // restoreAccessModeAfterRename is restoreAccessMode for a forced rename cut
@@ -443,9 +444,10 @@ func (s *Server) restoreAccessModeAfterRename(ctx context.Context, oldName, newN
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
 	defer cancel()
 	m := releaseMode(mode)
-	return s.exec(rctx, fmt.Sprintf(`IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET %s
+	_, err := s.exec(rctx, fmt.Sprintf(`IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET %s
 ELSE IF DB_ID(%s) IS NOT NULL ALTER DATABASE %s SET %s`,
 		QuoteLiteral(oldName), quoteIdent(oldName), m, QuoteLiteral(newName), quoteIdent(newName), m))
+	return err
 }
 
 // releaseMode is the mode a repair releases to: RESTRICTED_USER kept, anything

@@ -176,7 +176,7 @@ func TestGoldenRenderingsAgreeWithTheGateInventory(t *testing.T) {
 			for _, major := range goldenMajors {
 				sql := q.render(major)
 				named := strings.Contains(sql, g.column)
-				if want := hasColumnSince(major, g.since); named != want {
+				if want := majorAtLeast(major, g.since); named != want {
 					t.Errorf("%s at major %d names %s.%s = %v, want %v (introduced in %s)",
 						q.name, major, g.view, g.column, named, want, versionConstName(g.since))
 				}

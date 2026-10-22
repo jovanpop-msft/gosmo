@@ -78,7 +78,7 @@ func (s *Server) Backup(ctx context.Context, opts BackupOptions) error {
 	}
 
 	if opts.Progress == nil || Scripting(ctx) {
-		if err := s.exec(ctx, sqlText); err != nil {
+		if _, err := s.exec(ctx, sqlText); err != nil {
 			return fmt.Errorf("gosmo: backup %q: %w", opts.Database, err)
 		}
 		return nil

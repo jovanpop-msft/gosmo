@@ -49,7 +49,7 @@ func TestCloseCancelsAReadInFlight(t *testing.T) {
 			return err
 		},
 		"database rows": func(ctx context.Context, s *Server) error {
-			_, err := s.DatabaseRef("d").Tables(ctx)
+			_, err := s.DatabaseRef("d").Tables(ctx, TableQuery{})
 			return err
 		},
 	} {

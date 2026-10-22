@@ -66,7 +66,7 @@ func (d *Database) Detach(ctx context.Context, opts DetachOptions) error {
 		sqlTextBool(!opts.DropFullTextIndexFile),
 	)
 	if !opts.DropConnections {
-		if err := s.exec(ctx, detach); err != nil {
+		if _, err := s.exec(ctx, detach); err != nil {
 			return fmt.Errorf("gosmo: detach database %q: %w", name, err)
 		}
 		return nil
@@ -75,7 +75,7 @@ func (d *Database) Detach(ctx context.Context, opts DetachOptions) error {
 	// detach failed back to the access mode it had. A batch cut short may
 	// not have got that far.
 	mode := s.accessModeBefore(ctx, name)
-	if err := s.exec(ctx, exclusiveBatch(name, detach)); err != nil {
+	if _, err := s.exec(ctx, exclusiveBatch(name, detach)); err != nil {
 		if batchCutShort(err) {
 			_ = s.restoreAccessMode(ctx, name, mode)
 		}
@@ -128,11 +128,11 @@ func (s *Server) AttachDatabase(ctx context.Context, spec AttachSpec) error {
 	if len(spec.Files) == 0 {
 		return invalidf("gosmo: attach database %q: at least one file is required", spec.Name)
 	}
-	if err := s.exec(ctx, buildAttachStatement(spec)); err != nil {
+	if _, err := s.exec(ctx, buildAttachStatement(spec)); err != nil {
 		return fmt.Errorf("gosmo: attach database %q: %w", spec.Name, err)
 	}
 	if spec.Owner != "" {
-		if err := s.exec(ctx, fmt.Sprintf("ALTER AUTHORIZATION ON DATABASE::%s TO %s",
+		if _, err := s.exec(ctx, fmt.Sprintf("ALTER AUTHORIZATION ON DATABASE::%s TO %s",
 			quoteIdent(spec.Name), quoteIdent(spec.Owner))); err != nil {
 			return fmt.Errorf("gosmo: set owner of attached database %q: %w", spec.Name, err)
 		}

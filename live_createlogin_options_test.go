@@ -83,7 +83,7 @@ func TestLiveCreateLoginOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-create from the password hash: %v", err)
 	}
-	if c.LoginType != "SQL_LOGIN" || !bytes.Equal(c.SID, cloneSID) {
+	if c.LoginType != PrincipalSQLLogin || !bytes.Equal(c.SID, cloneSID) {
 		t.Errorf("clone: type %q, SID %X", c.LoginType, c.SID)
 	}
 	var same int

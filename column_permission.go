@@ -18,7 +18,7 @@ import (
 // genuinely separate grants: a column DENY overrides an object GRANT.
 type ColumnPermissionEntry struct {
 	Principal     string
-	PrincipalType string // e.g. "DATABASE_ROLE", "SQL_USER"
+	PrincipalType PrincipalType // e.g. PrincipalDatabaseRole, PrincipalSQLUser
 	Grantor       string
 	Schema        string
 	Object        string

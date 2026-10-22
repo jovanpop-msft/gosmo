@@ -196,7 +196,7 @@ func TestScriptIndexByType(t *testing.T) {
 		{
 			name: "nonclustered columnstore keeps archive compression and delay together",
 			idx: &Index{AllowRowLocks: true, AllowPageLocks: true, Name: "NCCI", Type: IndexTypeColumnStore,
-				KeyColumns: []IndexColumn{{Name: "A"}}, DataCompression: "COLUMNSTORE_ARCHIVE", CompressionDelay: 10},
+				KeyColumns: []IndexColumn{{Name: "A"}}, Partitions: partitions(DataCompressionColumnstoreArchive), CompressionDelay: 10},
 			want: "CREATE NONCLUSTERED COLUMNSTORE INDEX [NCCI]\n    ON [dbo].[T] ([A]) WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE, COMPRESSION_DELAY = 10 MINUTES);",
 		},
 		{
@@ -421,13 +421,12 @@ func TestBuildTableScriptIndexOptions(t *testing.T) {
 		indexes: []*Index{
 			{Name: "PK_T", IsPrimaryKey: true, IsClustered: true, AllowRowLocks: true, AllowPageLocks: false,
 				OptimizeForSequentialKey: true, StatisticsIncremental: true,
-				DataCompression: "PAGE", KeyColumns: []IndexColumn{{Name: "a"}}},
+				Partitions: partitions(DataCompressionPage), KeyColumns: []IndexColumn{{Name: "a"}}},
 			{Name: "IX_b", Type: IndexTypeNonClustered, IsUnique: true, IsPadded: true, FillFactor: 80,
 				IgnoreDupKey: true, StatisticsNoRecompute: true, StatisticsIncremental: true,
-				AllowRowLocks: true, AllowPageLocks: true, DataCompression: "ROW",
+				AllowRowLocks: true, AllowPageLocks: true, Partitions: partitions(DataCompressionRow),
 				IsDisabled: true, KeyColumns: []IndexColumn{{Name: "b"}}},
 		},
-		table: tableScriptOptions{HeapCompression: ""},
 	}
 	got := buildTableScript("dbo", "T", "db", p, ScriptOptions{})
 	for _, want := range []string{
@@ -443,7 +442,7 @@ func TestBuildTableScriptIndexOptions(t *testing.T) {
 		t.Errorf("an index must be disabled after it is created:\n%s", got)
 	}
 
-	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapCompression: "PAGE"}}
+	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapPartitions: partitions(DataCompressionPage)}}
 	if got := buildTableScript("dbo", "T", "db", heap, ScriptOptions{}); !strings.Contains(got, ")\nWITH (DATA_COMPRESSION = PAGE);") {
 		t.Errorf("a compressed heap lost its compression:\n%s", got)
 	}
@@ -463,27 +462,26 @@ func TestCompressionOptionsPerPartition(t *testing.T) {
 	)
 	archive := func(c DataCompression) bool { return c == A }
 	cases := []struct {
-		name   string
-		single DataCompression
-		parts  []DataCompression
-		named  func(DataCompression) bool
-		want   []string
+		name  string
+		parts []DataCompression
+		named func(DataCompression) bool
+		want  []string
 	}{
-		{"uniform", P, []DataCompression{P, P, P}, rowstoreCompressed, []string{"DATA_COMPRESSION = PAGE"}},
-		{"uniform none", N, []DataCompression{N, N}, rowstoreCompressed, nil},
-		{"single partition", R, []DataCompression{R}, rowstoreCompressed, []string{"DATA_COMPRESSION = ROW"}},
-		{"not read", P, nil, rowstoreCompressed, []string{"DATA_COMPRESSION = PAGE"}},
-		{"mixed", P, []DataCompression{P, N, N}, rowstoreCompressed,
+		{"uniform", []DataCompression{P, P, P}, rowstoreCompressed, []string{"DATA_COMPRESSION = PAGE"}},
+		{"uniform none", []DataCompression{N, N}, rowstoreCompressed, nil},
+		{"single partition", []DataCompression{R}, rowstoreCompressed, []string{"DATA_COMPRESSION = ROW"}},
+		{"not read", nil, rowstoreCompressed, nil},
+		{"mixed", []DataCompression{P, N, N}, rowstoreCompressed,
 			[]string{"DATA_COMPRESSION = PAGE ON PARTITIONS (1)"}},
-		{"range plus one", P, []DataCompression{P, P, P, N, P}, rowstoreCompressed,
+		{"range plus one", []DataCompression{P, P, P, N, P}, rowstoreCompressed,
 			[]string{"DATA_COMPRESSION = PAGE ON PARTITIONS (1 TO 3, 5)"}},
-		{"two compressions", N, []DataCompression{N, R, R, P}, rowstoreCompressed,
+		{"two compressions", []DataCompression{N, R, R, P}, rowstoreCompressed,
 			[]string{"DATA_COMPRESSION = ROW ON PARTITIONS (2 TO 3)", "DATA_COMPRESSION = PAGE ON PARTITIONS (4)"}},
-		{"columnstore", C, []DataCompression{C, A, A}, archive,
+		{"columnstore", []DataCompression{C, A, A}, archive,
 			[]string{"DATA_COMPRESSION = COLUMNSTORE_ARCHIVE ON PARTITIONS (2 TO 3)"}},
 	}
 	for _, c := range cases {
-		if got := compressionOptions(c.single, c.parts, c.named); !slices.Equal(got, c.want) {
+		if got := compressionOptions(partitions(c.parts...), c.named); !slices.Equal(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -494,13 +492,13 @@ func TestCompressionOptionsPerPartition(t *testing.T) {
 		cols: []*Column{{Name: "a", DataType: DataTypeInt}, {Name: "b", DataType: DataTypeInt}},
 		indexes: []*Index{
 			{Name: "PK_T", IsPrimaryKey: true, IsClustered: true, AllowRowLocks: true, AllowPageLocks: true,
-				DataCompression: P, PartitionCompression: []DataCompression{P, N, N},
+				Partitions: partitions(P, N, N),
 				KeyColumns: []IndexColumn{{Name: "a"}}},
 			{Name: "IX_b", Type: IndexTypeNonClustered, AllowRowLocks: true, AllowPageLocks: true,
-				DataCompression: N, PartitionCompression: []DataCompression{N, R},
+				Partitions: partitions(N, R),
 				KeyColumns: []IndexColumn{{Name: "b"}}},
 			{Name: "NCCI", Type: IndexTypeColumnStore,
-				DataCompression: A, PartitionCompression: []DataCompression{A, C},
+				Partitions:      partitions(A, C),
 				IncludedColumns: []IndexColumn{{Name: "b", IsIncluded: true}}},
 		},
 	}
@@ -514,11 +512,29 @@ func TestCompressionOptionsPerPartition(t *testing.T) {
 			t.Errorf("script is missing %q:\n%s", want, got)
 		}
 	}
-	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{
-		HeapCompression: "NONE", HeapPartitionCompression: []DataCompression{N, P, P}}}
+	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapPartitions: partitions(N, P, P)}}
 	if got := buildTableScript("dbo", "T", "db", heap, ScriptOptions{}); !strings.Contains(got, ")\nWITH (DATA_COMPRESSION = PAGE ON PARTITIONS (2 TO 3));") {
 		t.Errorf("a heap with mixed compression lost it:\n%s", got)
 	}
+}
+
+// partitions is one PartitionOptions per compression, numbered from 1.
+func partitions(cs ...DataCompression) []PartitionOptions {
+	var out []PartitionOptions
+	for i, c := range cs {
+		out = append(out, PartitionOptions{Number: i + 1, DataCompression: c})
+	}
+	return out
+}
+
+// xmlPartitions is one uncompressed PartitionOptions per XML_COMPRESSION
+// setting, numbered from 1.
+func xmlPartitions(xs ...bool) []PartitionOptions {
+	var out []PartitionOptions
+	for i, x := range xs {
+		out = append(out, PartitionOptions{Number: i + 1, DataCompression: DataCompressionNone, XMLCompression: x})
+	}
+	return out
 }
 
 // TestXMLCompressionOptions: XML_COMPRESSION (SQL Server 2022) lives in
@@ -537,7 +553,7 @@ func TestXMLCompressionOptions(t *testing.T) {
 		{"mixed", []bool{true, false, true, true, false}, []string{"XML_COMPRESSION = ON ON PARTITIONS (1, 3 TO 4)"}},
 	}
 	for _, c := range cases {
-		if got := xmlCompressionOptions(c.parts); !slices.Equal(got, c.want) {
+		if got := xmlCompressionOptions(xmlPartitions(c.parts...)); !slices.Equal(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -548,10 +564,10 @@ func TestXMLCompressionOptions(t *testing.T) {
 		cols: []*Column{{Name: "a", DataType: DataTypeInt}, {Name: "x", DataType: DataTypeXML}},
 		indexes: []*Index{
 			{Name: "PK_T", IsPrimaryKey: true, IsClustered: true, AllowRowLocks: true, AllowPageLocks: true,
-				DataCompression: DataCompressionNone, XMLCompression: true, PartitionXMLCompression: []bool{true},
+				Partitions: xmlPartitions(true),
 				KeyColumns: []IndexColumn{{Name: "a"}}},
 			{Name: "IX_x", Type: IndexTypeNonClustered, AllowRowLocks: true, AllowPageLocks: true,
-				DataCompression: DataCompressionPage, PartitionXMLCompression: []bool{false, true},
+				Partitions: []PartitionOptions{{Number: 1, DataCompression: DataCompressionPage}, {Number: 2, DataCompression: DataCompressionPage, XMLCompression: true}},
 				KeyColumns: []IndexColumn{{Name: "a"}}, IncludedColumns: []IndexColumn{{Name: "x", IsIncluded: true}}},
 		},
 	}
@@ -564,8 +580,7 @@ func TestXMLCompressionOptions(t *testing.T) {
 			t.Errorf("script is missing %q:\n%s", want, got)
 		}
 	}
-	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapCompression: "NONE",
-		HeapPartitionCompression: []DataCompression{"NONE", "NONE"}, HeapPartitionXMLCompression: []bool{true, false}}}
+	heap := tableScriptParts{cols: p.cols, table: tableScriptOptions{HeapPartitions: xmlPartitions(true, false)}}
 	if got := buildTableScript("dbo", "T", "db", heap, ScriptOptions{}); !strings.Contains(got, ")\nWITH (XML_COMPRESSION = ON ON PARTITIONS (1));") {
 		t.Errorf("a heap with XML compression lost it:\n%s", got)
 	}
@@ -576,15 +591,19 @@ func TestXMLCompressionOptions(t *testing.T) {
 // bit)) decodes as off.
 func TestDecodePartitionCompressionReadsXMLCompression(t *testing.T) {
 	col := sql.NullString{Valid: true, String: `[{"n":1,"c":"PAGE","x":true},{"n":2,"c":"NONE","x":false}]`}
-	data, xml, err := decodePartitionCompression(col)
+	got, err := decodePartitionCompression(col)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(data, []DataCompression{DataCompressionPage, DataCompressionNone}) || !slices.Equal(xml, []bool{true, false}) {
-		t.Errorf("got %v / %v", data, xml)
+	want := []PartitionOptions{
+		{Number: 1, DataCompression: DataCompressionPage, XMLCompression: true},
+		{Number: 2, DataCompression: DataCompressionNone},
 	}
-	if data, xml, err := decodePartitionCompression(sql.NullString{}); err != nil || data != nil || xml != nil {
-		t.Errorf("NULL: got %v / %v / %v, want nil", data, xml, err)
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got, err := decodePartitionCompression(sql.NullString{}); err != nil || got != nil {
+		t.Errorf("NULL: got %v / %v, want nil", got, err)
 	}
 }
 
@@ -611,7 +630,7 @@ func TestScriptXMLAndSpatialIndexes(t *testing.T) {
 			locks(&Index{Name: "SP_G", Type: IndexTypeSpatial, KeyColumns: []IndexColumn{{Name: "G"}},
 				Tessellation: SpatialGeometryGrid, BoundingBox: &SpatialBoundingBox{XMin: -1.5, YMin: 0, XMax: 500, YMax: 200},
 				GridLevels:     SpatialGridLevels{Level1: SpatialGridLow, Level2: SpatialGridMedium, Level3: SpatialGridHigh, Level4: SpatialGridLow},
-				CellsPerObject: 64, DataCompression: DataCompressionPage,
+				CellsPerObject: 64, Partitions: partitions(DataCompressionPage),
 				DataSpace: DataSpace{Name: "FG_Archive"}}),
 			locks(&Index{Name: "SP_Gg", Type: IndexTypeSpatial, KeyColumns: []IndexColumn{{Name: "Gg"}},
 				Tessellation: SpatialGeographyAutoGrid, CellsPerObject: 12,

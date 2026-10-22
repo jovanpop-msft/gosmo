@@ -37,7 +37,7 @@ func TestLiveJobAddScheduleRecurrences(t *testing.T) {
 	// closed the pool, and the drop then fails silently.
 	defer drop()
 
-	if err := srv.exec(ctx, "CREATE LOGIN ["+owner+"] WITH PASSWORD = N'Gosmo!T23-"+time.Now().Format("150405")+"', CHECK_POLICY = OFF"); err != nil {
+	if _, err := srv.exec(ctx, "CREATE LOGIN ["+owner+"] WITH PASSWORD = N'Gosmo!T23-"+time.Now().Format("150405")+"', CHECK_POLICY = OFF"); err != nil {
 		t.Fatalf("create owner login: %v", err)
 	}
 	j, err := srv.CreateJob(ctx, CreateJobRequest{Name: jobName})

@@ -72,7 +72,7 @@ func (l *Login) userMappingsBatch(ctx context.Context, sid []byte, dbs []*Databa
 	sb.WriteString("SET NOCOUNT ON;\nDECLARE @proc nvarchar(300), @q nvarchar(max) = " + QuoteLiteral(userMappingsQuery) + ";\n")
 	n := 0
 	for _, db := range dbs {
-		if db.State != "ONLINE" {
+		if db.State != DatabaseOnline {
 			continue
 		}
 		sb.WriteString(perDatabaseExec(db.Name, ", N'@p1 varbinary(85)', @p1 = @sid"))

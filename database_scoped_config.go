@@ -47,7 +47,7 @@ func (d *Database) scopedConfigSelect() string {
 	return `
 SELECT configuration_id, name, CAST(value AS NVARCHAR(256)),
        CAST(ISNULL(value_for_secondary, '') AS NVARCHAR(256)),
-       ` + colSince(d.serverMajorVersion(), SQLServer2017, "is_value_default", "CAST(0 AS bit)") + `,
+       ` + bitSince(d.serverMajorVersion(), SQLServer2017, "is_value_default") + `,
        CAST(ISNULL(SQL_VARIANT_PROPERTY(value, 'BaseType'), '') AS NVARCHAR(128)),
        CAST(ISNULL(SQL_VARIANT_PROPERTY(value_for_secondary, 'BaseType'), '') AS NVARCHAR(128))
 FROM   sys.database_scoped_configurations

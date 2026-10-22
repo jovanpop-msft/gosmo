@@ -66,7 +66,7 @@ func (d *Database) SetChangeTracking(ctx context.Context, info ChangeTrackingInf
 	if err != nil {
 		return err
 	}
-	if err := d.server.exec(ctx, q); err != nil {
+	if _, err := d.server.exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: set change tracking on %q: %w", d.Name, err)
 	}
 	return nil

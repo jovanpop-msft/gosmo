@@ -137,7 +137,7 @@ func TestLiveApplyPermissionServer(t *testing.T) {
 	}
 	found := false
 	for _, p := range perms {
-		found = found || (p.Principal == login && p.Permission == "VIEW SERVER STATE" && p.State == "GRANT")
+		found = found || (p.Principal == login && p.Permission == "VIEW SERVER STATE" && p.State == PermissionGrant)
 	}
 	if !found {
 		t.Error("VIEW SERVER STATE grant not read back")

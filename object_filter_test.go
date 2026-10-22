@@ -166,7 +166,7 @@ func TestObjectFilterClauseDropsWhatTheFamilyLacks(t *testing.T) {
 		Name:            []TextCriterion{{Op: TextContains, Value: "v"}},
 		MemoryOptimized: &yes,
 	}
-	sql, args := f.clause(viewFilterColumns, 1)
+	sql, args := f.clause(moduleFilterColumns, 1)
 	if strings.Contains(sql, "memory") {
 		t.Errorf("sql = %q, want no memory-optimized term for a view", sql)
 	}

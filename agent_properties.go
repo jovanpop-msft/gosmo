@@ -119,7 +119,7 @@ func (s *Server) SetAgentMailSettings(ctx context.Context, ch AgentMailChanges) 
 	if p.empty() {
 		return nil
 	}
-	if err := s.exec(ctx, "EXEC msdb.dbo.sp_set_sqlagent_properties "+strings.Join(p.parts, ", ")); err != nil {
+	if _, err := s.exec(ctx, "EXEC msdb.dbo.sp_set_sqlagent_properties "+strings.Join(p.parts, ", ")); err != nil {
 		return fmt.Errorf("gosmo: set agent mail settings: %w", err)
 	}
 	return nil

@@ -326,7 +326,7 @@ func parseEntraConfig(dsn string, prompt func(context.Context, DeviceCodeMessage
 		// Every fedauth value gosmo writes is handled above, and "fedauth" is
 		// reserved, so this is reachable only through a new fedauthValue entry
 		// without a case here.
-		return nil, fmt.Errorf("gosmo: no Entra credential mapping for fedauth %q", cfg.workflow)
+		return nil, fmt.Errorf("no Entra credential mapping for fedauth %q", cfg.workflow)
 	}
 	if v := p["additionallyallowedtenants"]; v != "" {
 		for t := range strings.FieldsFuncSeq(v, func(r rune) bool { return r == ',' || r == ';' }) {

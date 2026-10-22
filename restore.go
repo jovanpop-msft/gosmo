@@ -114,7 +114,7 @@ func (s *Server) Restore(ctx context.Context, opts RestoreOptions) error {
 		mode = s.accessModeBefore(ctx, opts.Database)
 	}
 	if opts.Progress == nil || Scripting(ctx) {
-		err = s.exec(ctx, sqlText)
+		_, err = s.exec(ctx, sqlText)
 	} else if err = refuseInTx(ctx, s, "restore with progress"); err != nil {
 		return err
 	} else {
@@ -312,8 +312,9 @@ func (s *Server) releaseAfterRestore(ctx context.Context, name string, mode User
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(unobserved(ctx)), multiUserRepairTimeout)
 	defer cancel()
-	return s.exec(rctx, fmt.Sprintf("IF %s\n    ALTER DATABASE %s SET %s",
+	_, err := s.exec(rctx, fmt.Sprintf("IF %s\n    ALTER DATABASE %s SET %s",
 		restoreOnline(name, "SINGLE_USER"), quoteIdent(name), releaseMode(mode)))
+	return err
 }
 
 // backupHistorySelect is the msdb read behind BackupHistory, at package

@@ -15,9 +15,13 @@ import (
 // Statistics
 // ============================================================
 
-// Statistic mirrors sys.stats for a table.
+// Statistic mirrors sys.stats for a table or a view.
+//
+// It carries the object it is on — exactly one of table and view is set —
+// so every write and read on it names that object itself.
 type Statistic struct {
 	table               *Table
+	view                *View
 	Name                string
 	StatID              int
 	IsAutoCreated       bool
@@ -98,8 +102,21 @@ func (t *Table) StatisticRef(name string) *Statistic {
 	return &Statistic{table: t, Name: name}
 }
 
-// Table returns the table the statistic is on.
+// Table returns the table the statistic is on, or nil for a view's
+// statistic — see View.
 func (st *Statistic) Table() *Table { return st.table }
+
+// View returns the view the statistic is on, or nil for a table's statistic.
+func (st *Statistic) View() *View { return st.view }
+
+// on is the object the statistic is on as the Table its statements and
+// reads are built from: its table, or its view's carrier (View.carrier).
+func (st *Statistic) on() *Table {
+	if st.view != nil {
+		return st.view.carrier()
+	}
+	return st.table
+}
 
 func scanStatistic(t *Table, scan func(...any) error) (*Statistic, error) {
 	st := &Statistic{table: t}
@@ -159,8 +176,8 @@ func (st *Statistic) Update(ctx context.Context, samplePct int) error {
 	option := sampleClause(samplePct)
 	// UPDATE STATISTICS does not support parameterised stat names.
 	q := fmt.Sprintf("UPDATE STATISTICS %s %s WITH %s",
-		st.table.FullName(), quoteIdent(st.Name), option)
-	if _, err := st.table.exec(ctx, q); err != nil {
+		st.on().FullName(), quoteIdent(st.Name), option)
+	if _, err := st.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: update statistic %q: %w", st.Name, err)
 	}
 	return nil
@@ -171,8 +188,8 @@ func (st *Statistic) Update(ctx context.Context, samplePct int) error {
 func (st *Statistic) Drop(ctx context.Context) error {
 	// DROP STATISTICS syntax: schema.table.stat (not quoted as one unit)
 	q := fmt.Sprintf("DROP STATISTICS %s.%s.%s",
-		quoteIdent(st.table.Schema), quoteIdent(st.table.Name), quoteIdent(st.Name))
-	if _, err := st.table.exec(ctx, q); err != nil {
+		quoteIdent(st.on().Schema), quoteIdent(st.on().Name), quoteIdent(st.Name))
+	if _, err := st.on().exec(ctx, q); err != nil {
 		return fmt.Errorf("gosmo: drop statistic %q: %w", st.Name, err)
 	}
 	return nil
@@ -289,9 +306,9 @@ FROM   sys.stats s
 JOIN   sys.stats_columns sc ON sc.object_id = s.object_id AND sc.stats_id = s.stats_id
 JOIN   sys.columns c ON c.object_id = sc.object_id AND c.column_id = sc.column_id
 WHERE  s.object_id = OBJECT_ID(N'%s') AND s.name = @p1
-ORDER  BY sc.stats_column_id`, escapeSingle(st.table.FullName()))
+ORDER  BY sc.stats_column_id`, escapeSingle(st.on().FullName()))
 
-	rows, err := st.table.db.query(ctx, q, st.Name)
+	rows, err := st.on().db.query(ctx, q, st.Name)
 	return scanRows(rows, err, fmt.Sprintf("columns for statistic %q", st.Name), func(scan func(...any) error) (string, error) {
 		var name string
 		if err := scan(&name); err != nil {
@@ -325,7 +342,7 @@ func (st *Statistic) Header(ctx context.Context) (*StatisticHeader, error) {
 	// DBCC SHOW_STATISTICS does not accept parameters for the table/stat
 	// name (same restriction Update already works around).
 	q := fmt.Sprintf("DBCC SHOW_STATISTICS (N'%s', N'%s') WITH STAT_HEADER, NO_INFOMSGS",
-		escapeSingle(st.table.FullName()), escapeSingle(st.Name))
+		escapeSingle(st.on().FullName()), escapeSingle(st.Name))
 
 	// DBCC's result shape is not a documented contract and has changed: the
 	// header is 10 columns before SQL Server 2019 and 11 from it (Persisted
@@ -351,7 +368,7 @@ func (st *Statistic) Header(ctx context.Context) (*StatisticHeader, error) {
 		"Persisted Sample Percent": &samplePct,
 	}
 
-	rows, err := st.table.db.query(ctx, q)
+	rows, err := st.on().db.query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: statistics header for %q: %w", st.Name, err)
 	}
@@ -405,9 +422,9 @@ type StatisticDensity struct {
 // DensityVector returns this statistic's density vector.
 func (st *Statistic) DensityVector(ctx context.Context) ([]*StatisticDensity, error) {
 	q := fmt.Sprintf("DBCC SHOW_STATISTICS (N'%s', N'%s') WITH DENSITY_VECTOR, NO_INFOMSGS",
-		escapeSingle(st.table.FullName()), escapeSingle(st.Name))
+		escapeSingle(st.on().FullName()), escapeSingle(st.Name))
 
-	rows, err := st.table.db.query(ctx, q)
+	rows, err := st.on().db.query(ctx, q)
 	return scanRows(rows, err, fmt.Sprintf("density vector for %q", st.Name), func(scan func(...any) error) (*StatisticDensity, error) {
 		d := &StatisticDensity{}
 		if err := scan(&d.AllDensity, &d.AverageLength, &d.Columns); err != nil {
@@ -432,9 +449,9 @@ type StatisticHistogramStep struct {
 // Histogram returns this statistic's histogram steps.
 func (st *Statistic) Histogram(ctx context.Context) ([]*StatisticHistogramStep, error) {
 	q := fmt.Sprintf("DBCC SHOW_STATISTICS (N'%s', N'%s') WITH HISTOGRAM, NO_INFOMSGS",
-		escapeSingle(st.table.FullName()), escapeSingle(st.Name))
+		escapeSingle(st.on().FullName()), escapeSingle(st.Name))
 
-	rows, err := st.table.db.query(ctx, q)
+	rows, err := st.on().db.query(ctx, q)
 	var key histogramKeyType
 	if err == nil {
 		if key, err = histogramKeyTypeOf(rows); err != nil {
@@ -545,8 +562,8 @@ func (k histogramKeyType) timeLayout() string {
 
 // Rename renames the statistic using sp_rename.
 func (st *Statistic) Rename(ctx context.Context, newName string) error {
-	objName := st.table.FullName() + "." + quoteIdent(st.Name)
-	if _, err := st.table.exec(ctx,
+	objName := st.on().FullName() + "." + quoteIdent(st.Name)
+	if _, err := st.on().exec(ctx,
 		"EXEC sp_rename @objname = @p1, @newname = @p2, @objtype = N'STATISTICS'",
 		objName, newName,
 	); err != nil {
