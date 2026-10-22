@@ -23,44 +23,26 @@ type View struct {
 	IsSchemaBound bool
 }
 
-// Views returns all views in the database.
-func (d *Database) Views(ctx context.Context) ([]*View, error) {
-	return d.viewsWhere(ctx, "", nil)
+// Views returns the views an ObjectFilter matches, narrowed by the server
+// rather than by the caller. The zero ObjectFilter returns every view.
+func (d *Database) Views(ctx context.Context, filter ObjectFilter) ([]*View, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "views", userViews, viewExtra, where, args, scanView)
 }
 
-// ViewsFiltered returns the views an ObjectFilter matches, narrowed by the
-// server rather than by the caller. An empty filter is Views.
-func (d *Database) ViewsFiltered(ctx context.Context, filter ObjectFilter) ([]*View, error) {
-	where, args := filter.clause(viewFilterColumns, 1)
-	return d.viewsWhere(ctx, where, args)
-}
-
-// viewFilterColumns maps an ObjectFilter onto sys.views as viewsWhere aliases
-// it. There is no memory-optimized column outside sys.tables.
-var viewFilterColumns = filterColumns{
-	name:    "v.name",
-	schema:  "SCHEMA_NAME(v.schema_id) COLLATE DATABASE_DEFAULT",
-	created: "v.create_date",
-}
-
-func (d *Database) viewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
-	q := viewSelect + `
-WHERE  v.is_ms_shipped = 0 ` + where + `
-ORDER  BY SCHEMA_NAME(v.schema_id), v.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		return scanView(d, scan)
-	})
-}
+var (
+	userViews   = moduleSource{from: "sys.views o", kind: "o.is_ms_shipped = 0"}
+	systemViews = moduleSource{from: "sys.all_objects o", kind: "o.type = 'V' AND o.is_ms_shipped = 1 AND o.schema_id = 4", system: true}
+)
 
 // viewSelect is the column list Views and ViewByName share, so a view
 // carries the same fields however it was fetched.
-const viewSelect = `
-SELECT v.object_id, SCHEMA_NAME(v.schema_id), v.name,
-       v.create_date, v.modify_date,
-       CAST(ISNULL(OBJECTPROPERTY(v.object_id, 'IsSchemaBound'), 0) AS bit)
-FROM   sys.views v`
+const viewSelect = moduleColumns + viewExtra + `
+FROM   sys.views o`
+
+// viewExtra is the column a view carries beyond moduleColumns.
+const viewExtra = `,
+       CAST(ISNULL(OBJECTPROPERTY(o.object_id, 'IsSchemaBound'), 0) AS bit)`
 
 func scanView(d *Database, scan func(...any) error) (*View, error) {
 	v := &View{db: d}
@@ -83,8 +65,8 @@ func (d *Database) ViewByName(ctx context.Context, schema, name string) (*View, 
 		return nil, err
 	}
 	q := viewSelect + `
-WHERE  SCHEMA_NAME(v.schema_id) COLLATE DATABASE_DEFAULT = @p1
-  AND  v.name                                           = @p2`
+WHERE  SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1
+  AND  o.name                                           = @p2`
 
 	return readByName(ctx, d, scanView, q, []any{schema, name},
 		notFoundf("gosmo: view %s not found in %q", qualifiedName(schema, name), d.Name),
@@ -99,39 +81,10 @@ WHERE  SCHEMA_NAME(v.schema_id) COLLATE DATABASE_DEFAULT = @p1
 // (is_ms_shipped=1), invisible through the non-"all_" catalog views — same
 // reasoning as SystemCatalog. The "sys" schema's catalog views are
 // defined identically in every database on a server, so a caller only needs to
-// load this once per connection.
-func (d *Database) SystemViews(ctx context.Context) ([]*View, error) {
-	return d.systemViewsWhere(ctx, "", nil)
-}
-
-// SystemViewsFiltered returns the system views an ObjectFilter matches,
-// narrowed by the server. An empty filter is SystemViews.
-func (d *Database) SystemViewsFiltered(ctx context.Context, filter ObjectFilter) ([]*View, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.systemViewsWhere(ctx, where, args)
-}
-
-func (d *Database) systemViewsWhere(ctx context.Context, where string, args []any) ([]*View, error) {
-	q := `
-SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name,
-       o.create_date, o.modify_date,
-       CAST(ISNULL(OBJECTPROPERTY(o.object_id, 'IsSchemaBound'), 0) AS bit)
-FROM   sys.all_objects o
-WHERE  o.type = 'V' AND o.is_ms_shipped = 1 AND SCHEMA_NAME(o.schema_id) = 'sys' ` + where + `
-ORDER  BY o.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list system views in %q", d.Name), func(scan func(...any) error) (*View, error) {
-		return scanView(d, scan)
-	})
-}
-
-// allObjectsFilterColumns maps an ObjectFilter onto the sys.all_objects
-// listings the three System* families share.
-var allObjectsFilterColumns = filterColumns{
-	name:    "o.name",
-	schema:  "SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT",
-	created: "o.create_date",
+// load this once per connection. The zero ObjectFilter returns every one.
+func (d *Database) SystemViews(ctx context.Context, filter ObjectFilter) ([]*View, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "system views", systemViews, viewExtra, where, args, scanView)
 }
 
 // ObjectTriggers returns the DML triggers defined on one table or view —

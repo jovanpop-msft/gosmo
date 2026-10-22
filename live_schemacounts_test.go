@@ -60,7 +60,7 @@ func TestLiveSchemaObjectCountsMatchTheListings(t *testing.T) {
 			t.Fatalf("tables: %v", err)
 		}
 		c.Tables = len(tables)
-		views, err := d.Views(ctx)
+		views, err := d.Views(ctx, ObjectFilter{})
 		if err != nil {
 			t.Fatalf("views: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestLiveSchemaObjectCountsMatchTheListings(t *testing.T) {
 				c.Views++
 			}
 		}
-		procs, err := d.StoredProcedures(ctx)
+		procs, err := d.StoredProcedures(ctx, ObjectFilter{})
 		if err != nil {
 			t.Fatalf("procedures: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestLiveSchemaObjectCountsMatchTheListings(t *testing.T) {
 				c.StoredProcedures++
 			}
 		}
-		funcs, err := d.UserDefinedFunctions(ctx)
+		funcs, err := d.UserDefinedFunctions(ctx, ObjectFilter{})
 		if err != nil {
 			t.Fatalf("functions: %v", err)
 		}

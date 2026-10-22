@@ -5,10 +5,10 @@ package gosmo
 // user tables listed beside them.
 //
 // Every one of them is an ordinary row in sys.tables distinguished by a flag,
-// so Tables/TablesFiltered keep returning all of them: the catalog lists them
-// and a listing that silently omitted one would disagree with the catalog.
-// TablesOfKind is what a caller building a *tree* asks instead, so each table
-// appears exactly once, under its own folder.
+// so Tables with TableKindAll keeps returning all of them: the catalog lists
+// them and a listing that silently omitted one would disagree with the
+// catalog. A caller building a *tree* asks for one kind at a time instead, so
+// each table appears exactly once, under its own folder.
 
 import (
 	"context"
@@ -16,13 +16,16 @@ import (
 	"fmt"
 )
 
-// TableKind selects one family of tables. TableKindUser is the residue: a
-// table that is none of the other four, which is what belongs directly under
-// the Tables folder once the sub-folders have taken their own.
+// TableKind selects one family of tables. TableKindAll, the zero value, is
+// every table SQL Server did not ship — all four non-system families together.
+// TableKindUser is the residue: a table that is none of the other four, which
+// is what belongs directly under the Tables folder once the sub-folders have
+// taken their own.
 type TableKind int
 
 const (
-	TableKindUser TableKind = iota
+	TableKindAll TableKind = iota
+	TableKindUser
 	TableKindSystem
 	TableKindFileTable
 	TableKindExternal
@@ -32,6 +35,8 @@ const (
 // String names the kind for error messages.
 func (k TableKind) String() string {
 	switch k {
+	case TableKindAll:
+		return "all"
 	case TableKindUser:
 		return "user"
 	case TableKindSystem:
@@ -64,6 +69,8 @@ func graphPredicate(major int) string {
 // System Tables *is* the ms-shipped family, and every other kind excludes it.
 func kindClause(major int, k TableKind) string {
 	switch k {
+	case TableKindAll:
+		return userTablesClause
 	case TableKindSystem:
 		return "AND t.is_ms_shipped = 1"
 	case TableKindFileTable:
@@ -90,32 +97,12 @@ func (d *Database) requireGraphTables() error {
 	return nil
 }
 
-// TablesOfKind returns the tables of one kind.
-func (d *Database) TablesOfKind(ctx context.Context, kind TableKind) ([]*Table, error) {
-	return d.TablesOfKindFiltered(ctx, kind, ObjectFilter{})
-}
-
-// TablesOfKindFiltered returns the tables of one kind an ObjectFilter
-// matches, narrowed by the server. An empty filter is TablesOfKind.
-//
-// TableKindGraph is refused below SQL Server 2017 (errors.Is
-// ErrUnsupportedVersion) rather than answered with an empty list.
-func (d *Database) TablesOfKindFiltered(ctx context.Context, kind TableKind, filter ObjectFilter) ([]*Table, error) {
-	if kind == TableKindGraph {
-		if err := d.requireGraphTables(); err != nil {
-			return nil, err
-		}
-	}
-	where, args := filter.clause(tableFilterColumns, 1)
-	return d.tablesWhere(ctx, kindClause(d.serverMajorVersion(), kind)+" "+where, args)
-}
-
 // TableKindPresence reports which table families a database actually has —
 // what a tree builder needs to decide which sub-folders to show, in one
 // query rather than one listing per folder.
 //
 // Graph is false on an instance older than SQL Server 2017 for the same
-// reason TablesOfKind refuses the listing there: the columns do not exist,
+// reason Tables refuses a TableKindGraph listing there: the columns do not exist,
 // so no row can be one.
 type TableKindPresence struct {
 	System    bool

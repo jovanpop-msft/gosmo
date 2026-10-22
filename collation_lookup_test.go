@@ -97,14 +97,17 @@ func TestByNameLookupsAreOneStatementAcrossCollations(t *testing.T) {
 	lookups := map[string]func(d *Database) error{
 		"TableByName":    func(d *Database) error { _, err := d.TableByName(ctx, "Sales", "t"); return err },
 		"TablesBySchema": func(d *Database) error { _, err := d.TablesBySchema(ctx, "Sales"); return err },
-		"TablesFiltered": func(d *Database) error { _, err := d.TablesFiltered(ctx, ObjectFilter{Schema: schema}); return err },
-		"ViewsFiltered":  func(d *Database) error { _, err := d.ViewsFiltered(ctx, ObjectFilter{Schema: schema}); return err },
-		"SystemViewsFiltered": func(d *Database) error {
-			_, err := d.SystemViewsFiltered(ctx, ObjectFilter{Schema: schema})
+		"Tables": func(d *Database) error {
+			_, err := d.Tables(ctx, TableQuery{Filter: ObjectFilter{Schema: schema}})
 			return err
 		},
-		"StoredProceduresFiltered": func(d *Database) error {
-			_, err := d.StoredProceduresFiltered(ctx, ObjectFilter{Schema: schema})
+		"Views": func(d *Database) error { _, err := d.Views(ctx, ObjectFilter{Schema: schema}); return err },
+		"SystemViews": func(d *Database) error {
+			_, err := d.SystemViews(ctx, ObjectFilter{Schema: schema})
+			return err
+		},
+		"StoredProcedures": func(d *Database) error {
+			_, err := d.StoredProcedures(ctx, ObjectFilter{Schema: schema})
 			return err
 		},
 		"StoredProcedureByName":          func(d *Database) error { _, err := d.StoredProcedureByName(ctx, "Sales", "p"); return err },

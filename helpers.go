@@ -287,6 +287,52 @@ WHERE  o.object_id = OBJECT_ID(@p1) AND ` + kind
 		fmt.Sprintf("read %s %s definition in %q", what, qualifiedName(schema, name), d.Name))
 }
 
+// moduleSource is where one module listing reads its rows: from, a catalog
+// view aliased o, and kind, the predicate that keeps the family's rows. A
+// system listing reads sys.all_objects (shipped objects are invisible
+// through the non-"all_" views) in the sys schema, and orders by name alone.
+// The sys schema is schema_id 4 in every database; comparing the id rather
+// than SCHEMA_NAME(o.schema_id) = 'sys' lets the predicate seek.
+type moduleSource struct {
+	from, kind string
+	system     bool
+}
+
+// moduleColumns is the column list every module listing starts with; a
+// family's extra columns follow it.
+const moduleColumns = `
+SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name,
+       o.create_date, o.modify_date`
+
+// moduleFilterColumns maps an ObjectFilter onto a moduleSource's o. None of
+// them has a memory-optimized column (only sys.tables does).
+var moduleFilterColumns = filterColumns{
+	name:    "o.name",
+	schema:  "SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT",
+	created: "o.create_date",
+}
+
+// moduleListWhere is the one listing behind the view, stored procedure and
+// function families, user and system: moduleColumns then extra, from src,
+// narrowed by where (an ObjectFilter clause over moduleFilterColumns, or a
+// by-name predicate) bound to args. build makes one T from a row.
+func moduleListWhere[T any](ctx context.Context, d *Database, what string, src moduleSource, extra, where string, args []any,
+	build func(*Database, func(...any) error) (T, error)) ([]T, error) {
+	order := "SCHEMA_NAME(o.schema_id), o.name"
+	if src.system {
+		order = "o.name"
+	}
+	q := moduleColumns + extra + `
+FROM   ` + src.from + `
+WHERE  ` + src.kind + ` ` + where + `
+ORDER  BY ` + order
+
+	rows, err := d.query(ctx, q, args...)
+	return scanRows(rows, err, fmt.Sprintf("list %s in %q", what, d.Name), func(scan func(...any) error) (T, error) {
+		return build(d, scan)
+	})
+}
+
 // perDatabaseBatch runs q in each of dbs in one round trip: every database's
 // run is that database's sp_executesql inside its own TRY/CATCH, so a
 // database that cannot be entered or read is skipped server-side rather than

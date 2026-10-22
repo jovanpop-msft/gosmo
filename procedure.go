@@ -162,44 +162,25 @@ type StoredProcedure struct {
 	ModifyDate time.Time
 }
 
-// StoredProcedures returns all stored procedures in the database.
-func (d *Database) StoredProcedures(ctx context.Context) ([]*StoredProcedure, error) {
-	return d.storedProceduresWhere(ctx, "", nil)
+// StoredProcedures returns the stored procedures an ObjectFilter matches,
+// narrowed by the server. The zero ObjectFilter returns every one.
+func (d *Database) StoredProcedures(ctx context.Context, filter ObjectFilter) ([]*StoredProcedure, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "stored procs", userProcedures, "", where, args, scanStoredProcedure)
 }
 
-// StoredProceduresFiltered returns the stored procedures an ObjectFilter
-// matches, narrowed by the server. An empty filter is
-// StoredProcedures.
-func (d *Database) StoredProceduresFiltered(ctx context.Context, filter ObjectFilter) ([]*StoredProcedure, error) {
-	where, args := filter.clause(procedureFilterColumns, 1)
-	return d.storedProceduresWhere(ctx, where, args)
-}
+var (
+	userProcedures   = moduleSource{from: "sys.procedures o", kind: "o.is_ms_shipped = 0"}
+	systemProcedures = moduleSource{from: "sys.all_objects o", kind: "o.type IN ('P','PC') AND o.is_ms_shipped = 1 AND o.schema_id = 4", system: true}
+)
 
-// procedureFilterColumns maps an ObjectFilter onto sys.procedures as
-// storedProceduresWhere aliases it.
-var procedureFilterColumns = filterColumns{
-	name:    "p.name",
-	schema:  "SCHEMA_NAME(p.schema_id) COLLATE DATABASE_DEFAULT",
-	created: "p.create_date",
-}
-
-func (d *Database) storedProceduresWhere(ctx context.Context, where string, args []any) ([]*StoredProcedure, error) {
-	q := `
-SELECT p.object_id, SCHEMA_NAME(p.schema_id), p.name,
-       p.create_date, p.modify_date
-FROM   sys.procedures p
-WHERE  p.is_ms_shipped = 0 ` + where + `
-ORDER  BY SCHEMA_NAME(p.schema_id), p.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list stored procs in %q", d.Name), func(scan func(...any) error) (*StoredProcedure, error) {
-		p := &StoredProcedure{db: d}
-		if err := scan(&p.ObjectID, &p.Schema, &p.Name,
-			&p.CreateDate, &p.ModifyDate); err != nil {
-			return nil, err
-		}
-		return p, nil
-	})
+func scanStoredProcedure(d *Database, scan func(...any) error) (*StoredProcedure, error) {
+	p := &StoredProcedure{db: d}
+	if err := scan(&p.ObjectID, &p.Schema, &p.Name,
+		&p.CreateDate, &p.ModifyDate); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // StoredProcedureByName returns one user stored procedure by schema and
@@ -211,7 +192,8 @@ func (d *Database) StoredProcedureByName(ctx context.Context, schema, name strin
 	if err := requireSchema("stored procedure by name", schema, name); err != nil {
 		return nil, err
 	}
-	procs, err := d.storedProceduresWhere(ctx, "AND SCHEMA_NAME(p.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND p.name = @p2", []any{schema, name})
+	procs, err := moduleListWhere(ctx, d, "stored procs", userProcedures, "",
+		"AND SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND o.name = @p2", []any{schema, name}, scanStoredProcedure)
 	if err != nil {
 		return nil, fmt.Errorf("gosmo: find stored procedure %s in %q: %w", qualifiedName(schema, name), d.Name, err)
 	}
@@ -259,36 +241,11 @@ func (d *Database) CreateStoredProcedure(ctx context.Context, req CreateStoredPr
 // types 'P'/'PC' (SQL/CLR stored procedure), matching what sys.procedures
 // itself documents — extended stored procedures ('X', e.g. xp_cmdshell) are
 // a distinct object kind and excluded. The "sys" schema is identical in every
-// database on a server, so this only needs loading once per connection.
-func (d *Database) SystemStoredProcedures(ctx context.Context) ([]*StoredProcedure, error) {
-	return d.systemStoredProceduresWhere(ctx, "", nil)
-}
-
-// SystemStoredProceduresFiltered returns the system stored procedures an
-// ObjectFilter matches, narrowed by the server. An empty filter is
-// SystemStoredProcedures.
-func (d *Database) SystemStoredProceduresFiltered(ctx context.Context, filter ObjectFilter) ([]*StoredProcedure, error) {
-	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.systemStoredProceduresWhere(ctx, where, args)
-}
-
-func (d *Database) systemStoredProceduresWhere(ctx context.Context, where string, args []any) ([]*StoredProcedure, error) {
-	q := `
-SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name,
-       o.create_date, o.modify_date
-FROM   sys.all_objects o
-WHERE  o.type IN ('P','PC') AND o.is_ms_shipped = 1 AND SCHEMA_NAME(o.schema_id) = 'sys' ` + where + `
-ORDER  BY o.name`
-
-	rows, err := d.query(ctx, q, args...)
-	return scanRows(rows, err, fmt.Sprintf("list system stored procs in %q", d.Name), func(scan func(...any) error) (*StoredProcedure, error) {
-		p := &StoredProcedure{db: d}
-		if err := scan(&p.ObjectID, &p.Schema, &p.Name,
-			&p.CreateDate, &p.ModifyDate); err != nil {
-			return nil, err
-		}
-		return p, nil
-	})
+// database on a server, so this only needs loading once per connection. The
+// zero ObjectFilter returns every one.
+func (d *Database) SystemStoredProcedures(ctx context.Context, filter ObjectFilter) ([]*StoredProcedure, error) {
+	where, args := filter.clause(moduleFilterColumns, 1)
+	return moduleListWhere(ctx, d, "system stored procs", systemProcedures, "", where, args, scanStoredProcedure)
 }
 
 // -- Parameters ----------------------------------------------------------------

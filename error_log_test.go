@@ -44,7 +44,7 @@ func TestErrorLogTypeValid(t *testing.T) {
 // of xp_readerrorlog's raw complaint.
 func TestReadLogRejectsUnknownType(t *testing.T) {
 	s := &Server{}
-	if _, err := s.ReadLog(context.Background(), ErrorLogType(7), 0); err == nil {
+	if _, err := s.ReadLog(context.Background(), ErrorLogType(7), 0, LogSearch{}); err == nil {
 		t.Fatal("ReadLog with log type 7 returned no error")
 	}
 	if _, err := s.EnumErrorLogs(context.Background(), ErrorLogType(7)); err == nil {

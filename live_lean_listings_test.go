@@ -91,7 +91,7 @@ func TestLiveLeanListings(t *testing.T) {
 	})
 
 	t.Run("the listings still list what they listed", func(t *testing.T) {
-		views, err := d.Views(ctx)
+		views, err := d.Views(ctx, ObjectFilter{})
 		if err != nil {
 			t.Fatalf("Views: %v", err)
 		}
@@ -102,11 +102,11 @@ func TestLiveLeanListings(t *testing.T) {
 		if !slices.Equal(names, []string{"lean_enc", "lean_v"}) {
 			t.Errorf("views = %v, want the encrypted one too", names)
 		}
-		procs, err := d.StoredProcedures(ctx)
+		procs, err := d.StoredProcedures(ctx, ObjectFilter{})
 		if err != nil || len(procs) != 1 || procs[0].Name != "lean_p" {
 			t.Errorf("StoredProcedures = %v, %v", procs, err)
 		}
-		fns, err := d.UserDefinedFunctions(ctx)
+		fns, err := d.UserDefinedFunctions(ctx, ObjectFilter{})
 		if err != nil || len(fns) != 2 {
 			t.Errorf("UserDefinedFunctions = %d, %v; want lean_f and the predicate", len(fns), err)
 		}
@@ -114,7 +114,7 @@ func TestLiveLeanListings(t *testing.T) {
 		if err != nil || len(trs) != 1 || trs[0].Name != "lean_tr" || !slices.Equal(trs[0].Events, []string{"INSERT"}) {
 			t.Errorf("Triggers = %+v, %v", trs, err)
 		}
-		sys, err := d.SystemStoredProcedures(ctx)
+		sys, err := d.SystemStoredProcedures(ctx, ObjectFilter{})
 		if err != nil || len(sys) < 500 {
 			t.Errorf("SystemStoredProcedures = %d, %v; want the shipped hundreds", len(sys), err)
 		}

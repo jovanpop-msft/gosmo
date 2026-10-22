@@ -330,8 +330,8 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Active sessions         | `srv.ActiveSessions(ctx, gosmo.UserSessionsOnly)` (or `AllSessions`) |
 | Own blocked requests    | `srv.BlockedRequests(ctx, os.Getpid())` — this client's pooled sessions waiting on another, with the blocker |
 | Kill session            | `srv.KillSession(ctx, id)`                      |
-| Error log               | `srv.ReadLog(ctx, logType, n)` / `srv.ReadLogFiltered(ctx, logType, n, search)` / `srv.EnumErrorLogs(ctx, logType)` / `srv.CycleLog(ctx, logType)` — see [Error log](#error-log) |
-| Database Mail           | `srv.MailAccounts(ctx)` / `srv.MailAccountByName(ctx, name)` / `srv.MailProfiles(ctx)` / `srv.MailProfileByName(ctx, name)` (each with its ordered `Accounts`) / `srv.MailPrincipalProfiles(ctx)` (SID 0x00 = public) / `srv.MailConfiguration(ctx)` / `srv.MailStatus(ctx)` (`MailDisabled` while 'Database Mail XPs' is 0, not an error) / `srv.MailQueues(ctx)` (VIEW SERVER STATE) / `srv.MailItems(ctx, gosmo.MailItemFilter{...})` / `srv.MailItemByID(ctx, id)` / `srv.MailEvents(ctx, gosmo.MailEventFilter{...})`. Writes: `srv.CreateMailAccount(ctx, req)` / `MailAccountRef(name).Alter(ctx, gosmo.MailAccountOptions{...})` (nil `Credentials` keeps the stored user and password) / `.Drop(ctx)`; `srv.CreateMailProfile(ctx, req)` / `MailProfileRef(name).Alter` / `.Drop` / `.SetAccounts(ctx, ordered)` / `.Grant(ctx, principal, gosmo.MailDefaultProfile)` (or `MailNotDefaultProfile`) / `.SetGrantDefault` / `.Revoke`; `srv.SetMailConfiguration(ctx, opts)`; `srv.StartDatabaseMail(ctx)` / `StopDatabaseMail`; `srv.SendMail(ctx, gosmo.MailMessage{Profile, To, Subject, Body})` → mailitem_id (never retried); `srv.DeleteMailItems(ctx, before, status)` / `DeleteMailLog(ctx, before, eventType)`. The log also reads as `ReadLog(ctx, gosmo.ErrorLogDatabaseMail, 0)`. Scripts: `ScriptMailAccount` / `ScriptMailProfile` / `ScriptDatabaseMail`, the password as `<insert password here>` (also under `WithScript` and to a statement observer) — msdb permission, not sysadmin; see `database_mail.go`, `database_mail_write.go`, `database_mail_service.go` |
+| Error log               | `srv.ReadLog(ctx, logType, n, search)` (zero `LogSearch` = whole file) / `srv.EnumErrorLogs(ctx, logType)` / `srv.CycleLog(ctx, logType)` — see [Error log](#error-log) |
+| Database Mail           | `srv.MailAccounts(ctx)` / `srv.MailAccountByName(ctx, name)` / `srv.MailProfiles(ctx)` / `srv.MailProfileByName(ctx, name)` (each with its ordered `Accounts`) / `srv.MailPrincipalProfiles(ctx)` (SID 0x00 = public) / `srv.MailConfiguration(ctx)` / `srv.MailStatus(ctx)` (`MailDisabled` while 'Database Mail XPs' is 0, not an error) / `srv.MailQueues(ctx)` (VIEW SERVER STATE) / `srv.MailItems(ctx, gosmo.MailItemFilter{...})` / `srv.MailItemByID(ctx, id)` / `srv.MailEvents(ctx, gosmo.MailEventFilter{...})`. Writes: `srv.CreateMailAccount(ctx, req)` / `MailAccountRef(name).Alter(ctx, gosmo.MailAccountOptions{...})` (nil `Credentials` keeps the stored user and password) / `.Drop(ctx)`; `srv.CreateMailProfile(ctx, req)` / `MailProfileRef(name).Alter` / `.Drop` / `.SetAccounts(ctx, ordered)` / `.Grant(ctx, principal, gosmo.MailDefaultProfile)` (or `MailNotDefaultProfile`) / `.SetGrantDefault` / `.Revoke`; `srv.SetMailConfiguration(ctx, opts)`; `srv.StartDatabaseMail(ctx)` / `StopDatabaseMail`; `srv.SendMail(ctx, gosmo.MailMessage{Profile, To, Subject, Body})` → mailitem_id (never retried); `srv.DeleteMailItems(ctx, before, status)` / `DeleteMailLog(ctx, before, eventType)`. The log also reads as `ReadLog(ctx, gosmo.ErrorLogDatabaseMail, 0, gosmo.LogSearch{})`. Scripts: `ScriptMailAccount` / `ScriptMailProfile` / `ScriptDatabaseMail`, the password as `<insert password here>` (also under `WithScript` and to a statement observer) — msdb permission, not sysadmin; see `database_mail.go`, `database_mail_write.go`, `database_mail_service.go` |
 | Create login (safe)     | `srv.CreateLogin(ctx, gosmo.CreateLoginRequest{Name, Password, Source, ...})` — SQL, Windows, external provider, certificate or asymmetric key |
 | Authentication mode     | `srv.SecurityInfo(ctx)`                       |
 | Server-level permissions | `srv.ServerPermissions(ctx)` / `srv.ApplyPermission(ctx, verb, gosmo.Securable{Class: gosmo.SecurableServer}, perm, principal, opts)` / `srv.ServerPermissionNames()` |
@@ -377,13 +377,13 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Is a system database             | `db.IsSystem()` — derived from `db.ID`, so false on a `DatabaseRef` handle, `master` included |
 | Is a database snapshot           | `db.IsSnapshot()` — derived from `db.SourceDatabaseID`; see [Database snapshots](#database-snapshots) |
 | Parent server                    | `db.Server()` — a back-pointer, so still a method |
-| `Database.Tables`               | `db.Tables(ctx)` / `db.TablesBySchema(ctx, schema)` |
-| One family of tables (System, FileTables, External, Graph) | `db.TablesOfKind(ctx, kind)` / `db.TablesOfKindFiltered(ctx, kind, f)` / `db.TableKindsPresent(ctx)` — see [Table kinds](#table-kinds) |
+| `Database.Tables`               | `db.Tables(ctx, gosmo.TableQuery{Kind, Filter})` (zero = every user table) / `db.TablesBySchema(ctx, schema)` |
+| One family of tables (System, FileTables, External, Graph) | `db.Tables(ctx, gosmo.TableQuery{Kind: kind})` / `db.TableKindsPresent(ctx)` — see [Table kinds](#table-kinds) |
 | Bulk table/view + column snapshot | `db.Catalog(ctx)` (user objects) / `db.SystemCatalog(ctx)` (`sys` schema); `Catalog.Functions` holds the table-valued functions (`IF`/`TF`/`FT`) and their result columns, kept out of `Objects`; `Catalog.Aggregates` the user-defined (CLR, `AF`) aggregates and their return types |
-| `Database.Views`                | `db.Views(ctx)` / `db.ViewByName(ctx, schema, name)` / `db.ViewRef(schema, name)` (no-I/O handle) / `v.Drop(ctx)` / `v.Triggers(ctx)` / `v.Columns(ctx)`; an indexed view's `v.Indexes` / `IndexByName` / `IndexRef` / `CreateIndex` / `RebuildAllIndexes` and `v.Statistics` / `StatisticByName` / `StatisticRef` / `CreateStatistic` / `UpdateAllStatistics` — a table's, through a carrier `Table`; the results answer `View()`, and `Table()` nil (see `view_indexes.go`) |
-| `Database.StoredProcedures`     | `db.StoredProcedures(ctx)` / `db.StoredProcedureByName(ctx, schema, name)` / `db.StoredProcedureRef(schema, name)` (no-I/O handle) / `db.CreateStoredProcedure(ctx, req)` / `p.Drop(ctx)` |
-| `Database.UserDefinedFunctions` | `db.UserDefinedFunctions(ctx)` (T-SQL and CLR; `f.FuncType` is a `FunctionType` — `IsScalar()`, `IsCLR()`) / `db.UserDefinedFunctionRef(schema, name)` (no-I/O handle) / `f.Drop(ctx)` |
-| System Views/Procedures/Functions | `db.SystemViews(ctx)` / `db.SystemStoredProcedures(ctx)` / `db.SystemFunctions(ctx)` |
+| `Database.Views`                | `db.Views(ctx, f)` / `db.ViewByName(ctx, schema, name)` / `db.ViewRef(schema, name)` (no-I/O handle) / `v.Drop(ctx)` / `v.Triggers(ctx)` / `v.Columns(ctx)`; an indexed view's `v.Indexes` / `IndexByName` / `IndexRef` / `CreateIndex` / `RebuildAllIndexes` and `v.Statistics` / `StatisticByName` / `StatisticRef` / `CreateStatistic` / `UpdateAllStatistics` — a table's, through a carrier `Table`; the results answer `View()`, and `Table()` nil (see `view_indexes.go`) |
+| `Database.StoredProcedures`     | `db.StoredProcedures(ctx, f)` / `db.StoredProcedureByName(ctx, schema, name)` / `db.StoredProcedureRef(schema, name)` (no-I/O handle) / `db.CreateStoredProcedure(ctx, req)` / `p.Drop(ctx)` |
+| `Database.UserDefinedFunctions` | `db.UserDefinedFunctions(ctx, f)` (T-SQL and CLR; `f.FuncType` is a `FunctionType` — `IsScalar()`, `IsCLR()`) / `db.UserDefinedFunctionRef(schema, name)` (no-I/O handle) / `f.Drop(ctx)` |
+| System Views/Procedures/Functions | `db.SystemViews(ctx, f)` / `db.SystemStoredProcedures(ctx, f)` / `db.SystemFunctions(ctx, f)` |
 | A module's T-SQL text           | `v.Definition(ctx)` / `p.Definition(ctx)` / `f.Definition(ctx)` / `tr.Definition(ctx)` (DML trigger) / `r.Definition(ctx)` / `df.Definition(ctx)` — read by name, so a `Ref` handle is enough; `""` for an encrypted or CLR module, `ErrNotFound` for a missing one or one of another kind. Listings and `*ByName` carry no text: the `sys` schema alone ships about 1,400 procedures |
 | `Database.Schemas`              | `db.Schemas(ctx)` / `db.SchemaByName(ctx, name)` / `db.SchemaRef(name)` / `db.CreateSchema(ctx, req)` / `schema.ObjectCount(ctx)` / `schema.ObjectCountsByType(ctx)` |
 | `Database.Users`                | `db.Users(ctx)` / `db.UserByName(ctx, name)` / `db.UserRef(name)` (no-I/O handle) / `db.CreateUser(ctx, gosmo.CreateUserRequest{Name, Kind, ...})` — for login, with password (contained), without login, Windows, certificate, asymmetric key, external provider |
@@ -405,7 +405,7 @@ The instance and database halves pair up: `ServerResourceStat` and
 | Rename a schema-scoped object | `x.Rename(ctx, newName)` on its handle — table, view, procedure, function, trigger, sequence, synonym, rule, default, alias type; a constraint is `t.RenameConstraint(ctx, name, newName)` |
 | Move an object to another schema | `x.Transfer(ctx, targetSchema)` on its handle — `ALTER SCHEMA ... TRANSFER`, which `sp_rename` cannot do; every family above but the trigger, plus the table and CLR types, XML schema collections and queues |
 | Parameters of a procedure or function | `db.Parameters(ctx, schema, name)` → `[]*Parameter` |
-| Filtered listings                | `db.TablesFiltered(ctx, f)` / `ViewsFiltered` / `StoredProceduresFiltered` / `UserDefinedFunctionsFiltered` (and the `System...` forms) — see [Filtering a listing](#filtering-a-listing) |
+| Filtered listings                | every listing above that takes an `ObjectFilter` `f` (a zero one narrows nothing) — see [Filtering a listing](#filtering-a-listing) |
 | What may this login do here?     | `db.Capabilities(ctx)` → `*DatabaseCapabilities` |
 | Partition functions             | `db.PartitionFunctions(ctx)` / `db.PartitionFunctionByName(ctx, name)` / `db.PartitionFunctionRef(name)` |
 | Partition schemes               | `db.PartitionSchemes(ctx)` / `db.PartitionSchemeByName(ctx, name)` / `db.PartitionSchemeRef(name)` |
@@ -482,13 +482,15 @@ The instance and database halves pair up: `ServerResourceStat` and
 SSMS files four families of tables into their own folders under Tables —
 System Tables, FileTables, External Tables and Graph Tables — and lists the
 rest directly under Tables. Every one of them is an ordinary `sys.tables`
-row distinguished by a flag, so `db.Tables(ctx)` and `db.TablesFiltered(ctx, f)`
-keep returning all of them: a listing that silently omitted one would
-disagree with the catalog. `TablesOfKind` is what a caller building a *tree*
-asks instead, so each table appears exactly once, under its own folder.
+row distinguished by a flag, so `db.Tables(ctx, gosmo.TableQuery{})` — kind
+`TableKindAll`, the zero value — keeps returning all of them: a listing that
+silently omitted one would disagree with the catalog. A caller building a
+*tree* asks for one `Kind` at a time instead, so each table appears exactly
+once, under its own folder.
 
 | `TableKind`          | Selects                                              |
 | -------------------- | ---------------------------------------------------- |
+| `TableKindAll`       | not ms-shipped: every family but System (the zero value) |
 | `TableKindUser`      | the residue — not ms-shipped, and none of the other four |
 | `TableKindSystem`    | `is_ms_shipped = 1`                                  |
 | `TableKindFileTable` | `is_filetable = 1`                                   |
@@ -496,8 +498,8 @@ asks instead, so each table appears exactly once, under its own folder.
 | `TableKindGraph`     | `is_node = 1 OR is_edge = 1`                         |
 
 ```go
-user, _ := db.TablesOfKind(ctx, gosmo.TableKindUser)
-graph, err := db.TablesOfKindFiltered(ctx, gosmo.TableKindGraph, gosmo.ObjectFilter{...})
+user, _ := db.Tables(ctx, gosmo.TableQuery{Kind: gosmo.TableKindUser})
+graph, err := db.Tables(ctx, gosmo.TableQuery{Kind: gosmo.TableKindGraph, Filter: gosmo.ObjectFilter{...}})
 
 p, _ := db.TableKindsPresent(ctx) // which sub-folders to show, in one query
 if p.FileTable { /* ... */ }
@@ -505,7 +507,7 @@ if p.FileTable { /* ... */ }
 
 `is_node`/`is_edge` are SQL Server 2017 columns. Below 2017 the graph
 predicate is a constant false — so `TableKindUser` still works and
-`TableKindsPresent().Graph` is false — but `TablesOfKind(TableKindGraph)` is
+`TableKindsPresent().Graph` is false — but a `TableKindGraph` listing is
 refused with `ErrUnsupportedVersion` rather than answered with an empty list
 that would read as "this database has none".
 
@@ -726,19 +728,19 @@ An `ObjectFilter` narrows a catalog listing at the server rather than in the
 caller — the SSMS Object Explorer "Filter Settings" dialog.
 
 ```go
-tables, _ := db.TablesFiltered(ctx, gosmo.ObjectFilter{
+tables, _ := db.Tables(ctx, gosmo.TableQuery{Filter: gosmo.ObjectFilter{
     Name:    []gosmo.TextCriterion{{Op: gosmo.TextContains, Value: "order"}},
     Schema:  []gosmo.TextCriterion{{Op: gosmo.TextNotEquals, Value: "staging"}},
     Created: []gosmo.DateCriterion{{Op: gosmo.DateAfter, Day: cutoff}},
-})
+}})
 ```
 
 | Family                 | Method                                    |
 | ---------------------- | ----------------------------------------- |
-| Tables                 | `db.TablesFiltered(ctx, f)`                    |
-| Views                  | `db.ViewsFiltered(ctx, f)` / `db.SystemViewsFiltered(ctx, f)` |
-| Stored procedures      | `db.StoredProceduresFiltered(ctx, f)` / `db.SystemStoredProceduresFiltered(ctx, f)` |
-| Functions              | `db.UserDefinedFunctionsFiltered(ctx, f)` / `db.SystemFunctionsFiltered(ctx, f)` |
+| Tables                 | `db.Tables(ctx, gosmo.TableQuery{Filter: f})` |
+| Views                  | `db.Views(ctx, f)` / `db.SystemViews(ctx, f)` |
+| Stored procedures      | `db.StoredProcedures(ctx, f)` / `db.SystemStoredProcedures(ctx, f)` |
+| Functions              | `db.UserDefinedFunctions(ctx, f)` / `db.SystemFunctions(ctx, f)` |
 
 Criteria are AND-ed, never OR-ed, and a zero `ObjectFilter` narrows nothing —
 the unfiltered listing is the same call with an empty one (`f.Empty()`
@@ -2166,15 +2168,15 @@ back-pointer to its database.
 | -------------------------------- | -------------------------------------------- |
 | Management → SQL Server Logs     | `srv.EnumErrorLogs(ctx, gosmo.ErrorLogSQLServer)` → `[]*ErrorLogFile` |
 | Agent → Error Logs               | `srv.EnumErrorLogs(ctx, gosmo.ErrorLogAgent)`      |
-| Open a log                       | `srv.ReadLog(ctx, logType, n)` → `[]*ErrorLogEntry` |
-| ... filtered at the server        | `srv.ReadLogFiltered(ctx, logType, n, gosmo.LogSearch{Text1: ..., From: ..., To: ...})` |
+| Open a log                       | `srv.ReadLog(ctx, logType, n, gosmo.LogSearch{})` → `[]*ErrorLogEntry` |
+| ... filtered at the server        | `srv.ReadLog(ctx, logType, n, gosmo.LogSearch{Text1: ..., From: ..., To: ...})` |
 | ... the SQL Server log, shorthand | `srv.ReadErrorLog(ctx, n)`                        |
 | Recycle the log                  | `srv.CycleLog(ctx, logType)` (`srv.CycleErrorLog(ctx)` is the SQL Server-log shorthand) |
 
 `ErrorLogType` is the log-type argument `xp_readerrorlog` and
 `sp_enumerrorlogs` themselves take, so it passes straight through — which is
-why the Agent log is readable through the same two methods rather than a
-second pair of them. Log number 0 is the current log, 1 the most recent
+why the Agent log is readable through the same methods rather than a
+second set of them. Log number 0 is the current log, 1 the most recent
 archive, and so on.
 
 `LogSearch` is `xp_readerrorlog`'s own arguments 3-6, with its semantics:
@@ -2182,7 +2184,7 @@ archive, and so on.
 two alternatives, and `From`/`To` bound the entry timestamp. Filtering at the
 server rather than in the caller is what makes the current log usable on a
 busy instance, where it runs to tens of thousands of entries. A zero
-`LogSearch` reads the whole file, which is what `ReadLog` does.
+`LogSearch` reads the whole file.
 
 ### Server filesystem
 

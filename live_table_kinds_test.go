@@ -63,7 +63,7 @@ func TestLiveTableKinds(t *testing.T) {
 	}
 
 	t.Run("the kinds partition sys.tables", func(t *testing.T) {
-		all, err := d.Tables(ctx)
+		all, err := d.Tables(ctx, TableQuery{})
 		if err != nil {
 			t.Fatalf("Tables: %v", err)
 		}
@@ -73,9 +73,9 @@ func TestLiveTableKinds(t *testing.T) {
 			kinds = append(kinds, TableKindGraph)
 		}
 		for _, k := range kinds {
-			listed, err := d.TablesOfKind(ctx, k)
+			listed, err := d.Tables(ctx, TableQuery{Kind: k})
 			if err != nil {
-				t.Fatalf("TablesOfKind(%s): %v", k, err)
+				t.Fatalf("Tables(%s): %v", k, err)
 			}
 			for _, name := range tableNames(listed) {
 				seen[name]++
@@ -100,9 +100,9 @@ func TestLiveTableKinds(t *testing.T) {
 		if !graphOK {
 			t.Skipf("major %d has no is_node/is_edge", major)
 		}
-		users, err := d.TablesOfKind(ctx, TableKindUser)
+		users, err := d.Tables(ctx, TableQuery{Kind: TableKindUser})
 		if err != nil {
-			t.Fatalf("TablesOfKind(user): %v", err)
+			t.Fatalf("Tables(user): %v", err)
 		}
 		if !hasName(users, "dbo.tk_plain") {
 			t.Errorf("user tables %v do not include dbo.tk_plain", tableNames(users))
@@ -113,9 +113,9 @@ func TestLiveTableKinds(t *testing.T) {
 			}
 		}
 
-		graph, err := d.TablesOfKind(ctx, TableKindGraph)
+		graph, err := d.Tables(ctx, TableQuery{Kind: TableKindGraph})
 		if err != nil {
-			t.Fatalf("TablesOfKind(graph): %v", err)
+			t.Fatalf("Tables(graph): %v", err)
 		}
 		for _, name := range []string{"dbo.tk_node", "dbo.tk_edge"} {
 			if !hasName(graph, name) {
@@ -133,9 +133,9 @@ func TestLiveTableKinds(t *testing.T) {
 		if graphOK {
 			t.Skipf("major %d has the graph columns", major)
 		}
-		_, err := d.TablesOfKind(ctx, TableKindGraph)
+		_, err := d.Tables(ctx, TableQuery{Kind: TableKindGraph})
 		if !errors.Is(err, ErrUnsupportedVersion) {
-			t.Errorf("TablesOfKind(graph) on major %d = %v, want ErrUnsupportedVersion", major, err)
+			t.Errorf("Tables(graph) on major %d = %v, want ErrUnsupportedVersion", major, err)
 		}
 	})
 
@@ -158,9 +158,9 @@ func TestLiveTableKinds(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DatabaseByName(msdb): %v", err)
 		}
-		system, err := msdb.TablesOfKind(ctx, TableKindSystem)
+		system, err := msdb.Tables(ctx, TableQuery{Kind: TableKindSystem})
 		if err != nil {
-			t.Fatalf("TablesOfKind(system): %v", err)
+			t.Fatalf("Tables(system): %v", err)
 		}
 		if len(system) < 50 {
 			t.Fatalf("msdb reports %d system tables, want the catalog's own hundred-odd", len(system))
@@ -170,7 +170,7 @@ func TestLiveTableKinds(t *testing.T) {
 				t.Errorf("%s.%s came back from the system listing with IsSystem false", tb.Schema, tb.Name)
 			}
 		}
-		users, err := msdb.Tables(ctx)
+		users, err := msdb.Tables(ctx, TableQuery{})
 		if err != nil {
 			t.Fatalf("Tables(msdb): %v", err)
 		}
@@ -199,9 +199,9 @@ func TestLiveTableKinds(t *testing.T) {
 		}
 		defer dropFS()
 
-		fts, err := fdb.TablesOfKind(ctx, TableKindFileTable)
+		fts, err := fdb.Tables(ctx, TableQuery{Kind: TableKindFileTable})
 		if err != nil {
-			t.Fatalf("TablesOfKind(filetable): %v", err)
+			t.Fatalf("Tables(filetable): %v", err)
 		}
 		if !hasName(fts, "dbo.tk_files") {
 			t.Fatalf("filetables %v do not include dbo.tk_files", tableNames(fts))
@@ -209,9 +209,9 @@ func TestLiveTableKinds(t *testing.T) {
 		if !fts[0].IsFileTable {
 			t.Errorf("dbo.tk_files came back with IsFileTable false")
 		}
-		users, err := fdb.TablesOfKind(ctx, TableKindUser)
+		users, err := fdb.Tables(ctx, TableQuery{Kind: TableKindUser})
 		if err != nil {
-			t.Fatalf("TablesOfKind(user): %v", err)
+			t.Fatalf("Tables(user): %v", err)
 		}
 		if hasName(users, "dbo.tk_files") {
 			t.Errorf("the filetable is listed as a plain user table too: %v", tableNames(users))

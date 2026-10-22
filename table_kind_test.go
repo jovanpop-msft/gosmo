@@ -39,6 +39,22 @@ func TestUserTableClauseExcludesEveryOtherKind(t *testing.T) {
 	}
 }
 
+// The zero TableQuery is what the old unfiltered Tables(ctx) answered: every
+// table SQL Server did not ship, the four non-system families together. Were
+// the zero kind TableKindUser, Tables(ctx, TableQuery{}) would quietly drop
+// every FileTable, external and graph table — a listing that disagrees with
+// the catalog.
+func TestZeroTableQueryListsEveryUserTable(t *testing.T) {
+	var q TableQuery
+	if q.Kind != TableKindAll {
+		t.Fatalf("zero TableQuery.Kind = %s, want all", q.Kind)
+	}
+	got := kindClause(int(SQLServer2017), q.Kind)
+	if got != userTablesClause {
+		t.Errorf("TableKindAll clause = %q, want %q", got, userTablesClause)
+	}
+}
+
 // On an instance with no is_node/is_edge the predicate has to be false for
 // every row rather than name a column that is not there — naming it fails the
 // whole read, which is what the 2016 floor makes routine.

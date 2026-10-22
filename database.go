@@ -610,22 +610,34 @@ func (d *Database) CreateSchema(ctx context.Context, req CreateSchemaRequest) (*
 
 // -- Tables --------------------------------------------------------------------
 
-// Tables returns all user tables in the database.
-func (d *Database) Tables(ctx context.Context) ([]*Table, error) {
-	return d.tablesWhere(ctx, userTablesClause, nil)
+// TableQuery selects which tables Tables returns. The zero value is every
+// table SQL Server did not ship (TableKindAll), unfiltered.
+type TableQuery struct {
+	// Kind narrows the listing to one family; see TableKind.
+	Kind TableKind
+	// Filter narrows it at the server; the zero value matches every table.
+	Filter ObjectFilter
+}
+
+// Tables returns the tables a TableQuery selects, narrowed by the server
+// rather than by the caller. Tables(ctx, TableQuery{}) is every user table.
+//
+// TableKindGraph is refused below SQL Server 2017 (errors.Is
+// ErrUnsupportedVersion) rather than answered with an empty list.
+func (d *Database) Tables(ctx context.Context, q TableQuery) ([]*Table, error) {
+	if q.Kind == TableKindGraph {
+		if err := d.requireGraphTables(); err != nil {
+			return nil, err
+		}
+	}
+	where, args := q.Filter.clause(tableFilterColumns, 1)
+	return d.tablesWhere(ctx, kindClause(d.serverMajorVersion(), q.Kind)+" "+where, args)
 }
 
 // userTablesClause is the "not SQL Server's own" test every listing that is
-// not asked for a specific TableKind applies. The kind listings supply their
-// own is_ms_shipped test instead — see kindClause.
+// not asked for a specific TableKind applies (TableKindAll's clause). The kind
+// listings supply their own is_ms_shipped test instead — see kindClause.
 const userTablesClause = "AND t.is_ms_shipped = 0"
-
-// TablesFiltered returns the user tables an ObjectFilter matches, narrowed by
-// the server rather than by the caller. An empty filter is Tables.
-func (d *Database) TablesFiltered(ctx context.Context, filter ObjectFilter) ([]*Table, error) {
-	where, args := filter.clause(tableFilterColumns, 1)
-	return d.tablesWhere(ctx, userTablesClause+" "+where, args)
-}
 
 // tableFilterColumns maps an ObjectFilter onto sys.tables as tablesWhere
 // aliases it.

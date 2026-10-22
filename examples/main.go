@@ -108,7 +108,7 @@ func main() {
 			{Name: "Status", DataType: gosmo.DataTypeVarChar, MaxLength: 20, IsNullable: false, DefaultValue: "'PENDING'"},
 		},
 	}))
-	for _, t := range demo.Value(db.Tables(ctx)) {
+	for _, t := range demo.Value(db.Tables(ctx, gosmo.TableQuery{})) {
 		rc, _ := t.RowCount(ctx)
 		fmt.Printf("  %s  rows=%d\n", t.FullName(), rc)
 	}

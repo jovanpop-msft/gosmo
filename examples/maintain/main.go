@@ -192,7 +192,7 @@ func main() {
 	// One round trip for every table, for a tree or grid that needs them all.
 	counts := demo.Value(db.TableRowCounts(ctx))
 	sizes := demo.Value(db.TableSpaceUsedAll(ctx))
-	for _, t := range demo.Value(db.Tables(ctx)) {
+	for _, t := range demo.Value(db.Tables(ctx, gosmo.TableQuery{})) {
 		fmt.Printf("  %-20s rows=%-8d reserved=%d KB\n",
 			t.FullName(), counts[t.ObjectID], sizes[t.ObjectID].ReservedKB)
 	}

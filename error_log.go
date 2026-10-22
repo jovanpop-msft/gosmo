@@ -161,17 +161,8 @@ func parseErrorLogFileDate(s string) time.Time {
 	return time.Time{}
 }
 
-// ReadLog reads one log file of the given family.
-// Pass logNumber=0 for the current log, 1 for the first archived log, etc.
-//
-// Which of an entry's Process and ErrorLevel is populated follows logType —
-// see ErrorLogEntry.
-func (s *Server) ReadLog(ctx context.Context, logType ErrorLogType, logNumber int) ([]*ErrorLogEntry, error) {
-	return s.ReadLogFiltered(ctx, logType, logNumber, LogSearch{})
-}
-
 // LogSearch narrows a log read at the server. Every field is optional, and a
-// zero LogSearch reads the whole file — what ReadLog does.
+// zero LogSearch reads the whole file.
 //
 // These are xp_readerrorlog's own arguments 3-6, with its semantics: Text1 and
 // Text2 are case-insensitive substrings AND-ed together (not two alternatives),
@@ -188,10 +179,14 @@ func (f LogSearch) empty() bool {
 	return f.Text1 == "" && f.Text2 == "" && f.From.IsZero() && f.To.IsZero()
 }
 
-// ReadLogFiltered reads one log file of the given family, keeping only
-// the entries the search matches. It carries the read every other method here
-// delegates to.
-func (s *Server) ReadLogFiltered(ctx context.Context, logType ErrorLogType, logNumber int, search LogSearch) ([]*ErrorLogEntry, error) {
+// ReadLog reads one log file of the given family, keeping only the entries
+// the search matches; a zero LogSearch keeps them all. Pass logNumber=0 for
+// the current log, 1 for the first archived log, etc. It carries the read
+// every other method here delegates to.
+//
+// Which of an entry's Process and ErrorLevel is populated follows logType —
+// see ErrorLogEntry.
+func (s *Server) ReadLog(ctx context.Context, logType ErrorLogType, logNumber int, search LogSearch) ([]*ErrorLogEntry, error) {
 	if !logType.valid() {
 		return nil, invalidf("gosmo: read error log: unknown log type %d", int(logType))
 	}
@@ -262,7 +257,7 @@ func readErrorLogCall(logType ErrorLogType, logNumber int, search LogSearch) (st
 //
 // It is ReadLog fixed to the SQL Server log family.
 func (s *Server) ReadErrorLog(ctx context.Context, logNumber int) ([]*ErrorLogEntry, error) {
-	return s.ReadLog(ctx, ErrorLogSQLServer, logNumber)
+	return s.ReadLog(ctx, ErrorLogSQLServer, logNumber, LogSearch{})
 }
 
 // cycleLogStatements is the procedure each log family cycles with. The
@@ -322,7 +317,7 @@ func (s *Server) enumMailLog(ctx context.Context) ([]*ErrorLogFile, error) {
 	return []*ErrorLogFile{f}, nil
 }
 
-// readMailLog is ReadLogFiltered for ErrorLogDatabaseMail, oldest first as
+// readMailLog is ReadLog for ErrorLogDatabaseMail, oldest first as
 // xp_readerrorlog reads a file. The search keeps xp_readerrorlog's meaning:
 // Text1 and Text2 are substrings of the description AND-ed together, From
 // and To bound log_date inclusively.

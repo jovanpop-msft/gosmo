@@ -122,9 +122,11 @@ func (sw *sweep) call(label string, fn func() error) {
 }
 
 // reflectSweep calls every exported XxxContext(ctx) (…, error) method on recv
-// that sweepSkip does not name. Methods taking arguments beyond the context
-// are driven by hand further down; this half is what keeps a newly added
-// listing covered without anyone remembering to add it here.
+// that sweepSkip does not name — and every Xxx(ctx, q) whose q is one of
+// sweepZeroQueries, with q's zero value, which asks for everything. Methods
+// taking other arguments beyond the context are driven by hand further down;
+// this half is what keeps a newly added listing covered without anyone
+// remembering to add it here.
 func (sw *sweep) reflectSweep(typeName, instance string, recv any) {
 	ctxT := reflect.TypeOf((*context.Context)(nil)).Elem()
 	errT := reflect.TypeOf((*error)(nil)).Elem()
@@ -135,7 +137,13 @@ func (sw *sweep) reflectSweep(typeName, instance string, recv any) {
 	for i := 0; i < rt.NumMethod(); i++ {
 		m := rt.Method(i)
 		ft := m.Type
-		if ft.NumIn() != 2 || ft.In(1) != ctxT {
+		if ft.NumIn() < 2 || ft.In(1) != ctxT {
+			continue
+		}
+		args := []reflect.Value{rv, ctxV}
+		if ft.NumIn() == 3 && slices.Contains(sweepZeroQueries, ft.In(2)) {
+			args = append(args, reflect.Zero(ft.In(2)))
+		} else if ft.NumIn() != 2 {
 			continue
 		}
 		if ft.NumOut() == 0 || ft.Out(ft.NumOut()-1) != errT {
@@ -146,13 +154,20 @@ func (sw *sweep) reflectSweep(typeName, instance string, recv any) {
 		}
 		label := fmt.Sprintf("%s.%s [%s]", typeName, m.Name, instance)
 		sw.call(label, func() error {
-			out := m.Func.Call([]reflect.Value{rv, ctxV})
+			out := m.Func.Call(args)
 			if e := out[len(out)-1].Interface(); e != nil {
 				return e.(error)
 			}
 			return nil
 		})
 	}
+}
+
+// sweepZeroQueries are the listing arguments whose zero value means "all",
+// so a listing taking one is as reachable by reflection as a ctx-only one.
+var sweepZeroQueries = []reflect.Type{
+	reflect.TypeOf(ObjectFilter{}),
+	reflect.TypeOf(TableQuery{}),
 }
 
 // checkSkipList fails on an entry naming a method that no longer exists, so
@@ -261,11 +276,21 @@ var sweepMustCall = []string{
 
 	// Tables sub-folders (Stage E).
 	"Database.TableKindsPresent",
-	"Database.TablesOfKind(user)",
-	"Database.TablesOfKind(system)",
-	"Database.TablesOfKind(filetable)",
-	"Database.TablesOfKind(external)",
-	"Database.TablesOfKind(graph)",
+	"Database.Tables(user)",
+	"Database.Tables(system)",
+	"Database.Tables(filetable)",
+	"Database.Tables(external)",
+	"Database.Tables(graph)",
+
+	// The listings that take a filter (R3): reached by the reflective half
+	// only through sweepZeroQueries, so listed here in case that stops.
+	// Tables is not: the five entries above match it by prefix anyway.
+	"Database.Views",
+	"Database.SystemViews",
+	"Database.StoredProcedures",
+	"Database.SystemStoredProcedures",
+	"Database.UserDefinedFunctions",
+	"Database.SystemFunctions",
 
 	// Database snapshots (Stage E).
 	"Server.DatabaseSnapshots",
@@ -580,7 +605,7 @@ func TestLiveVersionSweep(t *testing.T) {
 	// Tables, and everything reached through one. Both scratch tables are
 	// swept rather than the first: a read that ignores the object it was
 	// given passes on a single-table database.
-	tables, err := d.Tables(ctx)
+	tables, err := d.Tables(ctx, TableQuery{})
 	if err != nil {
 		t.Errorf("Tables: %v — every table-level read is unreachable", err)
 	}
@@ -652,8 +677,8 @@ func TestLiveVersionSweep(t *testing.T) {
 	}
 }
 
-// sweepTableKinds drives the five table-family listings. Each takes a
-// TableKind argument, so the reflective half cannot reach any of them — and
+// sweepTableKinds drives the five table-family listings. The reflective half
+// reaches Tables only with the zero TableQuery (TableKindAll) — and
 // the graph one is the only read in the sweep that names a column absent from
 // the 2016 floor, which is what its refusal there proves.
 func sweepTableKinds(sw *sweep, d *Database) {
@@ -661,8 +686,8 @@ func sweepTableKinds(sw *sweep, d *Database) {
 		TableKindUser, TableKindSystem, TableKindFileTable,
 		TableKindExternal, TableKindGraph,
 	} {
-		sw.call("Database.TablesOfKind("+kind.String()+")", func() error {
-			_, err := d.TablesOfKind(sw.ctx, kind)
+		sw.call("Database.Tables("+kind.String()+")", func() error {
+			_, err := d.Tables(sw.ctx, TableQuery{Kind: kind})
 			return err
 		})
 	}
@@ -1219,11 +1244,11 @@ func sweepServerCalls(sw *sweep, srv *Server, info *ServerInfo) {
 			return err
 		})
 		sw.call(fmt.Sprintf("Server.ReadLog(%v)", lt), func() error {
-			_, err := srv.ReadLog(sw.ctx, lt, 0)
+			_, err := srv.ReadLog(sw.ctx, lt, 0, LogSearch{})
 			return err
 		})
-		sw.call(fmt.Sprintf("Server.ReadLogFiltered(%v)", lt), func() error {
-			_, err := srv.ReadLogFiltered(sw.ctx, lt, 0, LogSearch{Text1: "server"})
+		sw.call(fmt.Sprintf("Server.ReadLog(%v, search)", lt), func() error {
+			_, err := srv.ReadLog(sw.ctx, lt, 0, LogSearch{Text1: "server"})
 			return err
 		})
 	}

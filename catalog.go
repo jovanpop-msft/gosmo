@@ -127,9 +127,9 @@ func (d *Database) CallerDefaultSchema(ctx context.Context) (string, error) {
 // SUM, COUNT and the rest — are not objects and appear in neither catalog.
 func (d *Database) SystemCatalog(ctx context.Context) (*Catalog, error) {
 	return d.catalog(ctx, catalogAllViews,
-		"o.type = 'V' AND SCHEMA_NAME(o.schema_id) = 'sys'",
-		"o.type IN ('IF','TF','FT') AND SCHEMA_NAME(o.schema_id) = 'sys'",
-		"o.type = 'AF' AND SCHEMA_NAME(o.schema_id) = 'sys'")
+		"o.type = 'V' AND o.schema_id = 4",
+		"o.type IN ('IF','TF','FT') AND o.schema_id = 4",
+		"o.type = 'AF' AND o.schema_id = 4")
 }
 
 // catalogViews names the catalog views a catalog read selects from: the

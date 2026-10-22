@@ -15,12 +15,12 @@ import (
 func TestModuleListingsDoNotReadTheDefinition(t *testing.T) {
 	ctx := context.Background()
 	for name, list := range map[string]func(*Database) error{
-		"StoredProcedures":       func(d *Database) error { _, err := d.StoredProcedures(ctx); return err },
-		"SystemStoredProcedures": func(d *Database) error { _, err := d.SystemStoredProcedures(ctx); return err },
-		"Views":                  func(d *Database) error { _, err := d.Views(ctx); return err },
-		"SystemViews":            func(d *Database) error { _, err := d.SystemViews(ctx); return err },
-		"UserDefinedFunctions":   func(d *Database) error { _, err := d.UserDefinedFunctions(ctx); return err },
-		"SystemFunctions":        func(d *Database) error { _, err := d.SystemFunctions(ctx); return err },
+		"StoredProcedures":       func(d *Database) error { _, err := d.StoredProcedures(ctx, ObjectFilter{}); return err },
+		"SystemStoredProcedures": func(d *Database) error { _, err := d.SystemStoredProcedures(ctx, ObjectFilter{}); return err },
+		"Views":                  func(d *Database) error { _, err := d.Views(ctx, ObjectFilter{}); return err },
+		"SystemViews":            func(d *Database) error { _, err := d.SystemViews(ctx, ObjectFilter{}); return err },
+		"UserDefinedFunctions":   func(d *Database) error { _, err := d.UserDefinedFunctions(ctx, ObjectFilter{}); return err },
+		"SystemFunctions":        func(d *Database) error { _, err := d.SystemFunctions(ctx, ObjectFilter{}); return err },
 		"Triggers":               func(d *Database) error { _, err := d.Triggers(ctx); return err },
 		"Rules":                  func(d *Database) error { _, err := d.Rules(ctx); return err },
 		"Defaults":               func(d *Database) error { _, err := d.Defaults(ctx); return err },
@@ -37,6 +37,55 @@ func TestModuleListingsDoNotReadTheDefinition(t *testing.T) {
 				if q := captured.find(needle); q != "" {
 					t.Errorf("the listing reads %q:\n%s", needle, q)
 				}
+			}
+		})
+	}
+}
+
+// TestModuleListingsReadTheirSource pins S3's one module-list reader: each
+// family reads its own source and kind, orders as its scope wants, and a
+// system listing finds the sys schema by schema_id 4, which a SCHEMA_NAME()
+// comparison could not seek on. SystemCatalog's three reads do the same.
+func TestModuleListingsReadTheirSource(t *testing.T) {
+	ctx := context.Background()
+	const userOrder, systemOrder = "ORDER  BY SCHEMA_NAME(o.schema_id), o.name", "ORDER  BY o.name"
+	for name, tc := range map[string]struct {
+		list func(*Database) error
+		want []string
+	}{
+		"Views": {func(d *Database) error { _, err := d.Views(ctx, ObjectFilter{}); return err },
+			[]string{"FROM   sys.views o\nWHERE  o.is_ms_shipped = 0 ", "'IsSchemaBound'", userOrder}},
+		"SystemViews": {func(d *Database) error { _, err := d.SystemViews(ctx, ObjectFilter{}); return err },
+			[]string{"FROM   sys.all_objects o\nWHERE  o.type = 'V' AND o.is_ms_shipped = 1 AND o.schema_id = 4 ", "'IsSchemaBound'", systemOrder}},
+		"StoredProcedures": {func(d *Database) error { _, err := d.StoredProcedures(ctx, ObjectFilter{}); return err },
+			[]string{"FROM   sys.procedures o\nWHERE  o.is_ms_shipped = 0 ", userOrder}},
+		"SystemStoredProcedures": {func(d *Database) error { _, err := d.SystemStoredProcedures(ctx, ObjectFilter{}); return err },
+			[]string{"FROM   sys.all_objects o\nWHERE  o.type IN ('P','PC') AND o.is_ms_shipped = 1 AND o.schema_id = 4 ", systemOrder}},
+		"UserDefinedFunctions": {func(d *Database) error { _, err := d.UserDefinedFunctions(ctx, ObjectFilter{}); return err },
+			[]string{"o.modify_date, o.type\nFROM   sys.objects o\nWHERE  o.type IN ('FN','TF','IF','FS','FT') AND o.is_ms_shipped = 0 ", userOrder}},
+		"SystemFunctions": {func(d *Database) error { _, err := d.SystemFunctions(ctx, ObjectFilter{}); return err },
+			[]string{"o.modify_date, o.type\nFROM   sys.all_objects o\nWHERE  o.type IN ('FN','TF','IF') AND o.is_ms_shipped = 1 AND o.schema_id = 4 ", systemOrder}},
+		"Views(filtered)": {func(d *Database) error {
+			_, err := d.Views(ctx, ObjectFilter{Schema: []TextCriterion{{Op: TextEquals, Value: "s"}}})
+			return err
+		}, []string{"SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT", userOrder}},
+		"SystemCatalog": {func(d *Database) error { _, err := d.SystemCatalog(ctx); return err },
+			[]string{"o.type = 'V' AND o.schema_id = 4", "o.type IN ('IF','TF','FT') AND o.schema_id = 4", "o.type = 'AF' AND o.schema_id = 4"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := captureDatabase(t)
+			_ = tc.list(d) // SystemCatalog errors on the capture driver's single result set
+			q := captured.find("FROM")
+			if q == "" {
+				t.Fatal("no listing statement was generated")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(q, w) {
+					t.Errorf("query lacks %q:\n%s", w, q)
+				}
+			}
+			if strings.Contains(q, "= 'sys'") {
+				t.Errorf("query finds the sys schema by name:\n%s", q)
 			}
 		})
 	}
