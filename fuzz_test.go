@@ -20,6 +20,9 @@ func FuzzNames(f *testing.F) {
 		"CREATE PROCEDURE p AS SELECT 1",
 		"/* a /* b */ c */\n-- x\n  create\tview v as select 1",
 		"CREATE OR ALTER VIEW v AS SELECT 1", "'CREATE' VIEW", "CREATEVIEW",
+		"CREATE/* header */VIEW dbo.v AS SELECT 1",
+		"CREATE OR/* header */ALTER VIEW dbo.v AS SELECT 1",
+		"ALTER/* header */FUNCTION dbo.f() RETURNS int AS BEGIN RETURN 1 END",
 		`host\inst,1433`, "tcp:x.database.windows.net,1433", "[::1]:1433", "::1",
 		"admin:1433", "np:pipe", "h,-1", `\`, ",", ":",
 		".", `.\SQLEXPRESS`, "(LOCAL),1500", `(localdb)\MSSQLLocalDB`,
@@ -62,13 +65,19 @@ func FuzzNames(f *testing.F) {
 		}
 		bindScriptArgs(s, []any{int64(1), s})
 
-		if got := alterModuleDefinition(s); got != s {
-			at := 0
-			for at < len(s) && s[at] == got[at] {
-				at++
-			}
-			if !strings.EqualFold(s[at:min(at+6, len(s))], "CREATE") || got != s[:at]+"ALTER"+s[at+6:] {
-				t.Fatalf("alterModuleDefinition(%q) = %q: not CREATE → ALTER", s, got)
+		for _, rewrite := range []struct{ got, from, to string }{
+			{alterModuleDefinition(s), "CREATE", "ALTER"},
+			{rewriteModuleVerb(s, ScriptCreate), "ALTER", "CREATE"},
+		} {
+			if rewrite.got != s {
+				at := 0
+				for at < len(s) && s[at] == rewrite.got[at] {
+					at++
+				}
+				if !strings.EqualFold(s[at:min(at+len(rewrite.from), len(s))], rewrite.from) ||
+					rewrite.got != s[:at]+rewrite.to+s[at+len(rewrite.from):] {
+					t.Fatalf("module verb rewrite(%q) = %q: not %s to %s", s, rewrite.got, rewrite.from, rewrite.to)
+				}
 			}
 		}
 

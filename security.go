@@ -104,14 +104,14 @@ type PrincipalSecurable struct {
 
 // objectSecurableClasses maps sys.objects.type to the SecurableClass of
 // every object kind ApplyPermission can grant on: a procedure is P or PC
-// (CLR), a scalar function FN or FS (CLR), a table-valued function TF or FT
-// (CLR). An object of any other type — a CLR aggregate, an extended stored
+// (CLR), a scalar function FN, FS (CLR) or XF (external), a table-valued function
+// TF or FT (CLR). An object of any other type — a CLR aggregate, an extended stored
 // procedure, a queue — has no class here, so the reads below leave it out
 // rather than report a securable no caller can address.
 var objectSecurableClasses = map[string]SecurableClass{
 	"U": SecurableTable, "V": SecurableView,
 	"P": SecurableProcedure, "PC": SecurableProcedure,
-	"FN": SecurableScalarFunction, "FS": SecurableScalarFunction,
+	"FN": SecurableScalarFunction, "FS": SecurableScalarFunction, "XF": SecurableScalarFunction,
 	"IF": SecurableInlineFunction,
 	"TF": SecurableTableFunction, "FT": SecurableTableFunction,
 	"SO": SecurableSequence, "SN": SecurableSynonym,

@@ -302,10 +302,7 @@ func buildServerTriggerScript(t *ServerTrigger, opts ScriptOptions) (string, err
 		if strings.TrimSpace(t.Definition) == "" {
 			return unsupportedf("gosmo: script server trigger %q: definition is not readable (encrypted)", t.Name)
 		}
-		def := t.Definition
-		if opts.verb() == ScriptAlter {
-			def = alterModuleDefinition(def)
-		}
+		def := rewriteModuleVerb(t.Definition, opts.verb())
 		if !t.IsCLR {
 			sb.WriteString(moduleSetOptions(t.UsesANSINulls, t.UsesQuotedIdentifier))
 		}

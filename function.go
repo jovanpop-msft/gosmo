@@ -21,8 +21,8 @@ type UserDefinedFunction struct {
 	ModifyDate time.Time
 }
 
-// FunctionType is a function's sys.objects type: the three T-SQL forms and
-// the two CLR ones. A CLR aggregate (AF) is not one — CREATE AGGREGATE makes
+// FunctionType is a function's sys.objects type: T-SQL, CLR, or a Fabric
+// external function. A CLR aggregate (AF) is not one — CREATE AGGREGATE makes
 // it and DROP AGGREGATE removes it.
 type FunctionType string
 
@@ -32,12 +32,13 @@ const (
 	FunctionTypeTable       FunctionType = "TF" // T-SQL multi-statement table-valued
 	FunctionTypeCLRScalar   FunctionType = "FS" // CLR scalar
 	FunctionTypeCLRTable    FunctionType = "FT" // CLR table-valued
+	FunctionTypeExternal    FunctionType = "XF" // Fabric external scalar
 )
 
-// IsScalar reports a function that returns a value, T-SQL or CLR — the one
+// IsScalar reports a function that returns a value — the one
 // a call selects rather than selects from.
 func (t FunctionType) IsScalar() bool {
-	return t == FunctionTypeScalar || t == FunctionTypeCLRScalar
+	return t == FunctionTypeScalar || t == FunctionTypeCLRScalar || t == FunctionTypeExternal
 }
 
 // IsCLR reports a function implemented in an assembly, with no T-SQL
@@ -48,22 +49,35 @@ func (t FunctionType) IsCLR() bool {
 
 // UserDefinedFunctions returns all UDFs in the database, T-SQL and CLR.
 func (d *Database) UserDefinedFunctions(ctx context.Context) ([]*UserDefinedFunction, error) {
-	return d.userDefinedFunctionsWhere(ctx, "", nil)
+	return d.UserDefinedFunctionsFiltered(ctx, ObjectFilter{})
 }
 
 // UserDefinedFunctionsFiltered returns the UDFs an ObjectFilter matches,
 // narrowed by the server. An empty filter is UserDefinedFunctions.
 func (d *Database) UserDefinedFunctionsFiltered(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
 	where, args := filter.clause(allObjectsFilterColumns, 1)
-	return d.userDefinedFunctionsWhere(ctx, where, args)
+	return d.functionsWhere(ctx, "o.type IN ('FN','TF','IF','FS','FT') AND o.is_ms_shipped = 0", where, args)
 }
 
-func (d *Database) userDefinedFunctionsWhere(ctx context.Context, where string, args []any) ([]*UserDefinedFunction, error) {
+// ExternalFunctions returns Fabric external functions (sys.objects type XF).
+// These are separate from the T-SQL and CLR UserDefinedFunctions listing.
+func (d *Database) ExternalFunctions(ctx context.Context) ([]*UserDefinedFunction, error) {
+	return d.ExternalFunctionsFiltered(ctx, ObjectFilter{})
+}
+
+// ExternalFunctionsFiltered returns the external functions an ObjectFilter
+// matches, narrowed by the server. An empty filter is ExternalFunctions.
+func (d *Database) ExternalFunctionsFiltered(ctx context.Context, filter ObjectFilter) ([]*UserDefinedFunction, error) {
+	where, args := filter.clause(allObjectsFilterColumns, 1)
+	return d.functionsWhere(ctx, "o.type = 'XF'", where, args)
+}
+
+func (d *Database) functionsWhere(ctx context.Context, kind, where string, args []any) ([]*UserDefinedFunction, error) {
 	q := `
 SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, o.type,
        o.create_date, o.modify_date
 FROM   sys.objects o
-WHERE  o.type IN ('FN','TF','IF','FS','FT') AND o.is_ms_shipped = 0 ` + where + `
+WHERE  ` + kind + ` ` + where + `
 ORDER  BY SCHEMA_NAME(o.schema_id), o.name`
 
 	rows, err := d.query(ctx, q, args...)
@@ -134,7 +148,7 @@ func (f *UserDefinedFunction) Database() *Database { return f.db }
 // function, ErrNotFound when there is no such function. Listings do not
 // carry it; this reads it by name, so a UserDefinedFunctionRef is enough.
 func (f *UserDefinedFunction) Definition(ctx context.Context) (string, error) {
-	return f.db.moduleDefinition(ctx, "function", "o.type IN ('FN','TF','IF','FS','FT')", f.Schema, f.Name)
+	return f.db.moduleDefinition(ctx, "function", "o.type IN ('FN','TF','IF','FS','FT','XF')", f.Schema, f.Name)
 }
 
 // Drop drops the function — scalar, inline table-valued or multi-statement

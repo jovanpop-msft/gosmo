@@ -41,11 +41,36 @@ func TestAlterModuleDefinition(t *testing.T) {
 		{"create inside the comment is not the keyword", "/* CREATE /* x */ */ CREATE VIEW v AS SELECT 1", "/* CREATE /* x */ */ ALTER VIEW v AS SELECT 1"},
 		{"unterminated comment left alone", "/* CREATE VIEW v AS SELECT 1", "/* CREATE VIEW v AS SELECT 1"},
 		{"quoted text first left alone", "[CREATE] VIEW v", "[CREATE] VIEW v"},
+		{"comment after create", "CREATE/* header */VIEW dbo.v AS SELECT 1", "ALTER/* header */VIEW dbo.v AS SELECT 1"},
+		{"comment before or", "CREATE /* a /* nested */ b */ OR ALTER VIEW dbo.v AS SELECT 1", "CREATE /* a /* nested */ b */ OR ALTER VIEW dbo.v AS SELECT 1"},
+		{"comment after or", "CREATE OR/* header */ALTER VIEW dbo.v AS SELECT 1", "CREATE OR/* header */ALTER VIEW dbo.v AS SELECT 1"},
+		{"comment after alter", "CREATE OR ALTER/* header */VIEW dbo.v AS SELECT 1", "CREATE OR ALTER/* header */VIEW dbo.v AS SELECT 1"},
+		{"line comment inside header", "CREATE -- header\nOR ALTER VIEW dbo.v AS SELECT 1", "CREATE -- header\nOR ALTER VIEW dbo.v AS SELECT 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := alterModuleDefinition(c.def); got != c.want {
 				t.Errorf("alterModuleDefinition(%q) = %q, want %q", c.def, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCreateModuleDefinition(t *testing.T) {
+	for _, tc := range []struct{ name, def, want string }{
+		{"plain alter", "ALTER VIEW dbo.v AS SELECT 1", "CREATE VIEW dbo.v AS SELECT 1"},
+		{"comments preserved", "/* a /* nested */ b */ alter/* header */PROCEDURE dbo.p AS SELECT 'ALTER';",
+			"/* a /* nested */ b */ CREATE/* header */PROCEDURE dbo.p AS SELECT 'ALTER';"},
+		{"create preserved", "create view dbo.v AS SELECT 1", "create view dbo.v AS SELECT 1"},
+		{"create or alter preserved", "CREATE OR/* header */ALTER VIEW dbo.v AS SELECT 1", "CREATE OR/* header */ALTER VIEW dbo.v AS SELECT 1"},
+		{"already create body untouched", "CREATE PROCEDURE dbo.p AS ALTER TABLE dbo.t ADD x int",
+			"CREATE PROCEDURE dbo.p AS ALTER TABLE dbo.t ADD x int"},
+		{"quoted text first", "[ALTER] VIEW dbo.v", "[ALTER] VIEW dbo.v"},
+		{"unrecognized", "SELECT 'ALTER VIEW dbo.v'", "SELECT 'ALTER VIEW dbo.v'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rewriteModuleVerb(tc.def, ScriptCreate); got != tc.want {
+				t.Errorf("rewriteModuleVerb(%q, ScriptCreate) = %q, want %q", tc.def, got, tc.want)
 			}
 		})
 	}
@@ -64,6 +89,38 @@ func TestBuildTableScriptDropAndCreateEmitsBoth(t *testing.T) {
 	}
 	if drop > create {
 		t.Errorf("CREATE TABLE came before DROP TABLE; the script is not re-runnable:\n%s", got)
+	}
+}
+
+func TestStoredAlterDDLTriggersScriptAsCreate(t *testing.T) {
+	for _, scope := range []string{"DATABASE", "ALL SERVER"} {
+		for _, verb := range []struct {
+			name string
+			verb ScriptVerb
+		}{{"create", ScriptCreate}, {"drop and create", ScriptDropAndCreate}} {
+			t.Run(scope+"/"+verb.name, func(t *testing.T) {
+				body := "TRIGGER [ddl_audit] ON " + scope + " FOR CREATE_TABLE AS PRINT 'ALTER';"
+				opts := ScriptOptions{Verb: verb.verb}
+				var got string
+				var err error
+				if scope == "DATABASE" {
+					got, err = buildDatabaseTriggerScript(&DatabaseTrigger{
+						Name: "ddl_audit", IsEnabled: true, Definition: "ALTER " + body,
+					}, opts)
+				} else {
+					got, err = buildServerTriggerScript(&ServerTrigger{
+						Name: "ddl_audit", IsEnabled: true, Definition: "ALTER " + body,
+					}, opts)
+				}
+				want := "SET ANSI_NULLS OFF;\nGO\nSET QUOTED_IDENTIFIER OFF;\nGO\nCREATE " + body + "\nGO\n"
+				if verb.verb == ScriptDropAndCreate {
+					want = "DROP TRIGGER IF EXISTS [ddl_audit] ON " + scope + ";\nGO\n\n" + want
+				}
+				if err != nil || got != want {
+					t.Fatalf("script = %q, %v; want %q", got, err, want)
+				}
+			})
+		}
 	}
 }
 

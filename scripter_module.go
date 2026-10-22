@@ -45,11 +45,11 @@ WHERE  SCHEMA_NAME(p.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND p.name = @p2`
 
 	moduleFunction = moduleKind{"FUNCTION", "function", `
 SELECT m.definition, ISNULL(m.uses_ansi_nulls, 0), ISNULL(m.uses_quoted_identifier, 0),
-       CAST(CASE WHEN m.object_id IS NULL THEN 1 ELSE 0 END AS bit), o.object_id
+       CAST(CASE WHEN o.type IN ('FS','FT') THEN 1 ELSE 0 END AS bit), o.object_id, o.type
 FROM   sys.objects o
 LEFT   JOIN sys.sql_modules m ON m.object_id = o.object_id
 WHERE  SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND o.name = @p2
-  AND  o.type IN ('FN','TF','IF','FS','FT')`, true}
+  AND  o.type IN ('FN','TF','IF','FS','FT','XF')`, true}
 
 	// A trigger's own schema is its parent table's — sys.triggers has no
 	// schema_id of its own.
@@ -63,8 +63,8 @@ WHERE  SCHEMA_NAME(o.schema_id) COLLATE DATABASE_DEFAULT = @p1 AND tr.name = @p2
 )
 
 // scriptModule renders one sys.sql_modules-backed object. CREATE and ALTER
-// are the stored definition itself (rewritten for ALTER), never synthesized,
-// so nothing about the original text is lost.
+// are the stored definition with the requested verb, never synthesized,
+// so nothing about the original body is lost.
 //
 // An encrypted module stores a NULL definition, and it is an error rather
 // than a script: envelopeErr discards the DROP it has already written, which
@@ -86,12 +86,21 @@ func (sc *Scripter) scriptModule(ctx context.Context, k moduleKind, schema, name
 		var def sql.NullString
 		var ansiNulls, quotedIdent, clr bool
 		var objectID int
+		var funcType FunctionType
 		err := sc.db.queryRow(ctx, func(row *sql.Row) error {
-			return row.Scan(&def, &ansiNulls, &quotedIdent, &clr, &objectID)
+			fields := []any{&def, &ansiNulls, &quotedIdent, &clr, &objectID}
+			if k.keyword == "FUNCTION" {
+				fields = append(fields, &funcType)
+			}
+			return row.Scan(fields...)
 		}, k.query, schema, name)
 		if err != nil {
 			return rowErr(err, notFoundf("gosmo: %s %s not found", k.noun, qualifiedName(schema, name)),
 				fmt.Sprintf("script %s %s", k.noun, qualifiedName(schema, name)))
+		}
+		if funcType == FunctionTypeExternal {
+			// XF proxies use their stored definition, not SQL Server vector metadata.
+			k.params = false
 		}
 		if err := sc.writeModuleDefinition(ctx, sb, k, schema, name, def, ansiNulls, quotedIdent, clr, objectID); err != nil {
 			return err
@@ -131,9 +140,7 @@ func (sc *Scripter) writeModuleDefinition(ctx context.Context, sb *strings.Build
 		return unsupportedf("gosmo: script %s %s: definition is not readable (encrypted)", k.noun, qualifiedName(schema, name))
 	}
 	text := renameModuleHeader(def.String, k.keyword, schema, name)
-	if sc.opts.verb() == ScriptAlter {
-		text = alterModuleDefinition(text)
-	}
+	text = rewriteModuleVerb(text, sc.opts.verb())
 	var names []string
 	if k.params {
 		var err error
@@ -281,26 +288,29 @@ func moduleSetOptions(ansiNulls, quotedIdent bool) string {
 	return fmt.Sprintf("SET ANSI_NULLS %s;\nGO\nSET QUOTED_IDENTIFIER %s;\nGO\n", onOff(ansiNulls), onOff(quotedIdent))
 }
 
-// createKeyword matches the CREATE that opens a module definition once its
-// leading whitespace and comments are skipped — the only CREATE that may be
-// rewritten to ALTER. A CREATE elsewhere in the body (a temp table, say) must
-// be left exactly as the author wrote it.
-var createKeyword = regexp.MustCompile(`(?is)^CREATE(\s+OR\s+ALTER)?(\s)`)
-
 // alterModuleDefinition rewrites a module's stored CREATE into an ALTER,
 // leaving a definition it can't recognize untouched — an unrecognized one
 // still runs, as the CREATE it already was, which beats emitting mangled DDL.
 // A CREATE OR ALTER definition is already re-runnable and is returned as is.
 func alterModuleDefinition(def string) string {
-	at := leadingTriviaEnd(def)
-	if at < 0 {
+	return rewriteModuleVerb(def, ScriptAlter)
+}
+
+// rewriteModuleVerb preserves the body, comments and existing CREATE OR ALTER.
+func rewriteModuleVerb(def string, verb ScriptVerb) string {
+	keyword := "CREATE"
+	if verb == ScriptAlter {
+		keyword = "ALTER"
+	}
+	tok, ok := nextHeaderToken(def, 0)
+	if !ok || tok.isWord(keyword) || !tok.isWord("CREATE") && !tok.isWord("ALTER") {
 		return def
 	}
-	m := createKeyword.FindStringSubmatch(def[at:])
-	if m == nil || m[1] != "" {
+	next, ok := nextHeaderToken(def, tok.end)
+	if !ok || next.isWord("OR") {
 		return def
 	}
-	return def[:at] + "ALTER" + m[2] + def[at+len(m[0]):]
+	return def[:tok.start] + keyword + def[tok.end:]
 }
 
 // leadingTriviaEnd returns the offset of the first character of def that is
@@ -684,10 +694,7 @@ func buildDatabaseTriggerScript(t *DatabaseTrigger, opts ScriptOptions) (string,
 		if strings.TrimSpace(t.Definition) == "" {
 			return unsupportedf("gosmo: script database trigger %q: definition is not readable (encrypted)", t.Name)
 		}
-		def := t.Definition
-		if opts.verb() == ScriptAlter {
-			def = alterModuleDefinition(def)
-		}
+		def := rewriteModuleVerb(t.Definition, opts.verb())
 		if !t.IsCLR {
 			sb.WriteString(moduleSetOptions(t.UsesANSINulls, t.UsesQuotedIdentifier))
 		}
