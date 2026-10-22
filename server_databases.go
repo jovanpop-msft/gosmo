@@ -40,7 +40,7 @@ func scanDatabase(s *Server, scan func(...any) error) (*Database, error) {
 	); err != nil {
 		return nil, err
 	}
-	d.State = state.String
+	d.State = DatabaseState(state.String)
 	d.RecoveryModel = RecoveryModel(recovery.String)
 	d.CompatibilityLevel = CompatibilityLevel(compatLevel.Int64)
 	d.Collation = collation.String

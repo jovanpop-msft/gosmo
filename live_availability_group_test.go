@@ -140,7 +140,7 @@ func checkReplicas(t *testing.T, ctx context.Context, ag *AvailabilityGroup) map
 		if r.IsLocal {
 			locals++
 		}
-		if strings.EqualFold(r.Role, "PRIMARY") {
+		if r.Role == ReplicaPrimary {
 			primaries++
 		}
 		if r.AvailabilityMode == "" {
@@ -161,7 +161,7 @@ func checkReplicas(t *testing.T, ctx context.Context, ag *AvailabilityGroup) map
 	// since it is derived from a different column (gs.primary_replica).
 	wantLocalPrimary := false
 	for _, r := range replicas {
-		if r.IsLocal && strings.EqualFold(r.Role, "PRIMARY") {
+		if r.IsLocal && r.Role == ReplicaPrimary {
 			wantLocalPrimary = true
 		}
 	}
@@ -972,7 +972,7 @@ func TestLiveAvailabilityGroupCreate(t *testing.T) {
 		}
 		joined := 0
 		for _, r := range replicas {
-			if strings.EqualFold(r.ConnectedState, "CONNECTED") {
+			if r.ConnectedState == ReplicaConnected {
 				joined++
 			}
 		}
@@ -1157,7 +1157,7 @@ func liveEndpoint(t *testing.T, ctx context.Context, srv *Server) *DatabaseMirro
 	if ep == nil {
 		t.Skipf("%s has no database mirroring endpoint; creating one needs a certificate exchange this test will not do", srv.Name())
 	}
-	if !strings.EqualFold(ep.State, "STARTED") {
+	if !strings.EqualFold(string(ep.State), "STARTED") {
 		t.Skipf("%s's endpoint %q is %s, not STARTED", srv.Name(), ep.Name, ep.State)
 	}
 	return ep

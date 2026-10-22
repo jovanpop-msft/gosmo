@@ -61,7 +61,7 @@ func TestLiveCertificateLoginCreateReadScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the login back: %v", err)
 	}
-	if l.LoginType != "CERTIFICATE_MAPPED_LOGIN" {
+	if l.LoginType != PrincipalCertificateMappedLogin {
 		t.Fatalf("LoginType = %q, want CERTIFICATE_MAPPED_LOGIN", l.LoginType)
 	}
 	if err := l.ResolveMapping(ctx); err != nil {
@@ -94,7 +94,7 @@ func TestLiveCertificateLoginCreateReadScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back after replaying the script: %v", err)
 	}
-	if again.LoginType != "CERTIFICATE_MAPPED_LOGIN" {
+	if again.LoginType != PrincipalCertificateMappedLogin {
 		t.Errorf("after replay LoginType = %q, want CERTIFICATE_MAPPED_LOGIN", again.LoginType)
 	}
 }

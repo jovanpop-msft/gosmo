@@ -98,10 +98,10 @@ func buildUserScript(u *User, opts ScriptOptions) string {
 		withOpen := false
 		takesSchema := true
 		switch {
-		case u.UserType == "CERTIFICATE_MAPPED_USER":
+		case u.UserType == PrincipalCertificateMappedUser:
 			stmt += " FROM CERTIFICATE " + mappedUserObject(u, "certificate")
 			takesSchema = false
-		case u.UserType == "ASYMMETRIC_KEY_MAPPED_USER":
+		case u.UserType == PrincipalAsymmetricKeyMappedUser:
 			stmt += " FROM ASYMMETRIC KEY " + mappedUserObject(u, "asymmetric key")
 			takesSchema = false
 		case strings.EqualFold(u.AuthType, "DATABASE"):
@@ -138,7 +138,7 @@ func buildUserScript(u *User, opts ScriptOptions) string {
 // keeps AuthType INSTANCE with no login matching its SID. The case order is
 // buildUserScript's, so a mapped user is never one.
 func isOrphanedUser(u *User) bool {
-	return u.UserType != "CERTIFICATE_MAPPED_USER" && u.UserType != "ASYMMETRIC_KEY_MAPPED_USER" &&
+	return u.UserType != PrincipalCertificateMappedUser && u.UserType != PrincipalAsymmetricKeyMappedUser &&
 		u.LoginName == "" && strings.EqualFold(u.AuthType, "INSTANCE")
 }
 

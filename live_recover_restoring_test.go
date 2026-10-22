@@ -45,7 +45,7 @@ func TestLiveRecoverFromRestoring(t *testing.T) {
 		Replace: true, Recovery: RestoreWithNoRecovery}); err != nil {
 		t.Fatalf("restore WITH NORECOVERY: %v", err)
 	}
-	state := func() string {
+	state := func() DatabaseState {
 		t.Helper()
 		d, err := srv.DatabaseByName(ctx, name)
 		if err != nil {

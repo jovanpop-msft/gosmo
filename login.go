@@ -13,10 +13,10 @@ type Login struct {
 	server *Server
 	Name   string
 	SID    []byte
-	// LoginType is the login's type_desc: "SQL_LOGIN", "WINDOWS_LOGIN",
-	// "WINDOWS_GROUP", "EXTERNAL_LOGIN", "EXTERNAL_GROUP",
-	// "CERTIFICATE_MAPPED_LOGIN" or "ASYMMETRIC_KEY_MAPPED_LOGIN".
-	LoginType       string
+	// LoginType is the login's type_desc: SQL_LOGIN, WINDOWS_LOGIN,
+	// WINDOWS_GROUP, EXTERNAL_LOGIN, EXTERNAL_GROUP, CERTIFICATE_MAPPED_LOGIN
+	// or ASYMMETRIC_KEY_MAPPED_LOGIN.
+	LoginType       PrincipalType
 	IsDisabled      bool
 	DefaultDatabase string
 	CreateDate      time.Time
@@ -56,7 +56,7 @@ func (l *Login) IsSystem() bool { return strings.HasPrefix(l.Name, "##") }
 
 // IsSQLLogin reports whether l authenticates with a SQL Server password — the
 // only kind with a password, CHECK_POLICY or CHECK_EXPIRATION.
-func (l *Login) IsSQLLogin() bool { return l.LoginType == "SQL_LOGIN" }
+func (l *Login) IsSQLLogin() bool { return l.LoginType == PrincipalSQLLogin }
 
 // ResolveMapping looks up the certificate or asymmetric key this login maps
 // to and stores its name in MappedObject.
@@ -76,7 +76,7 @@ func (l *Login) ResolveMapping(ctx context.Context) error {
 		return err
 	}
 	switch loginType {
-	case "CERTIFICATE_MAPPED_LOGIN", "ASYMMETRIC_KEY_MAPPED_LOGIN":
+	case PrincipalCertificateMappedLogin, PrincipalAsymmetricKeyMappedLogin:
 	default:
 		return nil
 	}
@@ -167,10 +167,10 @@ type LoginDetails struct {
 	BadPasswordTime time.Time
 	DefaultLanguage string
 	CredentialName  string
-	// ConnectSQLState is "GRANT", "GRANT_WITH_GRANT_OPTION", "DENY", or ""
+	// ConnectSQLState is GRANT, GRANT_WITH_GRANT_OPTION, DENY, or ""
 	// (default/unset) for the login's explicit CONNECT SQL server permission
 	// — sys.server_permissions.state_desc as read.
-	ConnectSQLState string
+	ConnectSQLState PermissionState
 }
 
 // Details returns the login's password-policy and status information.
@@ -507,12 +507,12 @@ func (s *Server) LoginRef(name string) *Login {
 // was read (SID is never empty on a read login), else looked up by name. The
 // handle is not updated — a read must not write to a receiver another
 // goroutine may be reading.
-func (l *Login) identity(ctx context.Context, what string) ([]byte, string, error) {
+func (l *Login) identity(ctx context.Context, what string) ([]byte, PrincipalType, error) {
 	if l.SID != nil {
 		return l.SID, l.LoginType, nil
 	}
 	var sid []byte
-	var loginType string
+	var loginType PrincipalType
 	err := l.server.queryRowScan(ctx, `
 SELECT sid, type_desc FROM sys.server_principals
 WHERE  name = @p1 AND type IN ('S','U','G','E','X','C','K')`, []any{l.Name}, &sid, &loginType)

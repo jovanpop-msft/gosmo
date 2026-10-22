@@ -145,11 +145,18 @@ func scanServerAudit(s *Server, scan func(...any) error) (*ServerAudit, error) {
 
 // ServerAuditStatus is an audit's runtime state, from sys.dm_server_audit_status.
 type ServerAuditStatus struct {
-	Status        string // STARTED / STOPPED
+	Status        AuditStatus
 	StatusTime    time.Time
 	AuditFilePath string // the file currently being written, empty for a log target
 	AuditFileSize int64
 }
+
+// AuditStatus is sys.dm_server_audit_status.status_desc. A stopped audit has
+// no row there at all, so the one value a running audit reports is
+// AuditStarted; anything else is a failure state.
+type AuditStatus string
+
+const AuditStarted AuditStatus = "STARTED"
 
 // Status returns the audit's runtime state.
 //

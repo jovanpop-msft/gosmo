@@ -118,7 +118,7 @@ func (r *DatabaseRole) SetOwner(ctx context.Context, newOwner string) error {
 // RoleMember is one direct member of a database role.
 type RoleMember struct {
 	Name string
-	Type string // e.g. "SQL_USER", "WINDOWS_USER", "DATABASE_ROLE"
+	Type PrincipalType // e.g. PrincipalSQLUser, PrincipalWindowsUser, PrincipalDatabaseRole
 }
 
 // RoleMembers returns the direct members of a database role, with each

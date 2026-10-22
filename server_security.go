@@ -40,10 +40,10 @@ func (s *Server) SecurityInfo(ctx context.Context) (*ServerSecurityInfo, error) 
 // Permissions page and a Login's Securables page.
 type ServerPermissionEntry struct {
 	Principal     string
-	PrincipalType string // e.g. "SQL_LOGIN", "SERVER_ROLE"
+	PrincipalType PrincipalType // e.g. PrincipalSQLLogin, PrincipalServerRole
 	Grantor       string
 	Permission    ServerPermission // e.g. "CONNECT SQL", "ALTER ANY LOGIN", "CONTROL SERVER"
-	State         string           // "GRANT", "GRANT_WITH_GRANT_OPTION", "DENY"
+	State         PermissionState  // GRANT, GRANT_WITH_GRANT_OPTION or DENY
 }
 
 // ServerPermissions returns every server-level GRANT/DENY entry.

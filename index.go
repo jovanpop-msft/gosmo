@@ -39,20 +39,11 @@ type Index struct {
 	IgnoreDupKey   bool
 	AllowRowLocks  bool
 	AllowPageLocks bool
-	// DataCompression is the index's compression — its first partition's
-	// when it is partitioned; PartitionCompression has every partition's.
-	DataCompression DataCompression
-	// PartitionCompression is each partition's DATA_COMPRESSION, in
-	// partition_number order: element i is partition i+1. A partitioned
-	// index can mix them, and a script written from DataCompression alone
-	// recreated it with one compression throughout.
-	PartitionCompression []DataCompression
-	// XMLCompression is the index's XML_COMPRESSION (SQL Server 2022) — its
-	// first partition's when it is partitioned; PartitionXMLCompression has
-	// every partition's, which a partitioned index can mix as it can
-	// DATA_COMPRESSION. Always false on an older instance.
-	XMLCompression          bool
-	PartitionXMLCompression []bool
+	// Partitions is each partition's DATA_COMPRESSION and XML_COMPRESSION,
+	// in partition_number order: element i is partition i+1. An unpartitioned
+	// index has one; a hypothetical index has none. DataCompression and
+	// XMLCompression derive the first partition's.
+	Partitions []PartitionOptions
 	// StatisticsNoRecompute is the index's STATISTICS_NORECOMPUTE option,
 	// read from its statistics object (sys.stats.no_recompute) — sys.indexes
 	// has no column for it.
@@ -108,6 +99,22 @@ type Index struct {
 	BoundingBox    *SpatialBoundingBox
 	GridLevels     SpatialGridLevels
 	CellsPerObject int
+}
+
+// DataCompression is the index's DATA_COMPRESSION: its first partition's
+// when it is partitioned (Partitions has every one's), NONE when it has no
+// partition — a hypothetical index, or one whose catalog was never read.
+func (idx *Index) DataCompression() DataCompression {
+	if len(idx.Partitions) == 0 {
+		return DataCompressionNone
+	}
+	return idx.Partitions[0].DataCompression
+}
+
+// XMLCompression is the index's XML_COMPRESSION (SQL Server 2022): its first
+// partition's when it is partitioned, false when it has no partition.
+func (idx *Index) XMLCompression() bool {
+	return len(idx.Partitions) > 0 && idx.Partitions[0].XMLCompression
 }
 
 // DataSpace names where a table or index keeps its rows — the ON clause of
@@ -345,13 +352,8 @@ ORDER  BY i.index_id`
 		if xmin.Valid && ymin.Valid && xmax.Valid && ymax.Valid {
 			idx.BoundingBox = &SpatialBoundingBox{XMin: xmin.Float64, YMin: ymin.Float64, XMax: xmax.Float64, YMax: ymax.Float64}
 		}
-		if idx.PartitionCompression, idx.PartitionXMLCompression, err = decodePartitionCompression(compression); err != nil {
+		if idx.Partitions, err = decodePartitionCompression(compression); err != nil {
 			return nil, err
-		}
-		idx.DataCompression = DataCompressionNone
-		if len(idx.PartitionCompression) > 0 {
-			idx.DataCompression = idx.PartitionCompression[0]
-			idx.XMLCompression = idx.PartitionXMLCompression[0]
 		}
 		switch desc := strings.TrimSpace(typeDesc.String); desc {
 		case "CLUSTERED":

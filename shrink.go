@@ -175,9 +175,9 @@ func buildShrinkDatabaseStatement(name string, opts ShrinkDatabaseOptions, s *Se
 // its logical name as a literal — the handle may be a FileRef, with no
 // file_id. typeDesc is the file's Type as the handle holds it, "" when unknown:
 // it is passed in, not read, so a FileRef stays lookup-free.
-func buildShrinkFileStatement(name, typeDesc string, opts ShrinkFileOptions, s *Server) (string, error) {
+func buildShrinkFileStatement(name string, typeDesc FileType, opts ShrinkFileOptions, s *Server) (string, error) {
 	args := []string{QuoteLiteral(name)}
-	if typeDesc == "FILESTREAM" && !opts.EmptyFile {
+	if typeDesc == FileStream && !opts.EmptyFile {
 		return "", invalidf("a FILESTREAM container can only be emptied (EMPTYFILE)")
 	}
 	if opts.EmptyFile {

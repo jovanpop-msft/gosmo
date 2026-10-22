@@ -33,7 +33,7 @@ type DatabaseMirroringEndpoint struct {
 	// State is STARTED, STOPPED or DISABLED. Only a STARTED endpoint accepts
 	// connections, and an endpoint left STOPPED is the usual reason a replica
 	// that looks correctly configured never synchronizes.
-	State string
+	State EndpointState
 
 	// Role is ALL, PARTNER or WITNESS. Availability groups need ALL.
 	Role string
@@ -237,7 +237,7 @@ func (spec CreateDatabaseMirroringEndpointRequest) handle(s *Server) *DatabaseMi
 		server:              s,
 		Name:                n.Name,
 		Port:                n.Port,
-		State:               "STARTED",
+		State:               EndpointStarted,
 		Role:                n.Role,
 		IsEncryptionEnabled: n.Encryption != "DISABLED",
 		EncryptionAlgorithm: n.EncryptionAlgorithm,
@@ -278,15 +278,15 @@ func (s *Server) CreateDatabaseMirroringEndpoint(ctx context.Context, spec Creat
 // Start starts a stopped endpoint. An endpoint that is not STARTED accepts no
 // connections, so a replica behind one never synchronizes.
 func (e *DatabaseMirroringEndpoint) Start(ctx context.Context) error {
-	return e.setState(ctx, "STARTED")
+	return e.setState(ctx, EndpointStarted)
 }
 
 // Stop stops the endpoint, breaking every replica connection through it.
 func (e *DatabaseMirroringEndpoint) Stop(ctx context.Context) error {
-	return e.setState(ctx, "STOPPED")
+	return e.setState(ctx, EndpointStopped)
 }
 
-func (e *DatabaseMirroringEndpoint) setState(ctx context.Context, state string) error {
+func (e *DatabaseMirroringEndpoint) setState(ctx context.Context, state EndpointState) error {
 	if _, err := e.server.exec(ctx,
 		fmt.Sprintf("ALTER ENDPOINT %s STATE = %s", quoteIdent(e.Name), state)); err != nil {
 		return fmt.Errorf("gosmo: set endpoint %q state to %s: %w", e.Name, state, err)
@@ -379,7 +379,7 @@ type Endpoint struct {
 
 	// State is STARTED, STOPPED or DISABLED. Only a STARTED endpoint accepts
 	// connections.
-	State string
+	State EndpointState
 
 	// IsAdmin marks the Dedicated Admin Connection.
 	IsAdmin bool
@@ -460,7 +460,7 @@ func (e *Endpoint) SetState(ctx context.Context, state EndpointState) error {
 	if _, err := e.server.exec(ctx, stmt); err != nil {
 		return fmt.Errorf("gosmo: set state of endpoint %q: %w", e.Name, err)
 	}
-	setIfApplied(ctx, &e.State, string(state))
+	setIfApplied(ctx, &e.State, state)
 	return nil
 }
 

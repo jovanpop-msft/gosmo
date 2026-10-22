@@ -191,28 +191,40 @@ func partitionCompressionList(major int, objectID, indexID string) string {
 		"pp.partition_number")
 }
 
+// PartitionOptions is one partition's settings of a heap or index, as
+// sys.partitions has them. They live per partition because a partitioned
+// heap or index can mix them, and a script written from the first
+// partition's alone recreated it with one setting throughout.
+type PartitionOptions struct {
+	// Number is the partition_number, from 1.
+	Number int
+	// DataCompression is the partition's DATA_COMPRESSION.
+	DataCompression DataCompression
+	// XMLCompression is the partition's XML_COMPRESSION (SQL Server 2022);
+	// always false on an older instance.
+	XMLCompression bool
+}
+
 // decodePartitionCompression decodes one partitionCompressionList column into
-// two slices indexed by partition_number - 1: each partition's
-// DATA_COMPRESSION and its XML_COMPRESSION. NULL (no partitions) is nil.
-func decodePartitionCompression(col sql.NullString) ([]DataCompression, []bool, error) {
+// each partition's options, in partition_number order: element i is
+// partition i+1. NULL (no partitions) is nil.
+func decodePartitionCompression(col sql.NullString) ([]PartitionOptions, error) {
 	rows, err := decodeJSONRows[struct {
 		N int    `json:"n"`
 		C string `json:"c"`
 		X bool   `json:"x"`
 	}](col)
 	if err != nil || rows == nil {
-		return nil, nil, err
+		return nil, err
 	}
-	out := make([]DataCompression, len(rows))
-	xml := make([]bool, len(rows))
+	out := make([]PartitionOptions, len(rows))
 	for i, r := range rows {
 		if r.N != i+1 {
-			return nil, nil, fmt.Errorf("gosmo: partition %d listed at position %d", r.N, i+1)
+			return nil, fmt.Errorf("gosmo: partition %d listed at position %d", r.N, i+1)
 		}
-		out[i] = DataCompression(r.C)
-		xml[i] = r.X
+		out[i] = PartitionOptions{Number: r.N, DataCompression: DataCompression(r.C), XMLCompression: r.X}
 	}
-	return out, xml, nil
+	return out, nil
 }
 
 // DataCompression is an index's or partition's DATA_COMPRESSION keyword.

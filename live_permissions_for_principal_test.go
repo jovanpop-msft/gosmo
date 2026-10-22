@@ -71,7 +71,7 @@ func TestLivePermissionsForPrincipalEveryClass(t *testing.T) {
 		for _, g := range grants {
 			if !slices.ContainsFunc(got, func(e *PrincipalSecurable) bool {
 				return e.SecurableType == g.sec.Class && e.Schema == g.sec.Schema && e.Name == g.sec.Name &&
-					e.Permission == string(g.perm) && e.State == "GRANT"
+					e.Permission == string(g.perm) && e.State == PermissionGrant
 			}) {
 				t.Errorf("%s %s on %s.%s not reported", g.sec.Class, g.perm, g.sec.Schema, g.sec.Name)
 			}

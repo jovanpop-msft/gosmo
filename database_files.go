@@ -26,9 +26,9 @@ type DatabaseFileInfo struct {
 	FileID       int
 	Name         string
 	PhysicalName string
-	Type         string // "ROWS", "LOG", or "FILESTREAM" (sys.database_files.type_desc)
+	Type         FileType
 	FileGroup    string // "" for log files, which don't belong to one
-	State        string // e.g. "ONLINE"
+	State        FileState
 	// SizeKB is the file's catalog size. For a database snapshot's sparse
 	// file that is a ceiling, not a footprint: the source file's size when
 	// the snapshot was taken, the most the sparse file can grow to.
@@ -146,8 +146,8 @@ ELSE` + cols + `CAST(NULL AS bigint)` + from + where
 // DATABASE's file definitions.
 type DatabaseFileSpec struct {
 	Name      string
-	FileGroup string // ignored when Type is "LOG"
-	Type      string // "LOG" adds a log file; anything else (including "") adds a data file
+	FileGroup string   // ignored when Type is "LOG"
+	Type      FileType // FileLog adds a log file; anything else (including "") adds a data file
 	Path      string
 	SizeKB    int64
 	// GrowthKB and GrowthPercent are mutually exclusive; GrowthPercent
@@ -236,7 +236,7 @@ func buildAddFileStatement(dbName string, spec DatabaseFileSpec) (string, error)
 	if spec.Path == "" {
 		return "", invalidf("gosmo: add file: path is required")
 	}
-	isLog := spec.Type == "LOG"
+	isLog := spec.Type == FileLog
 	clause := "ADD FILE"
 	if isLog {
 		clause = "ADD LOG FILE"
@@ -371,7 +371,8 @@ ORDER  BY fg.name, df.file_id`
 	fgMap := make(map[string]*FileGroup)
 	var order []string
 	for rows.Next() {
-		var fgName, fgType string
+		var fgName string
+		var fgType FileGroupType
 		var fgDefault, fgReadOnly bool
 		// The file columns are NULL on the one row an empty filegroup gets
 		// from the LEFT JOIN.
@@ -396,7 +397,7 @@ ORDER  BY fg.name, df.file_id`
 		}
 		f := &DatabaseFileInfo{
 			db: d, FileID: int(fID.Int64), Name: fName.String, PhysicalName: fPath.String,
-			Type: fType.String, FileGroup: fgName, State: fState.String,
+			Type: FileType(fType.String), FileGroup: fgName, State: FileState(fState.String),
 			SizeKB: fSize.Int64, IsPercentGrowth: isPctGrowth.Bool,
 		}
 		// max_size and growth are 8 KB pages (growth a percentage when

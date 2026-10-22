@@ -56,11 +56,11 @@ type AvailabilityReplica struct {
 	ModifyDate time.Time
 
 	IsLocal               bool
-	Role                  string
-	OperationalState      string
-	ConnectedState        string
-	RecoveryHealth        string
-	SynchronizationHealth string
+	Role                  ReplicaRole
+	OperationalState      ReplicaOperationalState
+	ConnectedState        ReplicaConnectedState
+	RecoveryHealth        RecoveryHealth
+	SynchronizationHealth SynchronizationHealth
 
 	LastConnectErrorNumber      int
 	LastConnectErrorDescription string
@@ -220,6 +220,59 @@ const (
 	AllowConnectionsReadWrite AllowConnections = "READ_WRITE"
 	AllowConnectionsReadOnly  AllowConnections = "READ_ONLY"
 	AllowConnectionsNo        AllowConnections = "NO"
+)
+
+// The state values sys.dm_hadr_availability_replica_states and
+// sys.dm_hadr_availability_group_states report. They are read-only: no write
+// takes one. Each field is empty where the DMV has no row or reports NULL.
+
+// ReplicaRole is a replica's role_desc.
+type ReplicaRole string
+
+const (
+	ReplicaPrimary   ReplicaRole = "PRIMARY"
+	ReplicaSecondary ReplicaRole = "SECONDARY"
+	ReplicaResolving ReplicaRole = "RESOLVING"
+)
+
+// ReplicaOperationalState is a replica's operational_state_desc. A secondary
+// reports none.
+type ReplicaOperationalState string
+
+const (
+	ReplicaPendingFailover ReplicaOperationalState = "PENDING_FAILOVER"
+	ReplicaPending         ReplicaOperationalState = "PENDING"
+	ReplicaOnline          ReplicaOperationalState = "ONLINE"
+	ReplicaOffline         ReplicaOperationalState = "OFFLINE"
+	ReplicaFailed          ReplicaOperationalState = "FAILED"
+	ReplicaFailedNoQuorum  ReplicaOperationalState = "FAILED_NO_QUORUM"
+)
+
+// ReplicaConnectedState is a replica's connected_state_desc.
+type ReplicaConnectedState string
+
+const (
+	ReplicaConnected    ReplicaConnectedState = "CONNECTED"
+	ReplicaDisconnected ReplicaConnectedState = "DISCONNECTED"
+)
+
+// RecoveryHealth is a replica's recovery_health_desc, and the group's
+// primary_recovery_health_desc. A secondary reports none.
+type RecoveryHealth string
+
+const (
+	RecoveryOnlineInProgress RecoveryHealth = "ONLINE_IN_PROGRESS"
+	RecoveryOnline           RecoveryHealth = "ONLINE"
+)
+
+// SynchronizationHealth is the synchronization_health_desc of a group, a
+// replica or an availability database.
+type SynchronizationHealth string
+
+const (
+	SyncNotHealthy       SynchronizationHealth = "NOT_HEALTHY"
+	SyncPartiallyHealthy SynchronizationHealth = "PARTIALLY_HEALTHY"
+	SyncHealthy          SynchronizationHealth = "HEALTHY"
 )
 
 // The types' validity checks. The keywords are spliced into DDL, so a value

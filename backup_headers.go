@@ -40,11 +40,21 @@ type BackupHeader struct {
 type BackupFile struct {
 	LogicalName   string
 	PhysicalName  string
-	Type          string // "D" data, "L" log, "F" full-text, "S" FILESTREAM
+	Type          BackupFileType
 	FileGroupName string
 	Size          int64 // bytes
 	MaxSize       int64 // bytes
 }
+
+// BackupFileType is RESTORE FILELISTONLY's one-letter Type column.
+type BackupFileType string
+
+const (
+	BackupFileData     BackupFileType = "D"
+	BackupFileLog      BackupFileType = "L"
+	BackupFileFullText BackupFileType = "F"
+	BackupFileStream   BackupFileType = "S"
+)
 
 // IsBackupURL reports whether device names a backup blob in Azure Storage
 // rather than a path on the server's filesystem — an http:// or https:// URL.
@@ -314,7 +324,7 @@ func (s *Server) BackupFileList(ctx context.Context, fileNumber int, targets ...
 		files = append(files, &BackupFile{
 			LogicalName:   nr.str("LogicalName"),
 			PhysicalName:  nr.str("PhysicalName"),
-			Type:          nr.str("Type"),
+			Type:          BackupFileType(nr.str("Type")),
 			FileGroupName: nr.str("FileGroupName"),
 			Size:          nr.int64v("Size"),
 			MaxSize:       nr.int64v("MaxSize"),

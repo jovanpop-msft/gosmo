@@ -75,8 +75,8 @@ type AvailabilityGroup struct {
 	IsContained bool
 
 	PrimaryReplicaServerName string
-	PrimaryRecoveryHealth    string
-	SynchronizationHealth    string
+	PrimaryRecoveryHealth    RecoveryHealth
+	SynchronizationHealth    SynchronizationHealth
 }
 
 // IsLocalPrimary reports whether the instance this group was read from is

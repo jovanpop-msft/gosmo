@@ -183,7 +183,7 @@ func xmlOrSpatialOptions(idx *Index) []string {
 		o = append(o, "ALLOW_PAGE_LOCKS = OFF")
 	}
 	if idx.Type == IndexTypeSpatial {
-		o = append(o, compressionOptions(idx.DataCompression, nil, rowstoreCompressed)...)
+		o = append(o, compressionOptions(idx.Partitions, rowstoreCompressed)...)
 	}
 	return o
 }
@@ -270,8 +270,8 @@ func indexWithClause(idx *Index, sep string, extra ...string) string {
 	if idx.OptimizeForSequentialKey {
 		o = append(o, "OPTIMIZE_FOR_SEQUENTIAL_KEY = ON")
 	}
-	o = append(o, compressionOptions(idx.DataCompression, idx.PartitionCompression, rowstoreCompressed)...)
-	o = append(o, xmlCompressionOptions(idx.PartitionXMLCompression)...)
+	o = append(o, compressionOptions(idx.Partitions, rowstoreCompressed)...)
+	o = append(o, xmlCompressionOptions(idx.Partitions)...)
 	o = append(o, extra...)
 	if len(o) == 0 {
 		return ""
@@ -282,7 +282,7 @@ func indexWithClause(idx *Index, sep string, extra ...string) string {
 // columnstoreWithClause is indexWithClause for a columnstore index, whose
 // only options are a COLUMNSTORE_ARCHIVE compression and a COMPRESSION_DELAY.
 func columnstoreWithClause(idx *Index) string {
-	o := compressionOptions(idx.DataCompression, idx.PartitionCompression, func(c DataCompression) bool {
+	o := compressionOptions(idx.Partitions, func(c DataCompression) bool {
 		return c == DataCompressionColumnstoreArchive
 	})
 	if idx.CompressionDelay > 0 {
@@ -301,17 +301,24 @@ func rowstoreCompressed(c DataCompression) bool {
 }
 
 // compressionOptions renders the DATA_COMPRESSION option(s) for a heap or
-// index whose compression is single and, per partition, parts; named says
-// which values are worth writing, the rest being the statement's default.
+// index whose partitions are parts; named says which values are worth
+// writing, the rest being the statement's default.
 //
-// When every partition agrees — or there is only one, or none were read —
-// this is the single-value form. Otherwise each compression gets its own
+// When every partition agrees — or there is only one — this is the
+// single-value form; none read is no option. Otherwise each compression gets its own
 // DATA_COMPRESSION = X ON PARTITIONS (…), with contiguous partitions
 // collapsed to a range, in the order each first appears: writing only the
 // first partition's, which is what this did, recreated a table whose
 // partitions mixed PAGE and NONE as PAGE (or NONE) throughout.
-func compressionOptions(single DataCompression, parts []DataCompression, named func(DataCompression) bool) []string {
-	if len(parts) > 1 && slices.ContainsFunc(parts[1:], func(c DataCompression) bool { return c != parts[0] }) {
+func compressionOptions(partitions []PartitionOptions, named func(DataCompression) bool) []string {
+	if len(partitions) == 0 {
+		return nil
+	}
+	parts := make([]DataCompression, len(partitions))
+	for i, p := range partitions {
+		parts[i] = p.DataCompression
+	}
+	if slices.ContainsFunc(parts[1:], func(c DataCompression) bool { return c != parts[0] }) {
 		order, ranges := partitionRuns(parts)
 		var o []string
 		for _, c := range order {
@@ -321,17 +328,21 @@ func compressionOptions(single DataCompression, parts []DataCompression, named f
 		}
 		return o
 	}
-	if named(single) {
-		return []string{"DATA_COMPRESSION = " + string(single)}
+	if named(parts[0]) {
+		return []string{"DATA_COMPRESSION = " + string(parts[0])}
 	}
 	return nil
 }
 
 // xmlCompressionOptions renders XML_COMPRESSION for a heap or rowstore index
-// whose partitions' settings are parts: nothing when none is on, the single
-// form when all are, else ON PARTITIONS (…) naming those that are — OFF is
-// the statement's default, so the rest need no clause of their own.
-func xmlCompressionOptions(parts []bool) []string {
+// whose partitions are partitions: nothing when none is on, the single form
+// when all are, else ON PARTITIONS (…) naming those that are — OFF is the
+// statement's default, so the rest need no clause of their own.
+func xmlCompressionOptions(partitions []PartitionOptions) []string {
+	parts := make([]bool, len(partitions))
+	for i, p := range partitions {
+		parts[i] = p.XMLCompression
+	}
 	if !slices.Contains(parts, true) {
 		return nil
 	}

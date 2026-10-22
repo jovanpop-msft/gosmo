@@ -66,7 +66,7 @@ func TestLiveScriptedSetterMirroring(t *testing.T) {
 		recovery RecoveryModel
 		compat   CompatibilityLevel
 		readOnly bool
-		state    string
+		state    DatabaseState
 	}{d.RecoveryModel, d.CompatibilityLevel, d.IsReadOnly, d.State}
 
 	sctx, script := WithScript(ctx)

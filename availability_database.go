@@ -35,9 +35,9 @@ type AvailabilityDatabase struct {
 	IsLocal          bool
 	IsPrimaryReplica bool
 
-	SynchronizationState  string
-	SynchronizationHealth string
-	DatabaseState         string
+	SynchronizationState  SynchronizationState
+	SynchronizationHealth SynchronizationHealth
+	DatabaseState         DatabaseState
 
 	IsSuspended   bool
 	SuspendReason string
@@ -57,6 +57,19 @@ type AvailabilityDatabase struct {
 	LastRedoneTime   time.Time
 	LastCommitTime   time.Time
 }
+
+// SynchronizationState is an availability database's
+// synchronization_state_desc. NOT SYNCHRONIZING is spelled with a space, as
+// the DMV reports it.
+type SynchronizationState string
+
+const (
+	SyncNotSynchronizing SynchronizationState = "NOT SYNCHRONIZING"
+	SyncSynchronizing    SynchronizationState = "SYNCHRONIZING"
+	SyncSynchronized     SynchronizationState = "SYNCHRONIZED"
+	SyncReverting        SynchronizationState = "REVERTING"
+	SyncInitializing     SynchronizationState = "INITIALIZING"
+)
 
 // Databases returns the per-replica synchronization state of every database in
 // the group.
@@ -151,7 +164,7 @@ func (ag *AvailabilityGroup) Databases(ctx context.Context) ([]*AvailabilityData
 type AvailabilityDatabaseCandidate struct {
 	Name          string
 	ID            int
-	State         string // state_desc: ONLINE, RESTORING, ...
+	State         DatabaseState
 	RecoveryModel RecoveryModel
 
 	IsReadOnly    bool   // true of every snapshot as well
@@ -194,7 +207,7 @@ ORDER  BY d.name`
 			&c.IsMirrored, &c.LogBackupChainStarted); err != nil {
 			return nil, err
 		}
-		c.State, c.RecoveryModel, c.UserAccess = state.String, RecoveryModel(recovery.String), access.String
+		c.State, c.RecoveryModel, c.UserAccess = DatabaseState(state.String), RecoveryModel(recovery.String), access.String
 		return c, nil
 	})
 }

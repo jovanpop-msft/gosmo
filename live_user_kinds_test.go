@@ -49,11 +49,11 @@ func TestLiveUserKindsListScriptAndCreate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Users: %v", err)
 		}
-		got := map[string]string{}
+		got := map[string]PrincipalType{}
 		for _, u := range users {
 			got[u.Name] = u.UserType
 		}
-		for name, typ := range map[string]string{
+		for name, typ := range map[string]PrincipalType{
 			"certUser": "CERTIFICATE_MAPPED_USER",
 			"akUser":   "ASYMMETRIC_KEY_MAPPED_USER",
 		} {
@@ -127,7 +127,7 @@ FROM sys.database_principals WHERE name IN (N'certUser', N'akUser', N'x WITH y')
 WHERE type = 'U' AND name NOT LIKE N'NT %' ORDER BY name`).Scan(&win); err == nil {
 			if _, err := fresh.CreateUser(ctx, CreateUserRequest{Name: win, Kind: UserWindows, Login: win}); err != nil {
 				t.Errorf("CreateUser Windows %s: %v", win, err)
-			} else if u, err := fresh.UserByName(ctx, win); err != nil || u.UserType != "WINDOWS_USER" {
+			} else if u, err := fresh.UserByName(ctx, win); err != nil || u.UserType != PrincipalWindowsUser {
 				t.Errorf("Windows user read back as %v, %v", u, err)
 			}
 		} else {

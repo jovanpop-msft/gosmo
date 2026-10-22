@@ -24,7 +24,7 @@ import (
 // live in types.go (ObjectPermission, PermissionState).
 type PermissionEntry struct {
 	Principal     string
-	PrincipalType string // e.g. "DATABASE_ROLE", "SQL_USER"
+	PrincipalType PrincipalType // e.g. PrincipalDatabaseRole, PrincipalSQLUser
 	Grantor       string
 	Permission    ObjectPermission
 	State         PermissionState
@@ -99,7 +99,7 @@ type PrincipalSecurable struct {
 	Schema        string
 	Name          string
 	Permission    string
-	State         string
+	State         PermissionState
 }
 
 // objectSecurableClasses maps sys.objects.type to the SecurableClass of
@@ -278,10 +278,10 @@ ORDER  BY pr.name, dp.permission_name`
 // Properties > Permissions page.
 type DatabasePermissionEntry struct {
 	Principal     string
-	PrincipalType string // e.g. "DATABASE_ROLE", "SQL_USER"
+	PrincipalType PrincipalType // e.g. PrincipalDatabaseRole, PrincipalSQLUser
 	Grantor       string
 	Permission    DatabasePermission // e.g. "CONNECT", "CREATE TABLE", "ALTER"
-	State         string             // "GRANT", "GRANT_WITH_GRANT_OPTION", "DENY"
+	State         PermissionState    // GRANT, GRANT_WITH_GRANT_OPTION or DENY
 }
 
 // DatabasePermissions returns every database-scoped GRANT/DENY entry —

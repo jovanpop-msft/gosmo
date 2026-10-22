@@ -87,7 +87,7 @@ func TestLiveServerAuditLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if st.Status != "STARTED" || st.AuditFilePath == "" {
+	if st.Status != AuditStarted || st.AuditFilePath == "" {
 		t.Errorf("status = %+v", st)
 	}
 

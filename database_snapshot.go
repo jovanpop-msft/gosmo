@@ -35,7 +35,7 @@ type DatabaseSnapshot struct {
 	// State is the snapshot's own state_desc. A snapshot whose sparse files
 	// have run out of disk goes SUSPECT and stays there; there is no repair
 	// but dropping it.
-	State string
+	State DatabaseState
 
 	CreateDate time.Time
 }
@@ -159,7 +159,7 @@ func (s *Server) SnapshotFileDefaults(ctx context.Context, source, snapshotName 
 	var specs []SnapshotFileSpec
 	taken := map[string]bool{}
 	for _, f := range files {
-		if f.Type != "ROWS" {
+		if f.Type != FileRows {
 			continue
 		}
 		specs = append(specs, SnapshotFileSpec{

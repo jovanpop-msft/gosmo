@@ -22,7 +22,7 @@ type Database struct {
 
 	Name               string
 	ID                 int
-	State              string // state_desc: ONLINE, OFFLINE, RESTORING, ...
+	State              DatabaseState
 	RecoveryModel      RecoveryModel
 	CompatibilityLevel CompatibilityLevel
 	Collation          string

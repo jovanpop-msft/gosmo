@@ -129,17 +129,17 @@ func buildLoginScript(l *Login, opts ScriptOptions) string {
 		// alterDefaultDB is the third state: the login takes a default database
 		// and language, but only through a separate ALTER LOGIN.
 		alterDefaultDB := false
-		switch {
-		case strings.HasPrefix(l.LoginType, "WINDOWS"):
+		switch l.LoginType {
+		case PrincipalWindowsLogin, PrincipalWindowsGroup:
 			stmt += " FROM WINDOWS"
-		case strings.HasPrefix(l.LoginType, "EXTERNAL"):
+		case PrincipalExternalLogin, PrincipalExternalGroup:
 			stmt += " FROM EXTERNAL PROVIDER"
 			takesWithOptions = false
 			alterDefaultDB = true
-		case l.LoginType == "CERTIFICATE_MAPPED_LOGIN":
+		case PrincipalCertificateMappedLogin:
 			stmt += " FROM CERTIFICATE " + mappedObjectName(l, "certificate")
 			takesWithOptions = false
-		case l.LoginType == "ASYMMETRIC_KEY_MAPPED_LOGIN":
+		case PrincipalAsymmetricKeyMappedLogin:
 			stmt += " FROM ASYMMETRIC KEY " + mappedObjectName(l, "asymmetric key")
 			takesWithOptions = false
 		default:

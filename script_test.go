@@ -532,13 +532,13 @@ func TestScriptedSetterDoesNotMirrorOntoTheReceiver(t *testing.T) {
 			name:   "SetOffline",
 			set:    func(ctx context.Context, d *Database, _ *ConfigurationOption) error { return d.SetOffline(ctx) },
 			got:    func(d *Database, _ *ConfigurationOption) any { return d.State },
-			server: "ONLINE", want: "OFFLINE",
+			server: DatabaseOnline, want: DatabaseOffline,
 		},
 		{
 			name:   "SetOnline",
 			set:    func(ctx context.Context, d *Database, _ *ConfigurationOption) error { return d.SetOnline(ctx) },
 			got:    func(d *Database, _ *ConfigurationOption) any { return d.State },
-			server: "OFFLINE", want: "ONLINE",
+			server: DatabaseOffline, want: DatabaseOnline,
 		},
 		{
 			name: "SetValue",
